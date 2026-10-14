@@ -1,0 +1,26 @@
+{
+  "name": "@typfolio/core",
+  "version": "0.0.0-dev.1",
+  "private": true,
+  "description": "Framework-independent Typst PDF compiler (local development preview)",
+  "type": "module",
+  "license": "Apache-2.0",
+  "files": ["dist", "typst-packages", "README.md"],
+  "exports": {
+    ".": { "types": "./dist/index.d.ts", "import": "./dist/index.js" },
+    "./capture": { "types": "./dist/capture.d.ts", "import": "./dist/capture.js" },
+    "./capture/svg": { "types": "./dist/capture/svg.d.ts", "import": "./dist/capture/svg.js" },
+    "./capture/dom": { "types": "./dist/capture/dom.d.ts", "import": "./dist/capture/dom.js" },
+    "./dev-tools": { "types": "./dist/dev-tools/index.d.ts", "import": "./dist/dev-tools/index.js" }
+  },
+  "dependencies": {
+    "@typfolio/wasm": "0.0.0-dev.1"
+  },
+  "peerDependencies": {
+    "html2canvas": "^1.4.1"
+  },
+  "peerDependenciesMeta": {
+    "html2canvas": { "optional": true }
+  },
+  "sideEffects": false
+}

@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<title>Typfolio core browser smoke test</title>
+<h1>Typfolio core browser smoke test</h1>
+<pre id="result" data-status="running">Compiling on the page and in a module worker...</pre>
+<script type="module">
+  import { runSmoke } from './smoke.js';
+  const output = document.querySelector('#result');
+  let worker;
+  try {
+    const direct = await runSmoke();
+    const inWorker = await new Promise((resolve, reject) => {
+      worker = new Worker(new URL('./worker.js', import.meta.url), { type: 'module' });
+      worker.onmessage = ({ data }) => data.ok ? resolve(data.result) : reject(new Error(data.error));
+      worker.onerror = event => reject(new Error(event.message));
+    });
+    if (inWorker.hasDocument || !direct.hasDocument) throw new Error('Worker environment check failed');
+    output.textContent = JSON.stringify({ direct, worker: inWorker }, null, 2);
+    output.dataset.status = 'passed';
+  } catch (error) {
+    output.textContent = String(error.stack ?? error);
+    output.dataset.status = 'failed';
+  } finally { worker?.terminate(); }
+</script>
+</html>

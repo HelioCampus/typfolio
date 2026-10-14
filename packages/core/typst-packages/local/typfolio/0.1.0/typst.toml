@@ -1,0 +1,6 @@
+[package]
+name = "typfolio"
+version = "0.1.0"
+entrypoint = "lib.typ"
+authors = ["Typfolio"]
+description = "Read the Typfolio request input in a template, with a sample built from a JSON Schema for editor completion."

@@ -1,0 +1,8 @@
+Typfolio
+Copyright 2026 HelioCampus
+
+This product includes software developed by the Typst project (https://typst.app)
+and the typst.ts project (https://github.com/Myriad-Dreamin/typst.ts), both
+licensed under the Apache License, Version 2.0. The compiled WebAssembly compiler
+in @typfolio/wasm is built from those projects and their dependencies; see the
+third-party notices shipped with that package.

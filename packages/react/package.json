@@ -1,0 +1,29 @@
+{
+  "name": "@typfolio/react",
+  "version": "0.0.0-dev.1",
+  "private": true,
+  "description": "Headless React bindings for Typfolio PDF clients",
+  "type": "module",
+  "license": "Apache-2.0",
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./capture": {
+      "types": "./dist/capture.d.ts",
+      "import": "./dist/capture.js"
+    }
+  },
+  "dependencies": {
+    "@typfolio/core": "0.0.0-dev.1"
+  },
+  "peerDependencies": {
+    "react": ">=18.2.0"
+  },
+  "sideEffects": false
+}

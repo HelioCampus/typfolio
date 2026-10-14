@@ -1,0 +1,52 @@
+import { copyFonts, createEngine, initialize } from './engine.js';
+import { prepareRequest } from './request.js';
+import { capabilities, TypstPdfError, type PdfCompiler, type WasmSource } from './types.js';
+import { packageMounts, runtimeMarker } from './typst-package.js';
+export { capabilities, pdfStandards, TypstPdfError } from './types.js';
+export type { JsonValue, PdfOptions, PdfStandard, PdfRequest, PdfTemplate, PdfResult, PdfClient, PdfCompiler, Diagnostic, ErrorCode } from './types.js';
+export type { WasmSource } from './types.js';
+export { templateFromFiles } from './template.js';
+export type { TemplateFromFilesOptions, TemplateFiles } from './template.js';
+
+export interface CompilerOptions {
+  /** Explicit bytes, compiled module, Response, or hosted URL. No implicit CDN. */
+  wasm: WasmSource;
+  fonts: readonly Uint8Array[];
+}
+
+/** One active job per compiler. Use a worker client for queues and hard cancellation. */
+export async function createCompiler(options: CompilerOptions): Promise<PdfCompiler> {
+  const fonts = copyFonts(options?.fonts);
+  await initialize(options.wasm);
+  const engine = await createEngine(fonts);
+  let closed = false;
+  let busy = false;
+  let finished: Promise<void> = Promise.resolve();
+  let disposal: Promise<void> | undefined;
+  const checkAbort = (signal?: AbortSignal) => {
+    if (signal?.aborted) throw new TypstPdfError('ABORTED', 'Compilation was cancelled', [], { cause: signal.reason });
+  };
+  return {
+    capabilities,
+    async compile(request, options = {}) {
+      if (closed) throw new TypstPdfError('DISPOSED', 'The compiler is disposed');
+      if (busy) throw new TypstPdfError('BUSY', 'The compiler already has an active job');
+      checkAbort(options.signal);
+      const prepared = prepareRequest(request); // Capture data before yielding to caller code.
+      busy = true;
+      let release!: () => void;
+      finished = new Promise<void>(resolve => { release = resolve; });
+      try {
+        await Promise.resolve();
+        checkAbort(options.signal);
+        const result = engine.compile(prepared, { mounts: packageMounts(prepared.files.get('/input.json')!), inputs: [runtimeMarker] });
+        checkAbort(options.signal);
+        return result;
+      } finally { busy = false; release(); }
+    },
+    dispose() {
+      closed = true;
+      return disposal ??= finished.then(() => engine.dispose());
+    },
+  };
+}

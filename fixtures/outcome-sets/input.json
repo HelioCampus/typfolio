@@ -1,0 +1,67 @@
+{
+  "schema_version": 1,
+  "document": {
+    "title": "Lorem Ipsum Dolor Sit Amet",
+    "short_title": "Lorem Ipsum",
+    "author": "Lorem Ipsum",
+    "language": "en",
+    "summary": "Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua."
+  },
+  "institution": {
+    "name": "Lorem Ipsum"
+  },
+  "program": {
+    "name": "Dolor Sit Amet",
+    "degree_level": "Consectetur Adipiscing",
+    "academic_year": "Elit Sed Do"
+  },
+  "outcome_sets": [
+    {
+      "title": "Eiusmod Tempor Incididunt",
+      "description": "Ut labore et dolore magna aliqua. Ut enim ad minim veniam.",
+      "outcomes": [
+        {
+          "code": "LOREM 1",
+          "title": "Quis Nostrud Exercitation",
+          "description": "Ullamco laboris nisi ut aliquip ex ea commodo consequat.",
+          "status": "Lorem",
+          "measures": ["Duis aute irure", "Dolor in reprehenderit"]
+        },
+        {
+          "code": "LOREM 2",
+          "title": "Voluptate Velit Esse",
+          "description": "Cillum dolore eu fugiat nulla pariatur.",
+          "status": "Ipsum",
+          "measures": ["Excepteur sint occaecat", "Cupidatat non proident"]
+        },
+        {
+          "code": "LOREM 3",
+          "title": "Sunt In Culpa",
+          "description": "Qui officia deserunt mollit anim id est laborum.",
+          "status": "Dolor",
+          "measures": ["Sed ut perspiciatis"]
+        }
+      ]
+    },
+    {
+      "title": "Magna Aliqua",
+      "description": "Nemo enim ipsam voluptatem quia voluptas sit aspernatur aut odit aut fugit.",
+      "outcomes": [
+        {
+          "code": "IPSUM 1",
+          "title": "Neque Porro Quisquam",
+          "description": "Est qui dolorem ipsum quia dolor sit amet consectetur adipisci velit.",
+          "status": "Sit",
+          "measures": ["Ut enim ad minima"]
+        },
+        {
+          "code": "IPSUM 2",
+          "title": "Quis Autem Vel Eum",
+          "description": "Iure reprehenderit qui in ea voluptate velit esse quam nihil molestiae consequatur.",
+          "status": "Amet",
+          "measures": ["Vel illum qui dolorem", "Eum fugiat quo voluptas"]
+        }
+      ]
+    }
+  ]
+}

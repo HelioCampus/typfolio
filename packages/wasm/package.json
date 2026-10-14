@@ -1,0 +1,15 @@
+{
+  "name": "@typfolio/wasm",
+  "version": "0.0.0-dev.1",
+  "private": true,
+  "description": "Generated Typst WASM compiler artifact and bindings for Typfolio (generated output only)",
+  "type": "module",
+  "license": "Apache-2.0",
+  "files": ["generated", "NOTICE", "THIRD_PARTY_NOTICES.md", "THIRD_PARTY_LICENSES.md", "README.md"],
+  "exports": {
+    ".": { "types": "./generated/compiler.d.ts", "import": "./generated/compiler.js" },
+    "./compiler.wasm": "./generated/compiler_bg.wasm",
+    "./provenance": "./generated/provenance.json"
+  },
+  "sideEffects": false
+}

@@ -1,0 +1,12 @@
+node_modules/
+.repos/
+.build/
+packages/*/dist/
+packages/wasm/generated/*
+!packages/wasm/generated/.gitkeep
+*.tgz
+.DS_Store
+.idea/
+.claude/
+test-results/
+playwright-report/

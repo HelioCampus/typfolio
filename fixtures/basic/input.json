@@ -1,0 +1,7 @@
+{
+  "title": "Assessment report",
+  "rows": [
+    { "name": "Communication", "status": "Complete" },
+    { "name": "Critical thinking", "status": "In progress" }
+  ]
+}

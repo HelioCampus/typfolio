@@ -1,0 +1,14 @@
+{
+  "repository": "https://github.com/Myriad-Dreamin/typst.ts.git",
+  "revision": "1189a2f17527467e2f41e78b04e9d7f58a122cdf",
+  "rust": "1.92.0",
+  "wasmBindgen": "0.2.118",
+  "cargoAbout": "0.9.2",
+  "crate": "typst-ts-web-compiler",
+  "target": "wasm32-unknown-unknown",
+  "features": ["web", "pdf"],
+  "profile": "release",
+  "crateType": "cdylib",
+  "cargoProfile": { "optLevel": "s", "lto": "fat", "codegenUnits": 1 },
+  "wasmOpt": false
+}

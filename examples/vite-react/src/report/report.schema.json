@@ -1,0 +1,44 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ReportInput",
+  "description": "Runtime input of ./main.typ; keep in step with ./input.ts. Used only to build the editor sample.",
+  "type": "object",
+  "properties": {
+    "title": {
+      "type": "string",
+      "minLength": 1
+    },
+    "summary": {
+      "type": "string"
+    },
+    "generatedAt": {
+      "type": "string"
+    },
+    "runtimeLineOne": {
+      "type": "string"
+    },
+    "runtimeLineTwo": {
+      "type": "string"
+    },
+    "runtimeLineThree": {
+      "type": "string"
+    },
+    "runtimeEmphasis": {
+      "type": "string"
+    },
+    "runtimeNote": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "title",
+    "summary",
+    "generatedAt",
+    "runtimeLineOne",
+    "runtimeLineTwo",
+    "runtimeLineThree",
+    "runtimeEmphasis",
+    "runtimeNote"
+  ],
+  "additionalProperties": false
+}

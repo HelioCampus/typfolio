@@ -1,0 +1,42 @@
+# cargo-about configuration for tools/generate-third-party-notices.mjs.
+# `accepted` is a priority list: for a dual-licensed crate ("MIT OR Apache-2.0") the first listed licence
+# that satisfies the expression is used. A licence that is not listed here makes the generator fail, so a
+# new copyleft or unreviewed licence cannot enter the shipped binary unnoticed. This is exactly the set of
+# SPDX identifiers found in the notices table; review any addition.
+accepted = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "0BSD",
+    "Zlib",
+    "Unicode-3.0",
+    "CC0-1.0",
+    "Unlicense",
+    "MPL-2.0",
+    "BSL-1.0",
+]
+# The dependency graph for the wasm target, without build dependencies and dev dependencies. Features are not
+# a config key in cargo-about; the generator passes `--no-default-features --features <pin.features>`. Proc-macro
+# crates are normal dependencies for cargo, so they and their dependencies stay in the list although they only
+# run on the host.
+targets = ["wasm32-unknown-unknown"]
+ignore-build-dependencies = true
+ignore-dev-dependencies = true
+
+# These crates keep dual-licence terms in one file, which cargo-about's scanner cannot classify, so it would fall
+# back to the standard SPDX text and drop the copyright line. A clarification uses the crate's own file; the
+# checksum makes it stop applying (and the generator fall back to the SPDX text) when a new release changes the
+# file, so review these when a pinned crate version changes.
+[chrono.clarify]
+license = "MIT OR Apache-2.0"
+[[chrono.clarify.files]]
+path = "LICENSE.txt"
+checksum = "946c9835d8034d24404f8cfec5f4654cee5dad17e944afc3d06d742cf2882831"
+
+[libm.clarify]
+license = "MIT"
+[[libm.clarify.files]]
+path = "LICENSE.txt"
+checksum = "3823dda7cf046602f4b4e77ec8e227863dc4736037cc85bb33d9f19febe16bb7"
