@@ -5,6 +5,13 @@
   "description": "Generated Typst WASM compiler artifact and bindings for Typfolio (generated output only)",
   "type": "module",
   "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/HelioCampus/typfolio.git",
+    "directory": "packages/wasm"
+  },
+  "homepage": "https://github.com/HelioCampus/typfolio#readme",
+  "bugs": { "url": "https://github.com/HelioCampus/typfolio/issues" },
   "files": ["generated", "NOTICE", "THIRD_PARTY_NOTICES.md", "THIRD_PARTY_LICENSES.md", "README.md"],
   "exports": {
     ".": { "types": "./generated/compiler.d.ts", "import": "./generated/compiler.js" },

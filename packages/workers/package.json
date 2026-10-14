@@ -5,6 +5,13 @@
   "description": "Framework-independent Web Worker execution for Typfolio PDF compilation",
   "type": "module",
   "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/HelioCampus/typfolio.git",
+    "directory": "packages/workers"
+  },
+  "homepage": "https://github.com/HelioCampus/typfolio#readme",
+  "bugs": { "url": "https://github.com/HelioCampus/typfolio/issues" },
   "files": [
     "dist",
     "README.md"
