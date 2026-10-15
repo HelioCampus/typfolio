@@ -25,7 +25,6 @@
     "dev:pretext": "vite --config examples/pretext-hybrid/vite.config.ts",
     "dev:capture": "vite --config examples/vite-capture/vite.config.mjs",
     "test": "npm run build && node --test packages/core/test/*.test.mjs packages/dev-tools/test/*.test.mjs packages/workers/test/*.test.mjs packages/react/test/*.test.mjs",
-    "check:pdf": "python3 tools/check-pdf.py .build/test-output",
     "test:vite": "npm run build && node tools/test-vite-builds.mjs",
     "pack:wasm": "node tools/check-package.mjs && npm pack --workspace packages/wasm --pack-destination .build",
     "pack:core": "npm run build && npm pack --workspace packages/core --pack-destination .build",

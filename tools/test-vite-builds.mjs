@@ -106,7 +106,42 @@ async function verifyDevToolsBuild() {
   for (const marker of [runtimePackageMarker, ...sampleBuilderMarkers]) {
     assert.ok(all.includes(marker), 'positive control: the dev-tools bundle is missing ' + marker);
   }
-  return { devToolsBytes: all.length };
+  // The main entry does not reach the optional pdfjs-dist behind @typfolio/dev-tools/pdf.
+  for (const marker of pdfjsMarkers) {
+    assert.ok(!all.includes(marker), 'the dev-tools main entry bundle contains pdfjs-dist code: ' + marker);
+  }
+  return { devToolsBytes: all.length, ...await verifyDevToolsPdfBuild() };
+}
+
+// Strings from inside pdfjs-dist that survive minification. The app's own text (the install hint) also says
+// "pdfjs-dist", so absence checks must use these. verifyDevToolsPdfBuild proves they match the /pdf build.
+const pdfjsMarkers = [
+  'Setting up fake worker.',
+  'No "GlobalWorkerOptions.workerSrc" specified.',
+  'getDocument - expected either `data`, `range`, or `url` parameter.',
+];
+
+// Positive control for the check above: a bundle that imports @typfolio/dev-tools/pdf has every marker, in a lazy chunk.
+async function verifyDevToolsPdfBuild() {
+  const entryDirectory = root + '.build/vite-devtools-pdf-entry';
+  const outDir = root + '.build/vite-devtools-pdf';
+  await mkdir(entryDirectory, { recursive: true });
+  await writeFile(entryDirectory + '/entry.js', "import { inspectPdf } from '@typfolio/dev-tools/pdf';\nconsole.log(inspectPdf);\n");
+  await viteBuild({
+    configFile: false, root, logLevel: 'warn',
+    build: { outDir, emptyOutDir: true, rollupOptions: { input: entryDirectory + '/entry.js', output: { entryFileNames: 'entry.js' } } },
+  });
+  const chunks = await Promise.all((await files(outDir)).filter(path => /\.m?js$/.test(path))
+    .map(async path => ({ path, source: await readFile(path, 'utf8') })));
+  const entry = chunks.find(({ path }) => path.endsWith('/entry.js'));
+  assert.ok(entry, 'the dev-tools/pdf build must emit its entry');
+  const holders = chunks.filter(({ source }) => pdfjsMarkers.every(marker => source.includes(marker)));
+  assert.equal(holders.length, 1, 'positive control: exactly one chunk must contain every pdfjs-dist marker');
+  assert.notEqual(holders[0].path, entry.path, 'pdfjs-dist is bundled into the entry chunk instead of a lazy chunk');
+  for (const marker of pdfjsMarkers) {
+    assert.ok(!entry.source.includes(marker), 'the entry chunk contains pdfjs-dist code: ' + marker);
+  }
+  return { devToolsPdfEntryBytes: entry.source.length, pdfjsBytes: holders[0].source.length };
 }
 
 // Strings from inside html2canvas that survive minification. The app's own text

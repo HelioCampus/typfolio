@@ -23,14 +23,25 @@ run('npm', ['install', '--offline', '--ignore-scripts', '--no-audit', '--no-fund
 // workspace's own copy; the assertions below therefore inspect the installed tree directly.)
 await assert.rejects(access(join(dir, 'node_modules/html2canvas')), { code: 'ENOENT' },
   'html2canvas must not be installed in the consumer');
+// pdfjs-dist is an optional peer of @typfolio/dev-tools (its /pdf entry): likewise not installed by the tarballs.
+// The inspect step below resolves it from the workspace's node_modules, which sit above this directory.
+await assert.rejects(access(join(dir, 'node_modules/pdfjs-dist')), { code: 'ENOENT' },
+  'pdfjs-dist must not be installed in the consumer');
 for (const name of ['wasm', 'core', 'workers', 'react', 'dev-tools']) {
   const manifest = JSON.parse(await readFile(join(dir, 'node_modules/@typfolio', name, 'package.json'), 'utf8'));
   for (const field of ['dependencies', 'optionalDependencies']) {
     assert.ok(!('html2canvas' in (manifest[field] ?? {})), `@typfolio/${name} must not list html2canvas in ${field}`);
+    assert.ok(!('pdfjs-dist' in (manifest[field] ?? {})), `@typfolio/${name} must not list pdfjs-dist in ${field}`);
   }
+  if (name !== 'dev-tools') assert.ok(!('pdfjs-dist' in (manifest.peerDependencies ?? {})), `@typfolio/${name} must not declare a pdfjs-dist peer`);
   if (name === 'core') {
     assert.ok('html2canvas' in manifest.peerDependencies, 'core must declare html2canvas as a peer dependency');
     assert.equal(manifest.peerDependenciesMeta?.html2canvas?.optional, true, 'html2canvas peer must be optional');
+  }
+  if (name === 'dev-tools') {
+    assert.ok('pdfjs-dist' in manifest.peerDependencies, 'dev-tools must declare pdfjs-dist as a peer dependency');
+    assert.equal(manifest.peerDependenciesMeta?.['pdfjs-dist']?.optional, true, 'pdfjs-dist peer must be optional');
+    assert.ok(!('html2canvas' in (manifest.peerDependencies ?? {})), 'dev-tools must not declare an html2canvas peer');
   }
 }
 // The Typst package must ship as files (it is also the --package-path layout for editors), not only inside dist.
@@ -73,6 +84,8 @@ import { PdfProvider, usePdfCompilation, usePdfObjectUrl } from '@typfolio/react
 import * as coreMain from '@typfolio/core';
 import * as devTools from '@typfolio/dev-tools';
 import { checkTemplate, createTemplateChecker } from '@typfolio/dev-tools';
+import * as devToolsPdf from '@typfolio/dev-tools/pdf';
+import { inspectPdf } from '@typfolio/dev-tools/pdf';
 import { captureAssets, captureProps } from '@typfolio/core/capture';
 import { svgCapture } from '@typfolio/core/capture/svg';
 import { domPngCapture } from '@typfolio/core/capture/dom';
@@ -88,6 +101,8 @@ assert.equal(typeof captureProps, 'function');
 assert.deepEqual(Object.keys(reactCapture).sort(), ['CaptureRegion']);
 assert.equal('captureAssets' in coreMain, false);
 assert.deepEqual(Object.keys(devTools).sort(), ['checkTemplate', 'createTemplateChecker']);
+assert.deepEqual(Object.keys(devToolsPdf), ['inspectPdf']);
+assert.equal('inspectPdf' in devTools, false);
 await assert.rejects(import('@typfolio/core/dev-tools'), { code: 'ERR_PACKAGE_PATH_NOT_EXPORTED' });
 for (const name of Object.keys(devTools)) assert.equal(name in coreMain, false, name + ' leaked into the main entry');
 assert.equal(typeof createTemplateChecker, 'function');
@@ -112,6 +127,13 @@ try {
   assert.equal(result.metadata.title, 'Installed package works');
   assert.ok(result.bytes.length > 1000);
   console.log('Packed core imports and compiles PDF/UA successfully.');
+  const inspection = await inspectPdf(result.bytes);
+  assert.equal(inspection.tagged, true);
+  assert.equal(inspection.standard.pdfUa, 1);
+  assert.equal(inspection.title, 'Installed package works');
+  assert.equal(inspection.language, 'en');
+  assert.deepEqual(inspection.headings, []);
+  console.log('Packed @typfolio/dev-tools/pdf inspects that PDF: tagged, PDF/UA declared.');
   assert.deepEqual(compiler.capabilities.typstPackages, ['@local/typfolio:0.1.0']);
   const packaged = await compiler.compile({
     template: '#import "@local/typfolio:0.1.0": input\\n#let data = input(json.with("./report.schema.json"))\\n#set document(title: data.title)\\n#data.title',
@@ -170,6 +192,7 @@ import {
   type TemplateCheckResult,
   type TemplateChecker,
 } from '@typfolio/dev-tools';
+import { inspectPdf, type PdfFigure, type PdfFont, type PdfHeading, type PdfInspection } from '@typfolio/dev-tools/pdf';
 declare const wasm: WebAssembly.Module;
 declare const font: Uint8Array;
 declare const worker: Worker;
@@ -258,6 +281,22 @@ checkResult?.error?.code satisfies string | undefined;
 checkResult?.diagnostics.length satisfies number | undefined;
 (await checkTemplate('Hello', { wasm, fonts: [font], modes: ['full'] })).ok satisfies boolean;
 await checker.dispose();
+// Dev-time PDF inspection.
+const inspection: PdfInspection = await inspectPdf(result);
+inspection.pages satisfies number;
+inspection.tagged satisfies boolean;
+inspection.structureTree satisfies boolean;
+inspection.title satisfies string | undefined;
+inspection.language satisfies string | undefined;
+inspection.creationDate satisfies Date | undefined;
+inspection.standard.pdfUa satisfies number | undefined;
+inspection.standard.pdfA?.part satisfies number | undefined;
+inspection.standard.pdfA?.conformance satisfies string | undefined;
+inspection.headings satisfies PdfHeading[];
+inspection.figures satisfies PdfFigure[];
+inspection.tables satisfies number;
+inspection.fonts satisfies PdfFont[];
+inspection.structureRoles satisfies Record<string, number>;
 // @ts-expect-error an unknown sample mode
 const badMode: TemplateCheckOptions = { modes: ['sparse'] };
 void badMode;

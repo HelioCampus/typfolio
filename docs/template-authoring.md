@@ -99,7 +99,7 @@ The sample does not replace the real input: the runtime input is whatever the re
 
 ## Build-time checks
 
-`@typfolio/dev-tools` is the home for dev-time tools. It is a separate package, installed as a devDependency, and `@typfolio/core` never imports it, so it adds no bytes to a production bundle (a PDF structure inspector is planned there; it does not exist yet). Its first tool compiles a template against samples built from its schema, so CI catches a template that no longer matches the schema:
+`@typfolio/dev-tools` is the home for dev-time tools. It is a separate package, installed as a devDependency, and `@typfolio/core` never imports it, so it adds no bytes to a production bundle. Its template checker compiles a template against samples built from its schema, so CI catches a template that no longer matches the schema:
 
 ```ts
 import { createTemplateChecker } from '@typfolio/dev-tools';
@@ -165,6 +165,32 @@ Limits of a check, stated plainly:
 - PDF standards apply to every mode, so `minimal` can reveal PDF/UA problems. A string the template turns into a heading or the document title is `""` in the `minimal` sample, and PDF/UA reports that ("heading title is empty"). If the schema promises the string is non-empty, say so with `minLength: 1` (Zod: `z.string().min(1)`): `minimal` then produces `"a"` and the check is meaningful. If the string may legitimately be empty, the failure is real: the template would emit an invalid document for that input, and it has to guard against it.
 - It makes no accessibility claim. `pdf: { standards: ['ua-1'] }` only asks the compiler for PDF/UA output, and a compile that succeeds is not a conformance verdict (see `docs/compiler-build.md`). Accessible authoring and human review stay necessary.
 - The sample is only as good as the schema. A schema that does not describe what the application actually sends is checked faithfully and proves nothing.
+
+### Inspecting the output
+
+`@typfolio/dev-tools/pdf` reads a compiled PDF and reports what is in it, so a test can assert on it (for example the `bytes` of a check result, or the `bytes` of a `compile()` result):
+
+```ts
+import { inspectPdf } from '@typfolio/dev-tools/pdf'; // needs pdfjs-dist, installed by you
+
+const report = await inspectPdf(bytes);
+// report.pages, tagged, structureTree, title, language, creationDate
+// report.standard: { pdfUa?, pdfA?: { part, conformance? } }, as the XMP metadata declares them
+// report.headings: [{ level, text }] in document order; report.figures: [{ alt? }]; report.tables
+// report.fonts: [{ name, embedded }]; report.structureRoles: how often each structure role occurs
+```
+
+`pdfjs-dist` (6.3 or later) is an optional peer dependency of `@typfolio/dev-tools`, loaded only when `inspectPdf` is first called; without it the call rejects with a `TypstPdfError` that says to install it. Input that is not a readable PDF rejects with `INVALID_REQUEST`.
+
+The report states facts and nothing more. A tagged PDF with a title, a language, a heading outline, figure alt text and a PDF/UA declaration can still fail PDF/UA, and `standard.pdfUa` only repeats what the file claims. Use the report to catch regressions (a lost heading level, a figure that lost its alt text, a missing language); use a validator such as [veraPDF](https://verapdf.org) for conformance, and review reading order and alt text by hand.
+
+What the report cannot tell you, because of how pdf.js exposes the structure tree (it is read per page):
+
+- An element that continues over a page break is counted once for each page it has content on. A table that spans three pages makes `tables` 3 and adds three `Table`, and so on, to `structureRoles`. Assert `tables >= 1` or compare against a baseline, not exact counts, for content that can break.
+- `figures` lists the structure elements whose role is `Figure`. Typst 0.15.1 writes one for an `image` (with its alt text), but a `figure` around other content, such as a drawn shape, is tagged `Div`, so it is not listed.
+- Roles are the ones pdf.js reports after resolving the file's `/RoleMap` once, so a custom role that the file maps appears under the standard role it maps to. Typst maps a heading deeper than level 6 (`H7`) to `P`, so such a heading is not in `headings`.
+- `headings[].text` is recovered from the page's marked content; it is the empty string for a heading whose text pdf.js cannot attribute to it.
+- `fonts` lists the fonts that page content selects, not every font resource in the file.
 
 ## Producing the schema from Zod (one option)
 

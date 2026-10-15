@@ -14,10 +14,17 @@
   "bugs": { "url": "https://github.com/HelioCampus/typfolio/issues" },
   "files": ["dist", "README.md"],
   "exports": {
-    ".": { "types": "./dist/index.d.ts", "import": "./dist/index.js" }
+    ".": { "types": "./dist/index.d.ts", "import": "./dist/index.js" },
+    "./pdf": { "types": "./dist/pdf.d.ts", "import": "./dist/pdf.js" }
   },
   "dependencies": {
     "@typfolio/core": "0.0.0-dev.1"
+  },
+  "peerDependencies": {
+    "pdfjs-dist": "^6.3.0"
+  },
+  "peerDependenciesMeta": {
+    "pdfjs-dist": { "optional": true }
   },
   "sideEffects": false
 }

@@ -62,10 +62,11 @@ Generated files live in `packages/wasm/generated/`, the only content of the `@ty
 ```sh
 npm test
 
-# Requires pypdf in the selected Python environment.
-python3 tools/check-pdf.py .build/test-output
+# Structural checks of the compiled PDFs (tagging, title, language, headings, figure alt text, declared
+# standards) are in packages/dev-tools/test/pdf.test.mjs, which `npm test` runs. They report facts, not conformance.
+node --test packages/dev-tools/test/pdf.test.mjs
 
-# External validator; see https://docs.verapdf.org/cli/validation/
+# External validator, the conformance step; see https://docs.verapdf.org/cli/validation/
 verapdf --format json --flavour ua1 .build/test-output/ua.pdf
 
 # Visual review
