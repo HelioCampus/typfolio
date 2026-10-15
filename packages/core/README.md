@@ -6,7 +6,7 @@ Framework-independent Typst PDF compilation whose only runtime dependency is `@t
 import { createCompiler } from '@typfolio/core';
 
 const wasm = new URL('/typst/compiler.wasm', location.href);
-const font = new Uint8Array(await (await fetch('/fonts/report.otf')).arrayBuffer());
+const font = new URL('/fonts/report.otf', location.href);
 const compiler = await createCompiler({ wasm, fonts: [font] });
 
 try {
@@ -27,7 +27,9 @@ try {
 }
 ```
 
-The font name in the template must match the supplied font. Fonts and WASM are loaded explicitly. In Node, read the `@typfolio/wasm/compiler.wasm` export with `fs.readFile(new URL(import.meta.resolve('@typfolio/wasm/compiler.wasm')))`. Browsers/bundlers should copy that asset to a hosted URL or use their explicit asset mechanism; the package does not choose a CDN.
+The font name in the template must match the supplied font. Fonts and WASM are loaded explicitly.
+
+`fonts` is a list of `Uint8Array | string | URL` with at least one entry, and the order is kept. Bytes are copied. A `URL`, or a string (resolved against the page URL when there is one, otherwise it must be absolute; an unresolvable string is an `INVALID_REQUEST` error), is downloaded with the global `fetch` while `createCompiler` runs; all downloads run concurrently and `compile` never fetches again. A non-OK response, a network error, an empty body, or a missing `fetch` rejects `createCompiler` with an `INITIALIZATION` error that names the URL and the status or cause. There is no default font set and no CDN: you name every font. In Node, read font files to bytes with `fs.readFile`; Node's `fetch` does not serve `file:` URLs. In Node, read the `@typfolio/wasm/compiler.wasm` export with `fs.readFile(new URL(import.meta.resolve('@typfolio/wasm/compiler.wasm')))`. Browsers/bundlers should copy that asset to a hosted URL or use their explicit asset mechanism; the package does not choose a CDN.
 
 ## Contract
 

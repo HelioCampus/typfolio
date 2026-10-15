@@ -8,7 +8,8 @@ interface DisposablePdfClient extends PdfClient {
 }
 
 interface ClientPageProps {
-  readonly createClient: () => Promise<DisposablePdfClient>;
+  /** A worker client is created synchronously; a direct compiler awaits WASM initialization. */
+  readonly createClient: () => DisposablePdfClient | Promise<DisposablePdfClient>;
   readonly loadingCopy: string;
   readonly profile: RuntimeProfile;
 }
@@ -29,29 +30,26 @@ export function ClientPage({ createClient, loadingCopy, profile }: ClientPagePro
     let client: DisposablePdfClient | undefined;
     let stopped = false;
 
-    const disposeClient = (value: DisposablePdfClient): void => {
+    const dispose = (value: DisposablePdfClient): void => {
       void value.dispose().catch(error => {
         console.error('Could not dispose the Typfolio client', error);
       });
     };
     const stop = (): void => {
-      if (stopped) return;
       stopped = true;
-      if (client !== undefined) {
-        disposeClient(client);
-        client = undefined;
-      }
+      if (client !== undefined) dispose(client);
+      client = undefined;
     };
 
     window.addEventListener('pagehide', stop, { once: true });
-    void createClient().then(value => {
+    void Promise.resolve().then(createClient).then(value => {
       if (stopped) {
-        disposeClient(value);
+        dispose(value);
         return;
       }
       client = value;
       setState({ status: 'ready', client: value });
-    }).catch(error => {
+    }, error => {
       if (!stopped) setState({ status: 'error', error });
     });
 

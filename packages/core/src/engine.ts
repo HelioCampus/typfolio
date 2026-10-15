@@ -1,5 +1,5 @@
 import init, { TypstCompilerBuilder, type TypstCompiler, type TypstCompileWorld } from '@typfolio/wasm';
-import { TypstPdfError, type Diagnostic, type PdfResult, type WasmSource } from './types.js';
+import { TypstPdfError, type Diagnostic, type FontSource, type PdfResult, type WasmSource } from './types.js';
 import type { prepareRequest } from './request.js';
 import { resolvePackage } from './typst-package.js';
 
@@ -34,12 +34,66 @@ export interface CompileExtras {
   inputs: readonly (readonly [string, string])[];
 }
 
-/** Copies the fonts and requires at least one non-empty `Uint8Array`. */
-export function copyFonts(fonts: readonly Uint8Array[]): Uint8Array[] {
-  if (!Array.isArray(fonts) || !fonts.length || fonts.some(font => !(font instanceof Uint8Array) || !font.length)) {
-    throw new TypstPdfError('INVALID_REQUEST', 'Supply at least one non-empty font as Uint8Array');
+function fontUrl(value: string | URL): URL {
+  if (value instanceof URL) return value;
+  const base = (globalThis as { location?: { href?: string } }).location?.href;
+  try {
+    if (!value.trim()) throw new TypeError('The font URL is empty');
+    return base === undefined ? new URL(value) : new URL(value, base);
+  } catch (cause) {
+    throw new TypstPdfError('INVALID_REQUEST', `Cannot resolve the font URL ${JSON.stringify(value)}${base === undefined ? '; without a page URL it must be absolute' : ''}`, [], { cause });
   }
-  return fonts.map(font => new Uint8Array(font));
+}
+
+/**
+ * Requires at least one font. Copies `Uint8Array` fonts and resolves strings to URLs, synchronously,
+ * so the caller's bytes are captured before anything yields and bad input fails before any download.
+ */
+export function copyFonts(fonts: readonly FontSource[]): (Uint8Array | URL)[] {
+  if (!Array.isArray(fonts) || !fonts.length) {
+    throw new TypstPdfError('INVALID_REQUEST', 'Supply at least one font as Uint8Array, URL or URL string');
+  }
+  return fonts.map(font => {
+    if (font instanceof Uint8Array && font.length) return new Uint8Array(font);
+    if (typeof font === 'string' || font instanceof URL) return fontUrl(font);
+    throw new TypstPdfError('INVALID_REQUEST', 'Every font must be a non-empty Uint8Array, a URL or a URL string');
+  });
+}
+
+async function fetchFont(url: URL): Promise<Uint8Array> {
+  const failure = (reason: string, cause?: unknown) =>
+    new TypstPdfError('INITIALIZATION', `Could not load font ${url.href}: ${reason}`, [], cause === undefined ? undefined : { cause });
+  let response: Response;
+  try {
+    response = await fetch(url);
+  } catch (cause) {
+    throw failure(message(cause), cause);
+  }
+  if (!response.ok) {
+    await response.body?.cancel().catch(() => undefined);
+    throw failure(`HTTP ${response.status}${response.statusText ? ` ${response.statusText}` : ''}`);
+  }
+  let bytes: Uint8Array;
+  try {
+    bytes = new Uint8Array(await response.arrayBuffer());
+  } catch (cause) {
+    throw failure(message(cause), cause);
+  }
+  if (!bytes.length) throw failure(`HTTP ${response.status} with an empty body`);
+  return bytes;
+}
+
+/** Downloads the URL fonts concurrently; the result keeps the order of `fonts`. */
+export function fetchFonts(fonts: readonly (Uint8Array | URL)[]): Promise<Uint8Array[]> {
+  if (fonts.some(font => font instanceof URL) && typeof globalThis.fetch !== 'function') {
+    return Promise.reject(new TypstPdfError('INITIALIZATION', 'Fonts given as URLs need fetch, which is not available here; supply the font bytes instead'));
+  }
+  return Promise.all(fonts.map(font => font instanceof URL ? fetchFont(font) : font));
+}
+
+/** Resolves every font source to bytes: `copyFonts` followed by `fetchFonts`. */
+export function resolveFonts(fonts: readonly FontSource[]): Promise<Uint8Array[]> {
+  return fetchFonts(copyFonts(fonts));
 }
 
 export async function createEngine(fonts: readonly Uint8Array[]) {

@@ -11,7 +11,7 @@ Typfolio compiles real, typeset, tagged PDFs inside the user's browser: your tem
 ```ts
 import { createCompiler } from '@typfolio/core';
 
-const compiler = await createCompiler({ wasm: wasmUrl, fonts: [fontBytes] });
+const compiler = await createCompiler({ wasm: wasmUrl, fonts: [fontUrl] });
 const { bytes } = await compiler.compile({
   template: `
 #let input = json("/input.json")

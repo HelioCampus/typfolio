@@ -161,7 +161,7 @@ try {
 } finally { await checker.dispose(); }
 `);
 await writeFile(join(dir, 'consumer.ts'), `
-import { createCompiler, templateFromFiles, type JsonValue, type PdfRequest, type PdfTemplate, type PdfClient, type PdfResult } from '@typfolio/core';
+import { createCompiler, templateFromFiles, type CompilerOptions, type FontSource, type JsonValue, type PdfRequest, type PdfTemplate, type PdfClient, type PdfResult } from '@typfolio/core';
 import { collectBatch, compileBatch, createWorkerClient, type PdfWorkerClient } from '@typfolio/workers';
 import {
   PdfProvider,
@@ -197,6 +197,15 @@ declare const wasm: WebAssembly.Module;
 declare const font: Uint8Array;
 declare const worker: Worker;
 const compiler: PdfClient = await createCompiler({ wasm, fonts: [font] });
+// Fonts are bytes, URLs, or URL strings, mixed freely, for core and for the worker client.
+declare const fontUrl: URL;
+const mixedFonts: readonly FontSource[] = [font, '/fonts/bold.otf', fontUrl];
+const mixedOptions: CompilerOptions = { wasm, fonts: mixedFonts };
+const urlCompiler: PdfClient = await createCompiler(mixedOptions);
+void urlCompiler;
+// @ts-expect-error a number is not a font
+const badFont: CompilerOptions = { wasm, fonts: [42] };
+void badFont;
 const request: PdfRequest = { template: { entrypoint: 'main.typ', files: { 'main.typ': 'Hello' } }, input: null };
 const stringTemplate: PdfTemplate = 'Hello';
 const defaultEntrypointTemplate: PdfTemplate = { files: { 'main.typ': 'Hello' } };
@@ -212,6 +221,11 @@ const workerClient: PdfWorkerClient = createWorkerClient({
   workerCount: 2,
   workerFactory: () => worker,
 });
+const urlWorkerClient: PdfWorkerClient = createWorkerClient({
+  compiler: { wasm, fonts: [font, '/fonts/bold.otf', fontUrl] },
+  workerFactory: () => worker,
+});
+void urlWorkerClient;
 const jobs = [{ id: 'one', request }];
 for await (const outcome of compileBatch(workerClient, jobs)) {
   if (outcome.status === 'success') outcome.result.bytes satisfies Uint8Array;

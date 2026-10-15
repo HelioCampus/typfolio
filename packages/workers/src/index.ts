@@ -8,8 +8,10 @@ import {
   TypfolioWorkerError,
   type CreateWorkerClientOptions,
   type PdfWorkerClient,
+  type SerializedCompilerOptions,
   type WorkerCompileOptions,
   type WorkerCompilerOptions,
+  type WorkerFontSource,
   type WorkerWasmSource,
 } from './types.js';
 
@@ -20,6 +22,7 @@ export {
   type WorkerCompileOptions,
   type WorkerCompilerOptions,
   type WorkerErrorCode,
+  type WorkerFontSource,
   type WorkerWasmSource,
   type PdfBatchJob,
   type PdfBatchOptions,
@@ -65,11 +68,28 @@ function snapshotWasm(value: WorkerWasmSource): WorkerWasmSource {
   throw new TypeError('compiler.wasm must be a URL string, ArrayBuffer, Uint8Array, or WebAssembly.Module');
 }
 
-function snapshotCompiler(value: WorkerCompilerOptions): WorkerCompilerOptions {
-  if (!value || !Array.isArray(value.fonts) || !value.fonts.length || value.fonts.some(font => !(font instanceof Uint8Array) || !font.length)) {
-    throw new TypeError('compiler.fonts must contain at least one non-empty Uint8Array');
+/** Bytes are copied; a URL becomes its `href`; a string is resolved here, because in a worker it would resolve against the worker script. */
+function snapshotFont(font: unknown, index: number): Uint8Array | string {
+  const at = `compiler.fonts[${index}]`;
+  if (font instanceof Uint8Array) {
+    if (!font.length) throw new TypeError(`${at} must not be empty`);
+    return new Uint8Array(font);
   }
-  return { wasm: snapshotWasm(value.wasm), fonts: value.fonts.map(font => new Uint8Array(font)) };
+  if (font instanceof URL) return font.href;
+  if (typeof font !== 'string' || !font.trim()) throw new TypeError(`${at} must be a Uint8Array, a URL, or a non-empty URL string`);
+  const base = (globalThis as { location?: { href?: string } }).location?.href;
+  try {
+    return (base === undefined ? new URL(font) : new URL(font, base)).href;
+  } catch (cause) {
+    throw new TypeError(`${at} cannot be resolved to a URL${base === undefined ? ' without a page URL; use an absolute URL' : ''}: ${JSON.stringify(font)}`, { cause });
+  }
+}
+
+function snapshotCompiler(value: WorkerCompilerOptions): SerializedCompilerOptions {
+  if (!value || !Array.isArray(value.fonts) || !value.fonts.length) {
+    throw new TypeError('compiler.fonts must contain at least one Uint8Array, URL, or URL string');
+  }
+  return { wasm: snapshotWasm(value.wasm), fonts: value.fonts.map(snapshotFont) };
 }
 
 

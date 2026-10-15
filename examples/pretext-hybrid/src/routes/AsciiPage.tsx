@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { usePdfCompilation, usePdfObjectUrl } from '@typfolio/react';
 import { CompilerBoundary } from '../CompilerBoundary.tsx';
-import { FONT_FAMILY, type FontBytes } from '../assets.ts';
+import { FONT_FAMILY, type FontUrls } from '../assets.ts';
 import { Shell } from '../Shell.tsx';
 import { StaticPreview } from '../live/StaticPreview.tsx';
 import type { Captured } from '../live/session.ts';
@@ -66,7 +66,7 @@ function formatMs(value: number | undefined): string {
 
 interface AsciiWorkbenchProps {
   readonly engine: AsciiEngine;
-  readonly fonts: FontBytes;
+  readonly fonts: FontUrls;
 }
 
 function AsciiWorkbench({ engine, fonts }: AsciiWorkbenchProps) {
@@ -337,7 +337,7 @@ function AsciiWorkbench({ engine, fonts }: AsciiWorkbenchProps) {
   );
 }
 
-function AsciiRoute({ fonts }: { readonly fonts: FontBytes }) {
+function AsciiRoute({ fonts }: { readonly fonts: FontUrls }) {
   // Fonts are registered by CompilerBoundary before this mounts, so both
   // pretext widths and canvas brightness see the Libertinus faces.
   const [engine] = useState(() => createAsciiEngine(FONT_FAMILY));

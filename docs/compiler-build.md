@@ -100,7 +100,7 @@ The generated WASM is 24,325,868 bytes (8,941,574 bytes at gzip level 9, about 6
 | Page ranges / experimental features | Explicitly unsupported; upstream binding needs extensions |
 | JSON | Plain JSON values serialized to reserved `/input.json`; no business schemas |
 | Files | Nested virtual paths; collisions, dot segments, traversal, and reserved-path replacement rejected |
-| Resource loading | Explicit fonts and request assets; no implicit font CDN, host file access, or remote Typst packages; the only importable package is the bundled `@local/typfolio:0.1.0` |
+| Resource loading | Explicit fonts (bytes, or URLs fetched with `fetch` by the realm that creates the compiler: the page for core, each worker for the workers package) and request assets; no implicit font CDN, host file access, or remote Typst packages; the only importable package is the bundled `@local/typfolio:0.1.0` |
 | Diagnostics | Structured compile diagnostics with upstream ranges; export failures retain upstream text/cause but may lack source locations |
 | Runtime | Native ESM tested in Node 24; browser smoke pages (core on the page and in a module worker, workers package with hard cancellation, capture adapters, React direct and worker routes) pass in Chromium 156, Firefox 157 and WebKit 27.2 under Playwright on macOS arm64 (`npm run test:browsers`). Not tested: Windows/Linux builds of these engines, mobile browsers, real Safari, and visual rendering of the PDF preview |
 | WASM initialization | One generated module instance per JS realm. Reuse the same `wasm` value when creating several compilers; separate workers have separate instances |

@@ -1,7 +1,7 @@
 import { createCompiler } from '@typfolio/core';
 import type { RuntimeProfile } from '../App.tsx';
 import { ClientPage } from '../ClientPage.tsx';
-import { loadFontBytes, wasmUrl } from '../assets.ts';
+import { fontUrl, wasmUrl } from '../assets.ts';
 
 const profile: RuntimeProfile = {
   eyebrow: 'Direct compiler',
@@ -18,11 +18,8 @@ const profile: RuntimeProfile = {
   runtimeNote: 'Applications can opt into workers only on pages that need heavier execution.',
 };
 
-async function createDirectClient() {
-  return createCompiler({
-    wasm: wasmUrl,
-    fonts: [await loadFontBytes()],
-  });
+function createDirectClient() {
+  return createCompiler({ wasm: wasmUrl, fonts: [fontUrl] });
 }
 
 export default function DirectPage() {

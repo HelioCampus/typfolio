@@ -9,9 +9,21 @@ import type {
 /** WASM sources that the structured-clone worker protocol can carry reliably. */
 export type WorkerWasmSource = string | ArrayBuffer | Uint8Array | WebAssembly.Module;
 
+/**
+ * Font bytes, or a URL that each worker fetches itself, so the bytes never cross the worker boundary.
+ * A string is resolved against the page URL on the client thread before it is sent.
+ */
+export type WorkerFontSource = Uint8Array | string | URL;
+
 export interface WorkerCompilerOptions {
   readonly wasm: WorkerWasmSource;
-  readonly fonts: readonly Uint8Array[];
+  readonly fonts: readonly WorkerFontSource[];
+}
+
+/** What crosses the worker boundary: a `URL` has become its absolute `href`. */
+export interface SerializedCompilerOptions {
+  readonly wasm: WorkerWasmSource;
+  readonly fonts: readonly (Uint8Array | string)[];
 }
 
 export interface WorkerCompileOptions {

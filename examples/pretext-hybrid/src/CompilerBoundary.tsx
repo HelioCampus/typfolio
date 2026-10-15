@@ -1,15 +1,15 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import { createCompiler, type PdfCompiler } from '@typfolio/core';
 import { PdfProvider } from '@typfolio/react';
-import { fontList, loadFonts, wasmUrl, type FontBytes } from './assets.ts';
+import { fontUrls, loadFonts, wasmUrl, type FontUrls } from './assets.ts';
 
 type BoundaryState =
   | { readonly status: 'loading' }
-  | { readonly status: 'ready'; readonly client: PdfCompiler; readonly fonts: FontBytes }
+  | { readonly status: 'ready'; readonly client: PdfCompiler }
   | { readonly status: 'error'; readonly error: unknown };
 
 interface CompilerBoundaryProps {
-  readonly children: (fonts: FontBytes) => ReactNode;
+  readonly children: (fonts: FontUrls) => ReactNode;
   readonly label: string;
 }
 
@@ -18,9 +18,9 @@ function describeError(error: unknown): string {
 }
 
 /**
- * Loads the fonts once (browser FontFace registration and compiler bytes come
- * from the same fetch), creates a direct main-thread compiler, and injects it
- * through the headless React provider. Children render only when both exist.
+ * Registers the fonts with the browser, creates a direct main-thread compiler that fetches
+ * the same font URLs, and injects it through the headless React provider. Children render
+ * only when both exist.
  */
 export function CompilerBoundary({ children, label }: CompilerBoundaryProps) {
   const [state, setState] = useState<BoundaryState>({ status: 'loading' });
@@ -34,14 +34,14 @@ export function CompilerBoundary({ children, label }: CompilerBoundaryProps) {
     };
 
     void (async () => {
-      const fonts = await loadFonts();
-      const created = await createCompiler({ wasm: wasmUrl, fonts: fontList(fonts) });
+      await loadFonts();
+      const created = await createCompiler({ wasm: wasmUrl, fonts: fontUrls });
       if (stopped) {
         dispose(created);
         return;
       }
       compiler = created;
-      setState({ status: 'ready', client: created, fonts });
+      setState({ status: 'ready', client: created });
     })().catch(error => {
       if (!stopped) setState({ status: 'error', error });
     });
@@ -67,5 +67,5 @@ export function CompilerBoundary({ children, label }: CompilerBoundaryProps) {
       </div>
     );
   }
-  return <PdfProvider client={state.client}>{children(state.fonts)}</PdfProvider>;
+  return <PdfProvider client={state.client}>{children(fontUrls)}</PdfProvider>;
 }

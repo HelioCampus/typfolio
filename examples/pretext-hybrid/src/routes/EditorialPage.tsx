@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from 'react';
 import { usePdfCompilation, usePdfObjectUrl } from '@typfolio/react';
 import { CompilerBoundary } from '../CompilerBoundary.tsx';
-import { FONT_FAMILY, type FontBytes } from '../assets.ts';
+import { FONT_FAMILY, type FontUrls } from '../assets.ts';
 import { StaticPreview } from '../live/StaticPreview.tsx';
 import { Shell } from '../Shell.tsx';
 import { STAGE_BACKGROUND, layoutToInput, makeEditorialRequest, type Baselines } from '../editorial/capture.ts';
@@ -16,7 +16,7 @@ import { LivePanel, LiveSwitch, type LiveStatus } from '../live/LivePanel.tsx';
 import type { Captured } from '../live/session.ts';
 
 interface WorkbenchProps {
-  readonly fonts: FontBytes;
+  readonly fonts: FontUrls;
   readonly preset: StagePresetId;
   readonly onPreset: (preset: StagePresetId) => void;
 }
@@ -293,7 +293,7 @@ function Workbench({ fonts, preset, onPreset }: WorkbenchProps) {
   );
 }
 
-function EditorialRoute({ fonts }: { readonly fonts: FontBytes }) {
+function EditorialRoute({ fonts }: { readonly fonts: FontUrls }) {
   const [preset, setPreset] = useState<StagePresetId>('wide');
   // Re-keying rebuilds the engine (and its prepared texts) for the new stage size.
   return <Workbench fonts={fonts} key={preset} onPreset={setPreset} preset={preset} />;

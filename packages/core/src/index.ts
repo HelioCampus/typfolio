@@ -1,23 +1,29 @@
-import { copyFonts, createEngine, initialize } from './engine.js';
+import { copyFonts, createEngine, fetchFonts, initialize } from './engine.js';
 import { prepareRequest } from './request.js';
-import { capabilities, TypstPdfError, type PdfCompiler, type WasmSource } from './types.js';
+import { capabilities, TypstPdfError, type FontSource, type PdfCompiler, type WasmSource } from './types.js';
 import { packageMounts, runtimeMarker } from './typst-package.js';
 export { capabilities, pdfStandards, TypstPdfError } from './types.js';
 export type { JsonValue, PdfOptions, PdfStandard, PdfRequest, PdfTemplate, PdfResult, PdfClient, PdfCompiler, Diagnostic, ErrorCode } from './types.js';
-export type { WasmSource } from './types.js';
+export type { FontSource, WasmSource } from './types.js';
 export { templateFromFiles } from './template.js';
 export type { TemplateFromFilesOptions, TemplateFiles } from './template.js';
 
 export interface CompilerOptions {
   /** Explicit bytes, compiled module, Response, or hosted URL. No implicit CDN. */
   wasm: WasmSource;
-  fonts: readonly Uint8Array[];
+  /**
+   * At least one font. `Uint8Array` values are copied. A `URL` or string is fetched with `fetch` while the
+   * compiler is created (a string is resolved against the page URL when there is one, otherwise it must be
+   * absolute). Order is preserved. No implicit fonts: name every one.
+   */
+  fonts: readonly FontSource[];
 }
 
 /** One active job per compiler. Use a worker client for queues and hard cancellation. */
 export async function createCompiler(options: CompilerOptions): Promise<PdfCompiler> {
-  const fonts = copyFonts(options?.fonts);
-  await initialize(options.wasm);
+  const sources = copyFonts(options?.fonts);
+  // Font downloads overlap the WASM initialization.
+  const [fonts] = await Promise.all([fetchFonts(sources), initialize(options.wasm)]);
   const engine = await createEngine(fonts);
   let closed = false;
   let busy = false;

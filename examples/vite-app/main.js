@@ -4,15 +4,9 @@ import fontUrl from '../../fixtures/fonts/LibertinusSerif-Regular.otf?url';
 
 const status = document.querySelector('#status');
 
-async function bytes(url) {
-  const response = await fetch(url);
-  if (!response.ok) throw new Error(url + ': HTTP ' + response.status);
-  return new Uint8Array(await response.arrayBuffer());
-}
-
 try {
   const compiler = createWorkerClient({
-    compiler: { wasm: wasmUrl, fonts: [await bytes(fontUrl)] },
+    compiler: { wasm: wasmUrl, fonts: [fontUrl] },
     timeoutMs: 30_000,
   });
   try {

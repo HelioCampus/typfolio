@@ -1,10 +1,10 @@
 import type { Diagnostic, PdfRequest, PdfResult } from '@typfolio/core';
-import type { WorkerCompilerOptions, WorkerErrorCode, WorkerWasmSource } from './types.js';
+import type { SerializedCompilerOptions, WorkerErrorCode, WorkerWasmSource } from './types.js';
 
 export const protocolVersion = 1;
 
 export type HostMessage =
-  | { readonly protocol: 1; readonly type: 'initialize'; readonly compiler: WorkerCompilerOptions }
+  | { readonly protocol: 1; readonly type: 'initialize'; readonly compiler: SerializedCompilerOptions }
   | { readonly protocol: 1; readonly type: 'compile'; readonly id: number; readonly request: PdfRequest<unknown> };
 
 export interface SerializedError {
@@ -32,12 +32,15 @@ function wasmSource(value: unknown): WorkerWasmSource {
   throw new TypeError('compiler.wasm cannot cross the worker boundary');
 }
 
-function compilerOptions(value: unknown): WorkerCompilerOptions {
+function compilerOptions(value: unknown): SerializedCompilerOptions {
   const options = record(value, 'compiler');
-  if (!Array.isArray(options.fonts) || options.fonts.some(font => !(font instanceof Uint8Array))) {
-    throw new TypeError('compiler.fonts must contain Uint8Array values');
+  if (!Array.isArray(options.fonts) || options.fonts.some(font => !(font instanceof Uint8Array || typeof font === 'string'))) {
+    throw new TypeError('compiler.fonts must contain Uint8Array or string values');
   }
-  return { wasm: wasmSource(options.wasm), fonts: options.fonts.map(font => new Uint8Array(font)) };
+  return {
+    wasm: wasmSource(options.wasm),
+    fonts: options.fonts.map((font: Uint8Array | string) => typeof font === 'string' ? font : new Uint8Array(font)),
+  };
 }
 
 export function decodeHostMessage(value: unknown): HostMessage {

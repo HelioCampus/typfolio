@@ -1,7 +1,7 @@
 // Dev-time tools. Nothing here is needed at runtime: applications install this package as a devDependency
 // and core never imports it, so none of it (nor the generated sample source it embeds) reaches a production bundle.
 import { TypstPdfError, type CompilerOptions, type Diagnostic, type PdfOptions, type PdfTemplate } from '@typfolio/core';
-import { copyFonts, createEngine, initialize, prepareRequest, bundledPackageDirectory, packageFileMounts } from '@typfolio/core/internal';
+import { createEngine, initialize, prepareRequest, resolveFonts, bundledPackageDirectory, packageFileMounts } from '@typfolio/core/internal';
 import { sampleFile, sampleSource } from './sample-source.generated.js';
 
 /** Which sample `@local/typfolio`'s `input()` builds: every property, or only what the schema requires. */
@@ -57,7 +57,7 @@ function parseOptions(options: unknown): { modes: readonly SampleMode[]; pdf?: P
 
 /** Same options as `createCompiler`. One active check per checker. */
 export async function createTemplateChecker(options: CompilerOptions): Promise<TemplateChecker> {
-  const fonts = copyFonts(options?.fonts);
+  const fonts = await resolveFonts(options?.fonts);
   await initialize(options.wasm);
   const engine = await createEngine(fonts);
   const encoder = new TextEncoder();

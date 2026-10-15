@@ -53,7 +53,7 @@ export interface Captured<T> {
 }
 
 export interface LiveSessionOptions<T> {
-  readonly fonts: readonly Uint8Array[];
+  readonly fonts: readonly string[];
   readonly canvas: HTMLCanvasElement;
   /** Pixels per PDF point to rasterise at (device pixel ratio). */
   readonly scale: number;
@@ -110,7 +110,7 @@ export async function createLiveSession<T>(options: LiveSessionOptions<T>): Prom
     port: new Worker(pdfjsWorkerUrl, { type: 'module' }) as unknown as null,
   });
   const client: PdfWorkerClient = createWorkerClient({
-    compiler: { wasm: wasmUrl, fonts: options.fonts.map(font => new Uint8Array(font)) },
+    compiler: { wasm: wasmUrl, fonts: options.fonts },
     workerCount: options.poolSize,
     // One lane per worker, so a job never waits in the queue.
     queueLimit: options.poolSize,

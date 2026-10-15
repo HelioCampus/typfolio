@@ -1,4 +1,6 @@
 import assert from 'node:assert/strict';
+import { createServer } from 'node:http';
+import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import {
   collectBatch,
@@ -6,6 +8,7 @@ import {
   createWorkerClient,
   TypfolioWorkerError,
 } from '../dist/index.js';
+import { installWorkerRuntime } from '../dist/worker-runtime.js';
 
 const request = title => ({
   template: { entrypoint: 'main.typ', files: { 'main.typ': '#input.title' } },
@@ -406,4 +409,117 @@ test('batch cancellation cancels only its jobs on a shared client', async () => 
   success(workers[0], unrelatedMessage.id, 'Unrelated');
   assert.equal((await unrelated).metadata.title, 'Unrelated');
   await client.dispose();
+});
+
+async function withLocation(href, run) {
+  const original = Object.getOwnPropertyDescriptor(globalThis, 'location');
+  Object.defineProperty(globalThis, 'location', { value: { href }, configurable: true, writable: true });
+  try { return await run(); } finally {
+    if (original) Object.defineProperty(globalThis, 'location', original); else delete globalThis.location;
+  }
+}
+
+test('font URLs travel as strings: bytes are copied, a URL becomes its href, a string resolves against the page', async () => {
+  const worker = new FakeWorker();
+  const bytes = new Uint8Array([1, 2, 3]);
+  const client = await withLocation('https://page.test/app/index.html', () => {
+    const created = createWorkerClient({
+      compiler: {
+        wasm: 'https://example.test/compiler.wasm',
+        fonts: [bytes, new URL('https://fonts.test/a.otf'), 'https://fonts.test/b.otf', 'fonts/c.otf', '/d.otf'],
+      },
+      workerFactory: () => worker,
+    });
+    assert.ok(!(created instanceof Promise), 'creating a worker client stays synchronous');
+    return created;
+  });
+  assert.equal(worker.messages.length, 0, 'workers stay lazy');
+  const pending = client.compile(request('Fonts'));
+  const initialize = worker.messages[0];
+  assert.equal(initialize.type, 'initialize');
+  const fonts = initialize.compiler.fonts;
+  assert.deepEqual(fonts.slice(1), [
+    'https://fonts.test/a.otf',
+    'https://fonts.test/b.otf',
+    'https://page.test/app/fonts/c.otf',
+    'https://page.test/d.otf',
+  ]);
+  assert.ok(fonts[0] instanceof Uint8Array);
+  assert.notEqual(fonts[0], bytes);
+  assert.deepEqual([...fonts[0]], [1, 2, 3]);
+  assert.doesNotThrow(() => structuredClone(initialize), 'the message is structured-cloneable');
+  ready(worker);
+  success(worker, worker.messages.at(-1).id, 'Fonts');
+  await pending;
+  await client.dispose();
+});
+
+test('a font string that cannot be resolved fails synchronously, before any worker exists', () => {
+  assert.equal(globalThis.location, undefined);
+  let created = 0;
+  const attempt = fonts => () => createWorkerClient({
+    compiler: { wasm: 'https://example.test/compiler.wasm', fonts },
+    workerFactory: () => { created += 1; return new FakeWorker(); },
+  });
+  assert.throws(attempt(['fonts/relative.otf']), TypeError);
+  assert.throws(attempt(['']), TypeError);
+  assert.throws(attempt([]), TypeError);
+  assert.throws(attempt([new Uint8Array()]), TypeError);
+  assert.throws(attempt([42]), TypeError);
+  assert.doesNotThrow(attempt(['https://fonts.test/absolute.otf']));
+  assert.equal(created, 0);
+});
+
+test('an INITIALIZATION failure reported by the worker rejects the job with that code and message', async () => {
+  const workers = [];
+  const client = createWorkerClient(options(() => {
+    const worker = new FakeWorker();
+    workers.push(worker);
+    return worker;
+  }));
+  const failed = client.compile(request('Fonts'));
+  const message = 'Could not load font https://fonts.test/missing.otf: HTTP 404 Not Found';
+  workers[0].emit('message', {
+    protocol: 1,
+    type: 'failure',
+    error: { code: 'INITIALIZATION', message, diagnostics: [] },
+  });
+  await assert.rejects(failed, error => {
+    assertCode(error, 'INITIALIZATION');
+    assert.equal(error.message, message);
+    return true;
+  });
+  assert.equal(workers[0].terminated, true);
+  await client.dispose();
+});
+
+test('the worker runtime hands font URLs to core, which fetches them inside the worker', async () => {
+  const root = new URL('../../../', import.meta.url);
+  const font = await readFile(new URL('fixtures/fonts/LibertinusSerif-Regular.otf', root));
+  const wasm = await readFile(new URL('packages/wasm/generated/compiler_bg.wasm', root));
+  const requested = [];
+  const server = createServer((incoming, response) => {
+    requested.push(incoming.url);
+    if (incoming.url === '/font.otf') response.writeHead(200).end(font);
+    else response.writeHead(404).end();
+  });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  const origin = `http://127.0.0.1:${server.address().port}`;
+  try {
+    const run = fonts => new Promise(resolve => {
+      let listener;
+      installWorkerRuntime({
+        addEventListener: (_type, handler) => { listener = handler; },
+        postMessage: resolve,
+      });
+      listener({ data: { protocol: 1, type: 'initialize', compiler: { wasm, fonts } } });
+    });
+    const failure = await run([`${origin}/missing.otf`]);
+    assert.equal(failure.type, 'failure');
+    assert.equal(failure.error.code, 'INITIALIZATION');
+    assert.ok(failure.error.message.includes(`${origin}/missing.otf`));
+    assert.match(failure.error.message, /404/);
+    assert.deepEqual((await run([`${origin}/font.otf`])).type, 'ready');
+    assert.deepEqual(requested, ['/missing.otf', '/font.otf']);
+  } finally { await new Promise(resolve => server.close(resolve)); }
 });

@@ -2,6 +2,8 @@ import { bundledPackageSpec } from './typst-package.js';
 
 export type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue };
 export type WasmSource = RequestInfo | URL | Response | BufferSource | WebAssembly.Module;
+/** Font bytes, or a URL (or string, resolved against the page URL when one exists) that `createCompiler` fetches. */
+export type FontSource = Uint8Array | string | URL;
 
 export const pdfStandards = ['1.4', '1.5', '1.6', '1.7', '2.0', 'a-1b', 'a-1a', 'a-2b', 'a-2u', 'a-2a', 'a-3b', 'a-3u', 'a-3a', 'a-4', 'a-4f', 'a-4e', 'ua-1'] as const;
 export type PdfStandard = typeof pdfStandards[number];

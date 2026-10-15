@@ -72,7 +72,7 @@ The single "Capture frame as PDF" button still compiles on the main thread throu
 
 ## Font parity
 
-pretext measures through canvas with the fonts the browser has; Typst lays out with the font bytes the compiler was given. `src/assets.ts` fetches each Libertinus Serif face once and uses the **same bytes twice**: `new FontFace('Libertinus Serif', bytes, { weight, style })` registered (and awaited) before any `prepare*` call, and `createCompiler({ fonts })`. Demo `px` are `pt` 1:1 in the PDF, and the page is the stage size.
+pretext measures through canvas with the fonts the browser has; Typst lays out with the font files the compiler was given. `src/assets.ts` names each Libertinus Serif face by URL and uses the **same files twice**: `new FontFace('Libertinus Serif', 'url(...)', { weight, style })` registered (and awaited) before any `prepare*` call, and `createCompiler({ fonts })` / `createWorkerClient({ compiler: { fonts } })`, which fetch those URLs themselves (inside each worker for the live pool). Demo `px` are `pt` 1:1 in the PDF, and the page is the stage size.
 
 Other details that keep the two renderers identical:
 

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
 import type { PdfRequest } from '@typfolio/core';
-import { fontList, type FontBytes } from '../assets.ts';
+import type { FontUrls } from '../assets.ts';
 import { ModeSwitch, ViewerToolbar, type PreviewMode } from './chrome.tsx';
 import { ProofBar, usePdfBytesUrl } from './proof.tsx';
 import type { Captured, LiveSession, LiveStats } from './session.ts';
@@ -52,7 +52,7 @@ interface LivePanelProps<T> {
   readonly documentName: string;
   /** File name for "Download frame". */
   readonly downloadName: string;
-  readonly fonts: FontBytes;
+  readonly fonts: FontUrls;
   /** PDF page width / height. */
   readonly aspect: number;
   readonly maxWidth: number;
@@ -164,7 +164,7 @@ export function LivePanel<T>(props: LivePanelProps<T>) {
       // Lazy: pdf.js and the worker client stay out of the route chunk until live mode is on.
       const { createLiveSession } = await import('./session.ts');
       const created = await createLiveSession<T>({
-        fonts: fontList(fonts),
+        fonts,
         canvas,
         scale: baseScale.current,
         poolSize,

@@ -6,9 +6,8 @@ Framework-independent module-worker execution for `@typfolio/core`. The package 
 import { createWorkerClient } from '@typfolio/workers';
 import wasmUrl from '@typfolio/wasm/compiler.wasm?url';
 
-const font = new Uint8Array(await (await fetch('/fonts/report.otf')).arrayBuffer());
 const client = createWorkerClient({
-  compiler: { wasm: wasmUrl, fonts: [font] },
+  compiler: { wasm: wasmUrl, fonts: ['/fonts/report.otf'] },
   workerCount: 2,
   queueLimit: 16,
   timeoutMs: 30_000,
@@ -46,6 +45,8 @@ The built-in factory creates a module worker from the packaged runtime. `workerF
 - `queueLimit` counts waiting jobs, not the active compile. Timeouts include queue time.
 - `dispose()` is idempotent, rejects all unsettled work with `DISPOSED`, and terminates the owned worker.
 - Errors crossing the realm boundary become `TypfolioWorkerError` with stable `code`, `message`, and `diagnostics` fields.
+
+`fonts` takes `Uint8Array | string | URL`, as in `@typfolio/core`, and `createWorkerClient` stays synchronous. Give fonts as URLs and each worker fetches them itself while it initializes, so the font bytes never cross the worker boundary (bytes are structured-cloned into every worker). A `URL` is sent as its `href`; a string is resolved against the page URL on the client thread before it is sent, because inside a worker a relative string would resolve against the worker script. Without a page URL (for example in Node) a string must be absolute, otherwise `createWorkerClient` throws a `TypeError`. A font that cannot be fetched in the worker fails initialization: the job rejects with a `TypfolioWorkerError` whose `code` is `INITIALIZATION` and whose message names the URL.
 
 Worker transport accepts a WASM URL string, `ArrayBuffer`, `Uint8Array`, or compiled `WebAssembly.Module`. `Request` and `Response` are intentionally excluded because they are not consistently structured-cloneable across browsers. Inputs and assets are cloned, never transferred, so caller-owned buffers remain usable.
 

@@ -1,7 +1,7 @@
 import { createWorkerClient } from '@typfolio/workers';
 import type { RuntimeProfile } from '../App.tsx';
 import { ClientPage } from '../ClientPage.tsx';
-import { loadFontBytes, wasmUrl } from '../assets.ts';
+import { fontUrl, wasmUrl } from '../assets.ts';
 
 const profile: RuntimeProfile = {
   eyebrow: 'Worker compiler',
@@ -18,12 +18,9 @@ const profile: RuntimeProfile = {
   runtimeNote: 'The worker and WASM initialize on the first compile and remain warm for later requests.',
 };
 
-async function createWorkersClient() {
+function createWorkersClient() {
   return createWorkerClient({
-    compiler: {
-      wasm: wasmUrl,
-      fonts: [await loadFontBytes()],
-    },
+    compiler: { wasm: wasmUrl, fonts: [fontUrl] },
     timeoutMs: 30_000,
   });
 }
@@ -32,7 +29,7 @@ export default function WorkerPage() {
   return (
     <ClientPage
       createClient={createWorkersClient}
-      loadingCopy="Loading the report font; the worker and WASM stay lazy until Generate PDF is selected…"
+      loadingCopy="The worker, WASM and report font stay lazy until Generate PDF is selected…"
       profile={profile}
     />
   );
