@@ -50,6 +50,8 @@ test('workers production app: compile, hard cancel, recover', async ({ page, bro
   const text = await settle(page, testInfo, messages, '#status');
   console.log(`[${browserName}] workers app`, text);
   expect(text).toContain('Compiled');
+  // fixtures/basic/chart.svg is 150 bytes; the status echoes the length of the asset the page passed to compile().
+  expect(text).toContain('with a 150-byte asset');
   expect(text).toContain('hard-cancelled');
   expect(text).toContain('recovered');
 });

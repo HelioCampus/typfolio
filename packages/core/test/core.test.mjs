@@ -3,6 +3,7 @@ import { before, after, test } from 'node:test';
 import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { performance } from 'node:perf_hooks';
 import { createCompiler, pdfStandards, TypstPdfError } from '../dist/index.js';
+import { prepareRequest } from '../dist/internal.js';
 
 const root = new URL('../../../', import.meta.url);
 const file = path => readFile(new URL(path, root));
@@ -85,6 +86,30 @@ test('JSON strings stay data and requests capture caller input before yielding',
   const result = await pending;
   assert.equal(result.metadata.title, title);
   await writeFile(new URL('snapshot.pdf', output), result.bytes);
+});
+
+test('copyAssets defaults to a defensive copy; false mounts the caller views and keeps validation', () => {
+  const svg = request.assets['assets/chart.svg'];
+  assert.notEqual(prepareRequest(request).files.get('/assets/chart.svg'), svg);
+  assert.notEqual(prepareRequest(request, { copyAssets: true }).files.get('/assets/chart.svg'), svg);
+  assert.deepEqual([...prepareRequest(request).files.get('/assets/chart.svg')], [...svg]);
+  assert.equal(prepareRequest(request, { copyAssets: false }).files.get('/assets/chart.svg'), svg);
+
+  const own = { copyAssets: false };
+  assert.throws(() => prepareRequest({ ...request, assets: { 'assets/a.bin': [1, 2] } }, own), hasCode('INVALID_REQUEST'));
+  assert.throws(() => prepareRequest({ ...request, assets: { '/input.json': svg } }, own), hasCode('INVALID_REQUEST'));
+  assert.throws(() => prepareRequest({ ...request, assets: { '../a.bin': svg } }, own), hasCode('INVALID_REQUEST'));
+  assert.throws(() => prepareRequest({ ...request, assets: { '@typfolio/a.bin': svg } }, own), hasCode('INVALID_REQUEST'));
+  assert.throws(() => prepareRequest({ ...request, input: { value: () => 1 } }, own), hasCode('INVALID_REQUEST'));
+});
+
+test('a compiler created with copyAssets: false compiles the same bytes as the default', async () => {
+  const own = await createCompiler({ wasm, fonts, copyAssets: false });
+  try {
+    const result = await own.compile(request);
+    assert.deepEqual(result.diagnostics, []);
+    assert.deepEqual(result.bytes, (await compiler.compile(request)).bytes);
+  } finally { await own.dispose(); }
 });
 
 test('files, input and export options are isolated across success and failure', async () => {

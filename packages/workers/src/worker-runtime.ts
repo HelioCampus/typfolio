@@ -32,7 +32,8 @@ export function installWorkerRuntime(scope: WorkerRuntimeScope): void {
       const message = decodeHostMessage(event.data);
       if (message.type === 'initialize') {
         if (initializing || compiler) throw new Error('Typfolio worker is already initialized');
-        initializing = createCompiler(message.compiler).then(value => {
+        // The request is owned by this worker (a transferred snapshot), so core need not copy its assets again.
+        initializing = createCompiler({ ...message.compiler, copyAssets: false }).then(value => {
           compiler = value;
           scope.postMessage({ protocol: protocolVersion, type: 'ready' });
         }).catch(error => {

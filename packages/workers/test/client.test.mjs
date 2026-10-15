@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
+import { transferableBuffers } from '../dist/snapshot.js';
 import {
   collectBatch,
   compileBatch,
@@ -23,16 +24,22 @@ const result = title => ({
 
 class FakeWorker {
   listeners = { message: [], error: [], messageerror: [] };
-  messages = [];
+  messages = []; // what the worker receives: a structured clone, with transferred buffers moved
+  posted = []; // the objects the client handed to postMessage, whose transferred buffers are now detached
+  transfers = [];
   terminated = false;
 
   constructor(handle) { this.handle = handle; }
 
   addEventListener(type, listener) { this.listeners[type].push(listener); }
 
-  postMessage(message) {
-    this.messages.push(message);
-    this.handle?.(message, this);
+  // Like a real Worker: the receiver gets a clone, and every buffer in the transfer list is detached here.
+  postMessage(message, transfer = []) {
+    const received = structuredClone(message, { transfer });
+    this.posted.push(message);
+    this.transfers.push(transfer);
+    this.messages.push(received);
+    this.handle?.(received, this);
   }
 
   emit(type, value) {
@@ -411,6 +418,188 @@ test('batch cancellation cancels only its jobs on a shared client', async () => 
   await client.dispose();
 });
 
+const assetRequest = (title, assets) => ({ ...request(title), assets });
+
+function compileMessages(worker) {
+  return worker.messages.filter(message => message.type === 'compile');
+}
+
+test('transfers the snapshot buffers, leaves the caller buffers intact, and the worker gets every byte', async () => {
+  const worker = new FakeWorker();
+  const client = createWorkerClient(options(() => worker));
+  const big = Uint8Array.from({ length: 1 << 20 }, (_, index) => index % 251);
+  const small = new Uint8Array([9, 8, 7]);
+  const expected = [Uint8Array.from(big), Uint8Array.from(small)];
+  const shared = new Uint8Array([1, 2, 3, 4, 5, 6]);
+  const callerRequest = assetRequest('Assets', {
+    'big.bin': big,
+    'small.bin': small,
+    'head.bin': shared.subarray(0, 3), // two views of one buffer: one entry in the transfer list
+    'tail.bin': shared.subarray(3),
+  });
+  const pending = client.compile(callerRequest);
+  ready(worker);
+
+  const [message] = compileMessages(worker);
+  const [posted] = worker.posted.filter(candidate => candidate.type === 'compile');
+  const transfer = worker.transfers.at(-1);
+  assert.equal(transfer.length, 3, 'one transfer entry per distinct buffer');
+  assert.equal(new Set(transfer).size, 3);
+
+  // The worker received the full bytes.
+  assert.deepEqual(message.request.assets['big.bin'], expected[0]);
+  assert.deepEqual(message.request.assets['small.bin'], expected[1]);
+  assert.deepEqual([...message.request.assets['head.bin']], [1, 2, 3]);
+  assert.deepEqual([...message.request.assets['tail.bin']], [4, 5, 6]);
+
+  // The snapshot the client posted is detached; the caller's request never was involved.
+  for (const bytes of Object.values(posted.request.assets)) {
+    assert.equal(bytes.buffer.byteLength, 0);
+    assert.equal(bytes.byteLength, 0);
+  }
+  assert.notEqual(posted.request, callerRequest);
+  assert.equal(callerRequest.assets['big.bin'], big);
+  assert.equal(big.byteLength, 1 << 20);
+  assert.deepEqual(big, expected[0]);
+  assert.deepEqual(small, expected[1]);
+  assert.deepEqual([...shared], [1, 2, 3, 4, 5, 6]);
+
+  success(worker, message.id, 'Assets');
+  await pending;
+  // The caller can submit the same buffers again.
+  const again = client.compile(callerRequest);
+  const next = compileMessages(worker).at(-1);
+  assert.deepEqual(next.request.assets['big.bin'], expected[0]);
+  success(worker, next.id, 'Assets');
+  await again;
+  await client.dispose();
+});
+
+test('a SharedArrayBuffer asset is not transferred and still arrives intact', async () => {
+  const worker = new FakeWorker();
+  const client = createWorkerClient(options(() => worker));
+  const sharedBuffer = new SharedArrayBuffer(4);
+  const view = new Uint8Array(sharedBuffer);
+  view.set([5, 6, 7, 8]);
+  const ordinary = new Uint8Array([1, 2, 3]);
+  const pending = client.compile(assetRequest('Shared', { 'shared.bin': view, 'ordinary.bin': ordinary }));
+  ready(worker);
+
+  const [message] = compileMessages(worker);
+  assert.deepEqual([...message.request.assets['shared.bin']], [5, 6, 7, 8]);
+  assert.deepEqual([...message.request.assets['ordinary.bin']], [1, 2, 3]);
+  assert.equal(worker.transfers.at(-1).length, 1);
+  assert.ok(worker.transfers.at(-1).every(buffer => buffer instanceof ArrayBuffer));
+  assert.deepEqual([...view], [5, 6, 7, 8]);
+  assert.deepEqual([...ordinary], [1, 2, 3]);
+  success(worker, message.id, 'Shared');
+  await pending;
+  await client.dispose();
+});
+
+test('transferableBuffers lists distinct transferable buffers only', () => {
+  const buffer = new ArrayBuffer(8);
+  const detached = new ArrayBuffer(4);
+  const detachedView = new Uint8Array(detached);
+  detached.transfer();
+  const buffers = transferableBuffers({
+    template: 'x',
+    input: null,
+    assets: {
+      a: new Uint8Array(buffer, 0, 4),
+      b: new Uint8Array(buffer, 4, 4),
+      shared: new Uint8Array(new SharedArrayBuffer(2)),
+      detached: detachedView,
+      notBytes: null,
+      alsoNotBytes: 3,
+    },
+  });
+  assert.deepEqual(buffers, [buffer]);
+  assert.deepEqual(transferableBuffers({ template: 'x', input: null }), []);
+});
+
+test('a malformed asset value does not break posting; the worker side rejects it', async () => {
+  const worker = new FakeWorker();
+  const client = createWorkerClient(options(() => worker));
+  const pending = client.compile(assetRequest('Odd', { 'odd.bin': null }));
+  ready(worker);
+  const [message] = compileMessages(worker);
+  assert.equal(message.request.assets['odd.bin'], null);
+  assert.equal(worker.transfers.at(-1).length, 0);
+  success(worker, message.id, 'Odd');
+  await pending;
+  await client.dispose();
+});
+
+test('a request is posted once: cancelled, timed-out and crashed jobs are rejected, not re-posted', async () => {
+  const workers = [];
+  const client = createWorkerClient(options(() => {
+    const worker = new FakeWorker();
+    workers.push(worker);
+    return worker;
+  }, { timeoutMs: 20 }));
+  const bytes = () => ({ 'a.bin': new Uint8Array(1024).fill(3) });
+  const controller = new AbortController();
+  const cancelled = client.compile(assetRequest('Cancel', bytes()), { signal: controller.signal });
+  ready(workers[0]);
+  controller.abort();
+  await assert.rejects(cancelled, error => assertCode(error, 'ABORTED'));
+
+  const timedOut = client.compile(assetRequest('Timeout', bytes()));
+  assert.equal(workers.length, 2);
+  ready(workers[1]);
+  await assert.rejects(timedOut, error => assertCode(error, 'TIMEOUT'));
+
+  const crashed = client.compile(assetRequest('Crash', bytes()), { timeoutMs: 5_000 });
+  assert.equal(workers.length, 3);
+  ready(workers[2]);
+  workers[2].emit('error', { message: 'worker crashed' });
+  await assert.rejects(crashed, error => assertCode(error, 'WORKER'));
+
+  await new Promise(resolve => setTimeout(resolve, 30));
+  const posts = workers.flatMap(worker => compileMessages(worker));
+  assert.equal(posts.length, 3);
+  assert.deepEqual(posts.map(message => message.request.input.title).sort(), ['Cancel', 'Crash', 'Timeout']);
+  assert.equal(new Set(posts.map(message => message.id)).size, 3);
+  await client.dispose();
+});
+
+test('assets are copied once on the client, for compile and for each batch job', async () => {
+  const requestClones = [];
+  const original = globalThis.structuredClone;
+  globalThis.structuredClone = (value, ...rest) => {
+    if (value?.template !== undefined) requestClones.push(value); // a request, not a worker message
+    return original(value, ...rest);
+  };
+  try {
+    const worker = automaticWorker();
+    const client = createWorkerClient(options(() => worker));
+    const make = title => assetRequest(title, { 'a.bin': new Uint8Array(64).fill(7) });
+
+    const single = make('Single');
+    await client.compile(single);
+    assert.deepEqual(requestClones, [single]);
+
+    // The same request object submitted twice is snapshotted each time, and stays usable.
+    requestClones.length = 0;
+    await Promise.all([client.compile(single), client.compile(single)]);
+    assert.deepEqual(requestClones, [single, single]);
+    assert.deepEqual([...single.assets['a.bin']], new Array(64).fill(7));
+
+    requestClones.length = 0;
+    const jobs = ['One', 'Two', 'Three'].map(title => ({ id: title, request: make(title) }));
+    const outcomes = await collectBatch(client, jobs);
+    assert.ok(outcomes.every(outcome => outcome.status === 'success'));
+    assert.deepEqual(requestClones, jobs.map(job => job.request), 'one clone per job, taken from the caller request');
+    for (const job of jobs) assert.deepEqual([...job.request.assets['a.bin']], new Array(64).fill(7));
+    const batchPosts = compileMessages(worker).slice(-3);
+    for (const message of batchPosts) assert.deepEqual([...message.request.assets['a.bin']], new Array(64).fill(7));
+    await client.dispose();
+  } finally {
+    globalThis.structuredClone = original;
+  }
+});
+
 async function withLocation(href, run) {
   const original = Object.getOwnPropertyDescriptor(globalThis, 'location');
   Object.defineProperty(globalThis, 'location', { value: { href }, configurable: true, writable: true });
@@ -493,10 +682,14 @@ test('an INITIALIZATION failure reported by the worker rejects the job with that
   await client.dispose();
 });
 
+// A realm accepts one WASM source value, so the runtime tests share one buffer.
+let wasmBytes;
+const loadWasm = async root => wasmBytes ??= await readFile(new URL('packages/wasm/generated/compiler_bg.wasm', root));
+
 test('the worker runtime hands font URLs to core, which fetches them inside the worker', async () => {
   const root = new URL('../../../', import.meta.url);
   const font = await readFile(new URL('fixtures/fonts/LibertinusSerif-Regular.otf', root));
-  const wasm = await readFile(new URL('packages/wasm/generated/compiler_bg.wasm', root));
+  const wasm = await loadWasm(root);
   const requested = [];
   const server = createServer((incoming, response) => {
     requested.push(incoming.url);
@@ -522,4 +715,37 @@ test('the worker runtime hands font URLs to core, which fetches them inside the 
     assert.deepEqual((await run([`${origin}/font.otf`])).type, 'ready');
     assert.deepEqual(requested, ['/missing.otf', '/font.otf']);
   } finally { await new Promise(resolve => server.close(resolve)); }
+});
+
+test('the worker runtime compiles transferred assets, mounting them without a second copy', async () => {
+  const root = new URL('../../../', import.meta.url);
+  const wasm = await loadWasm(root);
+  const font = await readFile(new URL('fixtures/fonts/LibertinusSerif-Regular.otf', root));
+  const svg = new Uint8Array(await readFile(new URL('fixtures/basic/chart.svg', root)));
+  const messages = [];
+  let listener;
+  const settled = (type, id) => new Promise((resolve, reject) => {
+    const poll = () => {
+      const found = messages.find(message => message.type === type && message.id === id);
+      const failed = messages.find(message => message.type === 'failure' && message.id === undefined);
+      if (found) resolve(found); else if (failed) reject(new Error(failed.error.message)); else setTimeout(poll, 5);
+    };
+    poll();
+  });
+  installWorkerRuntime({
+    addEventListener: (_type, handler) => { listener = handler; },
+    postMessage: message => messages.push(message),
+  });
+  listener({ data: { protocol: 1, type: 'initialize', compiler: { wasm, fonts: [new Uint8Array(font)] } } });
+  await settled('ready', undefined);
+
+  const template = '#set text(font: "Libertinus Serif")\n#image("chart.svg", alt: "A bar")';
+  const send = (id, assets) => listener({
+    data: { protocol: 1, type: 'compile', id, request: { template, input: null, assets } },
+  });
+  send(1, { 'chart.svg': svg });
+  const done = await settled('result', 1);
+  assert.equal(new TextDecoder().decode(done.result.bytes.subarray(0, 5)), '%PDF-');
+  send(2, {});
+  assert.equal((await settled('failure', 2)).error.code, 'COMPILATION');
 });

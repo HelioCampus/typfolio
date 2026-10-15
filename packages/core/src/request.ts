@@ -52,7 +52,13 @@ function jsonData(value: unknown, ancestors: Set<object>, at: string): unknown {
   } finally { ancestors.delete(object); }
 }
 
-export function prepareRequest(request: PdfRequest<unknown>) {
+export interface PrepareRequestOptions {
+  /** Copy every asset (default). `false` mounts the caller's `Uint8Array` views as they are. */
+  readonly copyAssets?: boolean;
+}
+
+export function prepareRequest(request: PdfRequest<unknown>, options: PrepareRequestOptions = {}) {
+  const copyAssets = options.copyAssets ?? true;
   const value = record(request, 'request');
   keys(value, ['template', 'input', 'assets', 'pdf'], 'request');
   // A string template is shorthand for { files: { 'main.typ': template } } with the default entrypoint.
@@ -85,7 +91,7 @@ export function prepareRequest(request: PdfRequest<unknown>) {
   if (value.assets !== undefined) {
     for (const [name, bytes] of Object.entries(record(value.assets, 'assets'))) {
       if (!(bytes instanceof Uint8Array)) invalid(`Asset ${name} must be a Uint8Array`);
-      put(name, new Uint8Array(bytes as Uint8Array));
+      put(name, copyAssets ? new Uint8Array(bytes as Uint8Array) : bytes as Uint8Array);
     }
   }
   if (Array.from(files.keys()).some(path => path.startsWith('/input.json/'))) invalid('/input.json is reserved for request.input');

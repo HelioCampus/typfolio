@@ -3,7 +3,7 @@ import * as Effect from 'effect/Effect';
 import * as Layer from 'effect/Layer';
 import * as ManagedRuntime from 'effect/ManagedRuntime';
 import { decodeRuntimeMessage, protocolVersion, type HostMessage } from './protocol.js';
-import { snapshotRequest } from './snapshot.js';
+import { isSnapshot, snapshotRequest, transferableBuffers } from './snapshot.js';
 import {
   TypfolioWorkerError,
   type CreateWorkerClientOptions,
@@ -229,7 +229,9 @@ export function createWorkerClient(options: CreateWorkerClientOptions): PdfWorke
       current.active = job;
       const message: HostMessage = { protocol: protocolVersion, type: 'compile', id: job.id, request: job.request };
       try {
-        current.worker.postMessage(message);
+        // A job is posted once: failed, cancelled, timed-out and crashed jobs are rejected, never re-posted, and a
+        // queued job leaves the queue as it is posted. So the snapshot's buffers can be transferred, not cloned.
+        current.worker.postMessage(message, transferableBuffers(job.request));
       } catch (cause) {
         failActive(workerError('Could not send work to Typfolio worker', cause), current);
       }
@@ -315,7 +317,8 @@ export function createWorkerClient(options: CreateWorkerClientOptions): PdfWorke
       let captured: PdfRequest<unknown>;
       let duration: number | undefined;
       try {
-        captured = snapshotRequest(request);
+        // A snapshot (from compileBatch) is already client-owned; copying it again would copy every asset twice.
+        captured = isSnapshot(request) ? request : snapshotRequest(request);
         duration = timeout(compileOptions.timeoutMs, 'compile timeoutMs') ?? defaultTimeout;
       } catch (error) {
         return Promise.reject(error);

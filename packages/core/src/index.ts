@@ -17,11 +17,20 @@ export interface CompilerOptions {
    * absolute). Order is preserved. No implicit fonts: name every one.
    */
   fonts: readonly FontSource[];
+  /**
+   * Copy each `request.assets` entry when `compile` captures the request. Default `true`, so mutating or
+   * reusing a buffer after submitting it cannot change the result. With `false` the compiler reads the
+   * caller's `Uint8Array` views directly: the caller must not mutate, detach, or reuse the asset buffers until
+   * the returned promise settles. Validation is unchanged. Meant for a compiler that owns its requests, such as
+   * the one inside `@typfolio/workers`, where the request arrives by transfer.
+   */
+  copyAssets?: boolean;
 }
 
 /** One active job per compiler. Use a worker client for queues and hard cancellation. */
 export async function createCompiler(options: CompilerOptions): Promise<PdfCompiler> {
   const sources = copyFonts(options?.fonts);
+  const copyAssets = options.copyAssets ?? true;
   // Font downloads overlap the WASM initialization.
   const [fonts] = await Promise.all([fetchFonts(sources), initialize(options.wasm)]);
   const engine = await createEngine(fonts);
@@ -38,7 +47,7 @@ export async function createCompiler(options: CompilerOptions): Promise<PdfCompi
       if (closed) throw new TypstPdfError('DISPOSED', 'The compiler is disposed');
       if (busy) throw new TypstPdfError('BUSY', 'The compiler already has an active job');
       checkAbort(options.signal);
-      const prepared = prepareRequest(request); // Capture data before yielding to caller code.
+      const prepared = prepareRequest(request, { copyAssets }); // Capture data before yielding to caller code.
       busy = true;
       let release!: () => void;
       finished = new Promise<void>(resolve => { release = resolve; });
