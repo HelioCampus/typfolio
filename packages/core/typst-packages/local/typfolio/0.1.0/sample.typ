@@ -2,7 +2,7 @@
 //
 // `lib.typ` imports this file only from the editor branch of `input()`, so a compile under Typfolio
 // never loads it (and core does not even mount it). It ships next to `lib.typ` because an editor reads
-// the package folder from disk. `@typfolio/core/dev-tools` mounts it for build-time template checks.
+// the package folder from disk. `@typfolio/dev-tools` mounts it for build-time template checks.
 //
 // `sample-from-schema(schema, mode: "full")` builds a value from a JSON Schema (a dictionary):
 //   "full"    shape-complete, for editor completion: every property, one array item, non-null shapes.

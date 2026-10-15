@@ -1,10 +1,7 @@
-// Dev-time tools. Nothing here is reachable from the main entry: the runtime path never imports this
-// module (or the generated sample source it embeds), so bundlers drop all of it from production builds.
-import type { CompilerOptions } from '../index.js';
-import { copyFonts, createEngine, initialize } from '../engine.js';
-import { prepareRequest } from '../request.js';
-import { TypstPdfError, type Diagnostic, type PdfOptions, type PdfTemplate } from '../types.js';
-import { bundledPackageDirectory, packageFileMounts } from '../typst-package.js';
+// Dev-time tools. Nothing here is needed at runtime: applications install this package as a devDependency
+// and core never imports it, so none of it (nor the generated sample source it embeds) reaches a production bundle.
+import { TypstPdfError, type CompilerOptions, type Diagnostic, type PdfOptions, type PdfTemplate } from '@typfolio/core';
+import { copyFonts, createEngine, initialize, prepareRequest, bundledPackageDirectory, packageFileMounts } from '@typfolio/core/internal';
 import { sampleFile, sampleSource } from './sample-source.generated.js';
 
 /** Which sample `@local/typfolio`'s `input()` builds: every property, or only what the schema requires. */

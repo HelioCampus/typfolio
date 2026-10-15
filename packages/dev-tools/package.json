@@ -1,0 +1,23 @@
+{
+  "name": "@typfolio/dev-tools",
+  "version": "0.0.0-dev.1",
+  "private": true,
+  "description": "Dev-time tools for Typfolio templates (install as a devDependency)",
+  "type": "module",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/HelioCampus/typfolio.git",
+    "directory": "packages/dev-tools"
+  },
+  "homepage": "https://github.com/HelioCampus/typfolio#readme",
+  "bugs": { "url": "https://github.com/HelioCampus/typfolio/issues" },
+  "files": ["dist", "README.md"],
+  "exports": {
+    ".": { "types": "./dist/index.d.ts", "import": "./dist/index.js" }
+  },
+  "dependencies": {
+    "@typfolio/core": "0.0.0-dev.1"
+  },
+  "sideEffects": false
+}

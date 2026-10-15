@@ -2,10 +2,10 @@ import assert from 'node:assert/strict';
 import { after, before, test } from 'node:test';
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
-import * as main from '../dist/index.js';
-import * as devTools from '../dist/dev-tools/index.js';
-import { checkTemplate, createTemplateChecker } from '../dist/dev-tools/index.js';
-import { TypstPdfError } from '../dist/index.js';
+import * as main from '@typfolio/core';
+import { TypstPdfError } from '@typfolio/core';
+import * as devTools from '../dist/index.js';
+import { checkTemplate, createTemplateChecker } from '../dist/index.js';
 
 const root = new URL('../../../', import.meta.url);
 const file = path => readFile(new URL(path, root));
@@ -32,7 +32,7 @@ before(async () => {
 });
 after(() => checker?.dispose());
 
-test('the main entry exports nothing from dev-tools and never reaches it', async () => {
+test('the core main entry exports nothing from dev-tools and never reaches it', async () => {
   for (const name of Object.keys(devTools)) assert.equal(name in main, false, `${name} leaked into the main entry`);
   assert.deepEqual(Object.keys(devTools).sort(), ['checkTemplate', 'createTemplateChecker']);
   // Follow the static import graph of the main entry's compiled files.
@@ -45,7 +45,7 @@ test('the main entry exports nothing from dev-tools and never reaches it', async
     for (const marker of sampleMarkers) assert.ok(!source.includes(marker), `${fileURLToPath(url)} contains the sample builder (${marker})`);
     for (const [, specifier] of source.matchAll(/(?:from\s*|import\s*\(\s*)['"](\.[^'"]+)['"]/g)) await visit(new URL(specifier, url));
   };
-  await visit(new URL('../dist/index.js', import.meta.url));
+  await visit(new URL('../../core/dist/index.js', import.meta.url));
   assert.ok(seen.size > 3);
   for (const href of seen) assert.ok(!/dev-tools|sample-source/.test(href), `${href} is reachable from the main entry`);
 });
@@ -59,7 +59,9 @@ test('dev-tools can write nothing: it imports no file system or network module',
     assert.ok(!/['"](?:node:)?(?:fs|fs\/promises|http|https|net|child_process)['"]/.test(source), `${fileURLToPath(url)} imports a Node I/O module`);
     for (const [, specifier] of source.matchAll(/from\s*['"](\.[^'"]+)['"]/g)) await visit(new URL(specifier, url));
   };
-  await visit(new URL('../dist/dev-tools/index.js', import.meta.url));
+  // Core is reached through its bare specifiers, so follow the internal entry's graph as well.
+  await visit(new URL('../dist/index.js', import.meta.url));
+  await visit(new URL('../../core/dist/internal.js', import.meta.url));
 });
 
 test('a correct template passes in both modes and returns PDF bytes', async () => {

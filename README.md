@@ -32,7 +32,7 @@ const { bytes } = await compiler.compile({
 
 **The data never leaves the page.** The browser already holds the records, the charts and the user's session. Compiling there means nothing is uploaded, nothing is queued, and the feature keeps working offline.
 
-**Templates are code with a typed contract.** `.typ` files live in your repo and are reviewed like code. `PdfRequest<Input>` types the data in TypeScript, the bundled `@local/typfolio` helper gives the editor field completion from your JSON Schema, and `@typfolio/core/dev-tools` compiles each template against minimal and full samples of that schema in CI, so a renamed field or an unguarded optional value fails the build, not the user.
+**Templates are code with a typed contract.** `.typ` files live in your repo and are reviewed like code. `PdfRequest<Input>` types the data in TypeScript, the bundled `@local/typfolio` helper gives the editor field completion from your JSON Schema, and `@typfolio/dev-tools` compiles each template against minimal and full samples of that schema in CI, so a renamed field or an unguarded optional value fails the build, not the user.
 
 **The UI stays responsive.** `@typfolio/workers` runs compilation in a bounded pool of web workers with queueing, timeouts and hard cancellation that terminates a running compile mid-way. Batches stream results as they finish, so generating hundreds of documents client-side is an ordinary loop.
 
@@ -47,7 +47,7 @@ const { bytes } = await compiler.compile({
 | Request model | `compile({ template, input, assets, pdf })`: template files, JSON input mounted at `/input.json`, binary assets, PDF options. Each job is isolated; nothing leaks between compiles |
 | Typed input | `PdfRequest<Input>` types the JSON you pass; validation stays with your own tools (Zod or otherwise) |
 | Editor completion | Templates import `@local/typfolio` and read `input(json.with("./report.schema.json"))`: at runtime that is the request input, in the editor it is a sample built from your JSON Schema, so `#data.` completes |
-| Build-time checks | `@typfolio/core/dev-tools` compiles a template against a *minimal* and a *full* sample of its schema, catching unknown fields and unguarded optional data before runtime |
+| Build-time checks | `@typfolio/dev-tools` compiles a template against a *minimal* and a *full* sample of its schema, catching unknown fields and unguarded optional data before runtime |
 | Explicit resources | Fonts and the WASM are loaded from where you say; there is no implicit font CDN, no network access during compilation and no remote package downloads |
 | Workers | Keeps the UI responsive: bounded pool of web workers, FIFO queue, per-job `AbortSignal`, timeouts, hard cancellation by terminating the worker mid-compile, worker replacement and streaming batches |
 | React | `PdfProvider`, `usePdfCompilation`, `usePdfObjectUrl`: imperative, cancellation-safe state over either client |
@@ -81,7 +81,8 @@ The compiler never touches the host file system or the network. Everything a com
 
 | Package | Purpose |
 |---|---|
-| [`@typfolio/core`](./packages/core/README.md) | Compilation of template files, JSON input and assets into PDF bytes and diagnostics. Subpaths: `/capture`, `/capture/svg`, `/capture/dom` (browser asset capture) and `/dev-tools` (template checks), all kept out of the main entry |
+| [`@typfolio/core`](./packages/core/README.md) | Compilation of template files, JSON input and assets into PDF bytes and diagnostics. Subpaths: `/capture`, `/capture/svg`, `/capture/dom` (browser asset capture), kept out of the main entry |
+| [`@typfolio/dev-tools`](./packages/dev-tools/README.md) | Dev-time tools, installed as a devDependency and never needed at runtime: template checks against schema samples today, PDF inspection planned |
 | [`@typfolio/workers`](./packages/workers/README.md) | Module-worker execution: pools, queues, cancellation, timeouts, batches |
 | [`@typfolio/react`](./packages/react/README.md) | Headless provider and hooks, plus the `CaptureRegion` marker component |
 | [`@typfolio/wasm`](./packages/wasm/README.md) | The generated compiler binary, its bindings, the upstream licence and the build provenance; no hand-written code |
@@ -147,7 +148,7 @@ At runtime `input()` returns the request's JSON. In the editor nothing sets the 
 The same schema checks the template in CI, with nothing written to disk:
 
 ```ts
-import { createTemplateChecker } from '@typfolio/core/dev-tools';
+import { createTemplateChecker } from '@typfolio/dev-tools'; // installed as a devDependency
 
 const checker = await createTemplateChecker({ wasm, fonts });
 const report = await checker.check(
@@ -228,7 +229,7 @@ The WASM is emitted as a separate asset by every tested build, never inlined int
 
 ## Accessibility
 
-Typfolio asks the compiler for tagged PDF by default and for PDF/UA-1 or PDF/A when requested. The exporter enforces the standard's structural rules at compile time, and the `dev-tools` check runs them against schema-derived samples in CI. Alternative text comes from your data, so a captured chart's `altText` should state its conclusion, not just that it is a chart. A tagged or PDF/UA-labelled file is not by itself proof of accessibility: run a validator such as [veraPDF](https://verapdf.org) on real documents and review reading order and alt text by hand.
+Typfolio asks the compiler for tagged PDF by default and for PDF/UA-1 or PDF/A when requested. The exporter enforces the standard's structural rules at compile time, and the `@typfolio/dev-tools` check runs them against schema-derived samples in CI. Alternative text comes from your data, so a captured chart's `altText` should state its conclusion, not just that it is a chart. A tagged or PDF/UA-labelled file is not by itself proof of accessibility: run a validator such as [veraPDF](https://verapdf.org) on real documents and review reading order and alt text by hand.
 
 ## Documentation
 

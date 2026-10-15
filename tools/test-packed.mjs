@@ -15,6 +15,7 @@ run('npm', ['install', '--offline', '--ignore-scripts', '--no-audit', '--no-fund
   join(root, '.build/typfolio-core-0.0.0-dev.1.tgz'),
   join(root, '.build/typfolio-workers-0.0.0-dev.1.tgz'),
   join(root, '.build/typfolio-react-0.0.0-dev.1.tgz'),
+  join(root, '.build/typfolio-dev-tools-0.0.0-dev.1.tgz'),
   'react@19.3.0',
   '@types/react@19.3.0']);
 // html2canvas is an optional peer of @typfolio/core: installing the tarballs must not bring it in.
@@ -22,7 +23,7 @@ run('npm', ['install', '--offline', '--ignore-scripts', '--no-audit', '--no-fund
 // workspace's own copy; the assertions below therefore inspect the installed tree directly.)
 await assert.rejects(access(join(dir, 'node_modules/html2canvas')), { code: 'ENOENT' },
   'html2canvas must not be installed in the consumer');
-for (const name of ['wasm', 'core', 'workers', 'react']) {
+for (const name of ['wasm', 'core', 'workers', 'react', 'dev-tools']) {
   const manifest = JSON.parse(await readFile(join(dir, 'node_modules/@typfolio', name, 'package.json'), 'utf8'));
   for (const field of ['dependencies', 'optionalDependencies']) {
     assert.ok(!('html2canvas' in (manifest[field] ?? {})), `@typfolio/${name} must not list html2canvas in ${field}`);
@@ -43,7 +44,7 @@ for (const name of packageFiles) {
 }
 // Every tarball must carry the licence; the wasm tarball also carries the NOTICE and third-party notices and licence texts.
 // npm adds LICENSE/NOTICE from a package's own root, so this guards the per-package copies.
-for (const [name, extra] of [['wasm', ['NOTICE', 'THIRD_PARTY_NOTICES.md', 'THIRD_PARTY_LICENSES.md', 'generated/LICENSE.typst-ts']], ['core', []], ['workers', []], ['react', []]]) {
+for (const [name, extra] of [['wasm', ['NOTICE', 'THIRD_PARTY_NOTICES.md', 'THIRD_PARTY_LICENSES.md', 'generated/LICENSE.typst-ts']], ['core', []], ['workers', []], ['react', []], ['dev-tools', []]]) {
   const listing = spawnSync('tar', ['-tzf', join(root, `.build/typfolio-${name}-0.0.0-dev.1.tgz`)], { encoding: 'utf8' });
   if (listing.error || listing.status !== 0) throw listing.error ?? new Error('tar exited ' + listing.status);
   const files = listing.stdout.split('\n');
@@ -70,8 +71,8 @@ import { createCompiler, templateFromFiles } from '@typfolio/core';
 import { createWorkerClient } from '@typfolio/workers';
 import { PdfProvider, usePdfCompilation, usePdfObjectUrl } from '@typfolio/react';
 import * as coreMain from '@typfolio/core';
-import * as devTools from '@typfolio/core/dev-tools';
-import { checkTemplate, createTemplateChecker } from '@typfolio/core/dev-tools';
+import * as devTools from '@typfolio/dev-tools';
+import { checkTemplate, createTemplateChecker } from '@typfolio/dev-tools';
 import { captureAssets, captureProps } from '@typfolio/core/capture';
 import { svgCapture } from '@typfolio/core/capture/svg';
 import { domPngCapture } from '@typfolio/core/capture/dom';
@@ -87,6 +88,7 @@ assert.equal(typeof captureProps, 'function');
 assert.deepEqual(Object.keys(reactCapture).sort(), ['CaptureRegion']);
 assert.equal('captureAssets' in coreMain, false);
 assert.deepEqual(Object.keys(devTools).sort(), ['checkTemplate', 'createTemplateChecker']);
+await assert.rejects(import('@typfolio/core/dev-tools'), { code: 'ERR_PACKAGE_PATH_NOT_EXPORTED' });
 for (const name of Object.keys(devTools)) assert.equal(name in coreMain, false, name + ' leaked into the main entry');
 assert.equal(typeof createTemplateChecker, 'function');
 assert.equal(typeof checkTemplate, 'function');
@@ -133,7 +135,7 @@ try {
   assert.equal(bad.ok, false);
   assert.deepEqual(bad.results.map(result => [result.mode, result.ok]), [['minimal', false], ['full', true]]);
   assert.match(bad.results[0].error.message, /subtitle/);
-  console.log('Packed core/dev-tools checks a template against a schema in both sample modes.');
+  console.log('Packed @typfolio/dev-tools checks a template against a schema in both sample modes.');
 } finally { await checker.dispose(); }
 `);
 await writeFile(join(dir, 'consumer.ts'), `
@@ -167,7 +169,7 @@ import {
   type TemplateCheckReport,
   type TemplateCheckResult,
   type TemplateChecker,
-} from '@typfolio/core/dev-tools';
+} from '@typfolio/dev-tools';
 declare const wasm: WebAssembly.Module;
 declare const font: Uint8Array;
 declare const worker: Worker;

@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 
 const root = fileURLToPath(new URL('../../../', import.meta.url));
 const read = path => readFile(new URL(path, `file://${root}`));
-const packages = ['wasm', 'core', 'workers', 'react'];
+const packages = ['wasm', 'core', 'workers', 'react', 'dev-tools'];
 
 test('the root LICENSE is the Apache License 2.0 and NOTICE names the copyright holder', async () => {
   const license = (await read('LICENSE')).toString('utf8');

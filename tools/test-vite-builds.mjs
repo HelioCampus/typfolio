@@ -79,7 +79,7 @@ async function verifyReactBoundary() {
   }
   assert.ok(workerSource.includes('The worker queue limit'), 'worker route does not contain the worker client');
   assert.ok(!allSource.includes('html2canvas'), 'React build includes unused DOM capture code');
-  // The runtime path embeds lib.typ (`input()`), not the sample builder that only dev-tools ships.
+  // The runtime path embeds lib.typ (`input()`), not the sample builder that only @typfolio/dev-tools ships.
   assert.ok(allSource.includes(runtimePackageMarker), 'React build is missing the bundled Typst package text');
   for (const marker of sampleBuilderMarkers) {
     assert.ok(!allSource.includes(marker), 'React build contains the dev-tools sample builder: ' + marker);
@@ -91,12 +91,12 @@ async function verifyReactBoundary() {
 const runtimePackageMarker = 'input() needs a JSON Schema';
 const sampleBuilderMarkers = ['_is-nullable', 'Sample text', '123e4567-e89b-12d3-a456-426614174000'];
 
-// Positive control for the check above: a bundle that imports @typfolio/core/dev-tools must contain every marker.
+// Positive control for the check above: a bundle that imports @typfolio/dev-tools must contain every marker.
 async function verifyDevToolsBuild() {
   const entryDirectory = root + '.build/vite-devtools-entry';
   const outDir = root + '.build/vite-devtools';
   await mkdir(entryDirectory, { recursive: true });
-  await writeFile(entryDirectory + '/entry.js', "import { createTemplateChecker } from '@typfolio/core/dev-tools';\nconsole.log(createTemplateChecker);\n");
+  await writeFile(entryDirectory + '/entry.js', "import { createTemplateChecker } from '@typfolio/dev-tools';\nconsole.log(createTemplateChecker);\n");
   await viteBuild({
     configFile: false, root, logLevel: 'warn',
     build: { outDir, emptyOutDir: true, rollupOptions: { input: entryDirectory + '/entry.js', output: { entryFileNames: 'entry.js' } } },

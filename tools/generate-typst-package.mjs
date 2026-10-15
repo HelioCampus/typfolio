@@ -1,8 +1,8 @@
 // Generates two modules from the Typst package shipped in packages/core/typst-packages. The .typ/.toml
-// files are the source of truth; core cannot read files in the browser, so it embeds their text.
-//   src/typst-package.generated.ts            typst.toml + lib.typ: what every runtime compile mounts.
-//   src/dev-tools/sample-source.generated.ts  sample.typ: only @typfolio/core/dev-tools imports it, so
-//                                             the runtime bundle never carries the sample builder.
+// files are the source of truth; the JavaScript packages cannot read files in the browser, so they embed their text.
+//   packages/core/src/typst-package.generated.ts          typst.toml + lib.typ: what every runtime compile mounts.
+//   packages/dev-tools/src/sample-source.generated.ts     sample.typ: only @typfolio/dev-tools imports it, so
+//                                                         the runtime bundle never carries the sample builder.
 // Run as the first step of `npm run build`.
 import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
@@ -11,7 +11,7 @@ import { dirname, join, posix, relative } from 'node:path';
 const root = fileURLToPath(new URL('../', import.meta.url));
 const packagesDir = join(root, 'packages/core/typst-packages');
 const output = join(root, 'packages/core/src/typst-package.generated.ts');
-const sampleOutput = join(root, 'packages/core/src/dev-tools/sample-source.generated.ts');
+const sampleOutput = join(root, 'packages/dev-tools/src/sample-source.generated.ts');
 const runtimeFiles = ['typst.toml', 'lib.typ'];
 const devFiles = ['sample.typ'];
 
@@ -54,7 +54,7 @@ export const typfolioPackage = ${JSON.stringify({ namespace, name, version, file
 await writeFile(output, body);
 const sampleBody = `// GENERATED FILE. Do not edit.
 // Source of truth: packages/core/typst-packages/${posix.join(namespace, name, version)}/sample.typ.
-// Only @typfolio/core/dev-tools may import this module; the runtime entry must never reach it.
+// Only @typfolio/dev-tools may import this module; the runtime entry must never reach it.
 // Regenerate with \`node tools/generate-typst-package.mjs\` (the root \`npm run build\` does this first).
 
 export const sampleFile = 'sample.typ';

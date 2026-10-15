@@ -18,7 +18,7 @@
     "./capture": { "types": "./dist/capture.d.ts", "import": "./dist/capture.js" },
     "./capture/svg": { "types": "./dist/capture/svg.d.ts", "import": "./dist/capture/svg.js" },
     "./capture/dom": { "types": "./dist/capture/dom.d.ts", "import": "./dist/capture/dom.js" },
-    "./dev-tools": { "types": "./dist/dev-tools/index.d.ts", "import": "./dist/dev-tools/index.js" }
+    "./internal": { "types": "./dist/internal.d.ts", "import": "./dist/internal.js" }
   },
   "dependencies": {
     "@typfolio/wasm": "0.0.0-dev.1"

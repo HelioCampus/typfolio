@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import init, { TypstCompilerBuilder } from '@typfolio/wasm';
 import { capabilities, createCompiler, TypstPdfError } from '../dist/index.js';
 import { typfolioPackage } from '../dist/typst-package.generated.js';
-import { sampleFile, sampleSource } from '../dist/dev-tools/sample-source.generated.js';
+import { sampleFile, sampleSource } from '../../dev-tools/dist/sample-source.generated.js'; // built before the tests run (`npm test` builds first)
 
 const root = new URL('../../../', import.meta.url);
 const file = path => readFile(new URL(path, root));
@@ -432,7 +432,7 @@ test('the generated modules equal the shipped package files, and the runtime mod
     assert.ok(diskSample.includes(marker), `${marker} must be in sample.typ`);
     assert.ok(!generated.includes(marker), `the runtime module must not contain the sample builder (${marker})`);
   }
-  // The dev-tools module embeds sample.typ and nothing else.
+  // The @typfolio/dev-tools module embeds sample.typ and nothing else.
   assert.equal(sampleFile, 'sample.typ');
   assert.equal(sampleSource, diskSample);
   const manifest = onDisk['typst.toml'];

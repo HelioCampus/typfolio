@@ -35,7 +35,7 @@ Editor support exists for `.typ` files, not for Typst source inside JavaScript s
 
 Pass the schema as `json.with("<path>")`, not as a path string. The path is resolved relative to the file that contains `json.with`, which is why the function must be created in the template and not inside the package. `input(none)` returns the request input under Typfolio but is a hard error in the editor (with a message that says to pass `json.with(...)`), because there is nothing to build a sample from. `input` also accepts an already-loaded schema dictionary, for example `input(json("report.schema.json"))`.
 
-The sample builder lives in a second file of the package, `sample.typ`, which `input()` imports only in the editor branch. A compile under Typfolio never loads it, and core does not even mount it, so the runtime embeds only `input()`. The package's `lib.typ` does not re-export the builder: only the editor and `@typfolio/core/dev-tools` (see [Build-time checks](#build-time-checks)) use it.
+The sample builder lives in a second file of the package, `sample.typ`, which `input()` imports only in the editor branch. A compile under Typfolio never loads it, and core does not even mount it, so the runtime embeds only `input()`. The package's `lib.typ` does not re-export the builder: only the editor and `@typfolio/dev-tools` (see [Build-time checks](#build-time-checks)) use it.
 
 ### Path rules
 
@@ -99,10 +99,10 @@ The sample does not replace the real input: the runtime input is whatever the re
 
 ## Build-time checks
 
-`@typfolio/core/dev-tools` is the home for dev-time tools; nothing in it is reachable from `@typfolio/core`, so it adds no bytes to a production bundle (a PDF structure inspector is planned there; it does not exist yet). Its first tool compiles a template against samples built from its schema, so CI catches a template that no longer matches the schema:
+`@typfolio/dev-tools` is the home for dev-time tools. It is a separate package, installed as a devDependency, and `@typfolio/core` never imports it, so it adds no bytes to a production bundle (a PDF structure inspector is planned there; it does not exist yet). Its first tool compiles a template against samples built from its schema, so CI catches a template that no longer matches the schema:
 
 ```ts
-import { createTemplateChecker } from '@typfolio/core/dev-tools';
+import { createTemplateChecker } from '@typfolio/dev-tools';
 
 const checker = await createTemplateChecker({ wasm, fonts }); // the options of createCompiler
 try {
@@ -122,7 +122,7 @@ What a check does:
 - **The schema must be in `template.files`**, as a string, at the path the template's `json.with(...)` names, relative to the file that writes it (`reports/outcome/schemas/x.json` for a template at `reports/outcome/main.typ` that says `json.with("./schemas/x.json")`). The helper does not look for schemas itself: your test reads the file, or serializes the schema it generated from Zod, and passes the text. A schema that is missing makes every mode fail to compile.
 - The default modes are `minimal` then `full`. `full` catches a template that no longer matches the schema (a renamed or removed field). `minimal` catches the templates that assume optional data: reading an optional field without `.at(key, default: ...)`, calling `.first()` on a list that can be empty, or treating a nullable value as present.
 - A compile error in one mode is reported in that mode's result (`ok: false`, `error`, `diagnostics`) and the other modes still run. A malformed template (`INVALID_REQUEST`) or an unsupported `pdf` option (`UNSUPPORTED_OPTION`) is thrown, as for `compile()`. `bytes` of a successful mode are in memory only.
-- Nothing is written to disk. The samples exist only inside the compile, and `dev-tools` imports no file-system module. Writing the PDFs somewhere is up to the caller.
+- Nothing is written to disk. The samples exist only inside the compile, and `@typfolio/dev-tools` imports no file-system module. Writing the PDFs somewhere is up to the caller.
 - A checker runs one check at a time, like a compiler.
 
 A complete `node:test` recipe, which reads the template folder and its schema from disk:
@@ -132,7 +132,7 @@ A complete `node:test` recipe, which reads the template folder and its schema fr
 import assert from 'node:assert/strict';
 import { after, before, test } from 'node:test';
 import { readdir, readFile } from 'node:fs/promises';
-import { createTemplateChecker } from '@typfolio/core/dev-tools';
+import { createTemplateChecker } from '@typfolio/dev-tools';
 
 const folder = new URL('../src/report/', import.meta.url);
 const font = new Uint8Array(await readFile(new URL('../fonts/report.otf', import.meta.url)));
