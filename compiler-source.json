@@ -10,5 +10,7 @@
   "profile": "release",
   "crateType": "cdylib",
   "cargoProfile": { "optLevel": "s", "lto": "fat", "codegenUnits": 1 },
-  "wasmOpt": false
+  "wasmOpt": false,
+  "wasmSha256": "524d537303e9e3b95cbac888fe33fe1c15e5bd2b6fa9e6c3e547a77b074e7fc0",
+  "loaderSha256": "b463e089204caae9eb4024909d6f6630c698e85b7bf6c139b69416792533606c"
 }

@@ -1,5 +1,7 @@
 # Typfolio
 
+[![CI](https://github.com/HelioCampus/typfolio/actions/workflows/ci.yml/badge.svg)](https://github.com/HelioCampus/typfolio/actions/workflows/ci.yml)
+
 **Browser-first PDF generation from Typst templates and JSON data.**
 
 ## Why this exists
@@ -238,6 +240,8 @@ Typfolio asks the compiler for tagged PDF by default and for PDF/UA-1 or PDF/A w
 - Package READMEs: [`core`](./packages/core/README.md), [`workers`](./packages/workers/README.md), [`react`](./packages/react/README.md), [`wasm`](./packages/wasm/README.md).
 
 ## Development
+
+See [CONTRIBUTING.md](./CONTRIBUTING.md) for setup, the test commands, project rules and the sign-off every commit needs.
 
 ```sh
 npm ci

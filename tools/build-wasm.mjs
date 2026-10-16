@@ -105,8 +105,11 @@ for (const [path] of pathRemapping) {
 for (const virtual of ['/rustup/toolchains', toolchainSource]) {
   if (wasm.includes(Buffer.from(virtual))) throw new Error(`Generated compiler contains an unmapped toolchain source path: ${virtual}`);
 }
+// `wasmSha256` and `loaderSha256` in the pin are the expected output, checked by tools/check-package.mjs; the provenance
+// records the measured hashes below, so the expected values must not be copied into it.
+const { wasmSha256: _expectedWasm, loaderSha256: _expectedLoader, ...pinnedBuild } = pin;
 const provenance = {
-  ...pin, cargoLockSha256: lockBefore,
+  ...pinnedBuild, cargoLockSha256: lockBefore,
   rustc: run('rustc', [`+${pin.rust}`, '--version'], { stdio: ['ignore', 'pipe', 'inherit'], encoding: 'utf8' }).trim(),
   wasmBindgenVersion: bindgenVersion,
   upstreamManifestVersion: metadata.packages.find(p => p.name === pin.crate).version,
