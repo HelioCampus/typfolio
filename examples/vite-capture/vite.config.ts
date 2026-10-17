@@ -11,7 +11,7 @@ export default defineConfig(({ command, mode }) => ({
     emptyOutDir: true,
     // Only a build has a mode-named entry; the dev server serves index.html (the smoke page).
     rollupOptions: command === 'build' ? {
-      input: fileURLToPath(new URL(`${mode}.js`, import.meta.url)),
+      input: fileURLToPath(new URL(`${mode}.ts`, import.meta.url)),
       output: { entryFileNames: 'entry.js' },
     } : undefined,
   },

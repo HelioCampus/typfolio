@@ -199,7 +199,7 @@ jobs:
           retention-days: 7
 
       - name: Check that the build reproduces the pinned artifact
-        run: node tools/check-package.mjs
+        run: node tools/check-package.ts
 
       - name: Save the compiler artifact
         if: steps.cache-artifact.outputs.cache-hit != 'true'

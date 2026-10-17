@@ -1,6 +1,6 @@
 # Production bundler verification
 
-These examples verify deployment behavior; they are not additional Typfolio packages.
+These examples verify deployment behavior; they are not additional Typfolio packages. All of them are TypeScript and are type-checked by `npm run build`.
 
 The Vite application uses `@typfolio/workers` and imports the package WASM with an explicit URL query, so Vite emits the module worker, compiler, and font as separate assets. The Vite library accepts hosted asset URLs at runtime and uses a small build plugin to copy the compiler to `typfolio/compiler_bg.wasm`.
 

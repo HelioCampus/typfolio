@@ -247,6 +247,8 @@ See [CONTRIBUTING.md](./CONTRIBUTING.md) for setup, the test commands, project r
 npm ci
 ```
 
+Development needs Node 22.18 or newer: the scripts in `tools/` are TypeScript that Node runs directly, and `npm run build` type-checks them together with the examples.
+
 Generate the compiler as described in [docs/compiler-build.md](./docs/compiler-build.md), then:
 
 ```sh

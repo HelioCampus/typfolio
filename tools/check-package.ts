@@ -1,9 +1,10 @@
 import { readFile, access } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
+import type { CompilerPin, Provenance } from './types.ts';
 const root = new URL('../', import.meta.url);
-const file = path => readFile(new URL(path, root));
-const provenance = JSON.parse(await file('packages/wasm/generated/provenance.json'));
-const pin = JSON.parse(await file('compiler-source.json'));
+const file = (path: string) => readFile(new URL(path, root));
+const provenance: Provenance = JSON.parse((await file('packages/wasm/generated/provenance.json')).toString());
+const pin: CompilerPin = JSON.parse((await file('compiler-source.json')).toString());
 if (provenance.revision !== pin.revision) throw new Error('WASM source revision does not match the pin');
 if (!Number.isSafeInteger(provenance.reproducibleBuild?.sourceDateEpoch) ||
     JSON.stringify(provenance.reproducibleBuild.remappedPathPrefixes) !== JSON.stringify(['/typfolio', '/cargo', '/rustup'])) {
@@ -31,7 +32,7 @@ for (const [path, expected] of [['compiler_bg.wasm', provenance.wasm.sha256], ['
 // The pinned hashes make a rebuild prove it reproduces the artifact that was reviewed. A mismatch means a different
 // toolchain, platform or dependency resolution produced other bytes, or the pin was not updated after a deliberate
 // compiler change (see "Rebuild" in docs/compiler-build.md).
-for (const [label, key, actual] of [['compiler_bg.wasm', 'wasmSha256', provenance.wasm.sha256], ['compiler.js', 'loaderSha256', provenance.loaderSha256]]) {
+for (const [label, key, actual] of [['compiler_bg.wasm', 'wasmSha256', provenance.wasm.sha256], ['compiler.js', 'loaderSha256', provenance.loaderSha256]] as const) {
   if (!/^[0-9a-f]{64}$/.test(pin[key] ?? '')) throw new Error(`compiler-source.json must pin ${key}`);
   if (actual !== pin[key]) {
     throw new Error(`The build is not reproducing the pinned artifact: ${label} is ${actual} but compiler-source.json pins ${key} ${pin[key]}. ` +

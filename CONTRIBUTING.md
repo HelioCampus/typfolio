@@ -4,7 +4,7 @@ Thanks for helping. This file covers what you need to build, test and submit a c
 
 ## Prerequisites
 
-- Node.js 22 or newer and npm.
+- Node.js 22.18 or newer and npm. The scripts in `tools/` are TypeScript that Node runs directly (type stripping, on by default from 22.18 and 23.6), so there is no build step for them.
 - Git, tar, and [rustup](https://rustup.rs) with the platform's linker tools. Rust is only needed to build the Wasm compiler; the toolchain version is pinned in [`compiler-source.json`](./compiler-source.json) and installed for you by `npm run setup:wasm`.
 
 ## Setup
@@ -94,11 +94,11 @@ Notes for the Version Packages pull request:
 
 ### First publish (one-time, done locally)
 
-npm cannot attach a trusted publisher to a package that does not exist yet, so `0.1.0` of the five packages was published once by a maintainer from a local checkout of `main`, logged in to npm with 2FA. That version has no provenance attestation; every later version is published by the workflow and has one. The compiler binary in it is the build whose hashes are pinned in `compiler-source.json` (`node tools/check-package.mjs` verifies this before publishing).
+npm cannot attach a trusted publisher to a package that does not exist yet, so `0.1.0` of the five packages was published once by a maintainer from a local checkout of `main`, logged in to npm with 2FA. That version has no provenance attestation; every later version is published by the workflow and has one. The compiler binary in it is the build whose hashes are pinned in `compiler-source.json` (`node tools/check-package.ts` verifies this before publishing).
 
 The steps, for the record or for a future new package:
 
-1. On `main` with the versions already applied: `npm ci`, `npm run build`, `node tools/check-package.mjs`, `npm test`, `npm run test:packed`.
+1. On `main` with the versions already applied: `npm ci`, `npm run build`, `node tools/check-package.ts`, `npm test`, `npm run test:packed`.
 2. `npm login` (account with 2FA and publish rights in the `@typfolio` organisation).
 3. `npx changeset publish`. It publishes every package whose version is not on npm yet, in dependency order, asks for the 2FA code, and creates git tags such as `@typfolio/core@0.1.0`.
 4. `git push --follow-tags`.

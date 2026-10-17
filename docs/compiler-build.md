@@ -33,7 +33,7 @@ The upstream checkout is read-only. The build exports the pinned commit into `.b
 
 ## Rebuild
 
-Prerequisites: Node 22+, npm, Git, tar, rustup, and platform Rust linker tools.
+Prerequisites: Node 22.18+, npm, Git, tar, rustup, and platform Rust linker tools.
 
 ```sh
 cd <repository root>
@@ -57,7 +57,7 @@ Reproducibility holds for the pinned toolchain, source, and wasm-bindgen on one 
 
 ### Pinned artifact hashes and bumping the compiler
 
-`compiler-source.json` also records the expected output of the build: `wasmSha256` (the WASM binary) and `loaderSha256` (the patched JavaScript loader). `tools/check-package.mjs`, which `npm run pack:wasm` and the CI `compiler` job run, fails with "The build is not reproducing the pinned artifact" when the hashes in `provenance.json` differ from these pins. A build with the pinned source and tools must therefore produce the reviewed bytes; a difference means the toolchain, platform or dependency resolution changed, not that the pin should be silently refreshed.
+`compiler-source.json` also records the expected output of the build: `wasmSha256` (the WASM binary) and `loaderSha256` (the patched JavaScript loader). `tools/check-package.ts`, which `npm run pack:wasm` and the CI `compiler` job run, fails with "The build is not reproducing the pinned artifact" when the hashes in `provenance.json` differ from these pins. A build with the pinned source and tools must therefore produce the reviewed bytes; a difference means the toolchain, platform or dependency resolution changed, not that the pin should be silently refreshed.
 
 To change the compiler (a new `revision`, `rust`, `wasmBindgen`, `cargoProfile` or any build-script change that alters the output): edit the pins, run `npm run setup:wasm` and `npm run build:wasm`, then copy `wasm.sha256` and `loaderSha256` from `packages/wasm/generated/provenance.json` into `wasmSha256` and `loaderSha256` in `compiler-source.json`, and commit the pin change, the regenerated `THIRD_PARTY_NOTICES.md` and `THIRD_PARTY_LICENSES.md` together, along with any size figures quoted in the documentation, so the repository never pins hashes its own build does not produce.
 

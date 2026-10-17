@@ -15,7 +15,7 @@ const sampleOutput = join(root, 'packages/dev-tools/src/sample-source.generated.
 const runtimeFiles = ['typst.toml', 'lib.typ'];
 const devFiles = ['sample.typ'];
 
-async function walk(dir) {
+async function walk(dir: string): Promise<string[]> {
   const entries = await readdir(dir, { withFileTypes: true });
   const nested = await Promise.all(entries.map(entry => {
     const path = join(dir, entry.name);
@@ -29,7 +29,7 @@ const layout = /^([^/]+)\/([^/]+)\/([^/]+)\/(.+)$/;
 const ids = new Set(files.map(file => file.split('/').slice(0, 3).join('/')));
 if (ids.size !== 1) throw new Error(`Expected exactly one package under ${packagesDir}, found: ${[...ids].join(', ') || 'none'}`);
 const [namespace, name, version] = [...ids][0].split('/');
-const contents = {};
+const contents: Record<string, string> = {};
 for (const file of files) {
   const inner = layout.exec(file)?.[4];
   if (!inner) throw new Error(`Unexpected file outside <namespace>/<name>/<version>/: ${file}`);
@@ -38,9 +38,9 @@ for (const file of files) {
 const unassigned = Object.keys(contents).filter(file => ![...runtimeFiles, ...devFiles].includes(file));
 if (unassigned.length) throw new Error(`Package files that are neither runtime nor dev-tools files: ${unassigned.join(', ')}; assign them in ${relative(root, fileURLToPath(import.meta.url))}`);
 for (const file of [...runtimeFiles, ...devFiles]) if (!(file in contents)) throw new Error(`The package is missing ${file}`);
-const pick = names => Object.fromEntries(names.map(file => [file, contents[file]]));
+const pick = (names: string[]) => Object.fromEntries(names.map(file => [file, contents[file]]));
 const toml = contents['typst.toml'] ?? '';
-const field = key => new RegExp(`^${key}\\s*=\\s*"([^"]*)"`, 'm').exec(toml)?.[1];
+const field = (key: string) => new RegExp(`^${key}\\s*=\\s*"([^"]*)"`, 'm').exec(toml)?.[1];
 if (field('name') !== name || field('version') !== version) {
   throw new Error(`typst.toml name/version (${field('name')}/${field('version')}) must match the directory ${namespace}/${name}/${version}`);
 }
