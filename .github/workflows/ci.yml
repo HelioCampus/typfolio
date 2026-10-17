@@ -21,7 +21,7 @@ jobs:
   # developer's machine is used. The result is handed to the other jobs as the `compiler` artifact.
   compiler:
     name: compiler
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v7
@@ -199,7 +199,7 @@ jobs:
   test:
     name: test
     needs: compiler
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
@@ -240,7 +240,7 @@ jobs:
   browsers:
     name: browsers
     needs: compiler
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v7
@@ -280,7 +280,7 @@ jobs:
   dco:
     name: dco
     if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
       # The pull request's own head, not the synthetic merge commit GitHub creates, and the full history so that
