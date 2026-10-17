@@ -1,10 +1,10 @@
 {
   "name": "@typfolio/workers",
-  "version": "0.0.0-dev.1",
-  "private": true,
+  "version": "0.1.0",
   "description": "Framework-independent Web Worker execution for Typfolio PDF compilation",
   "type": "module",
   "license": "Apache-2.0",
+  "keywords": ["typst", "pdf", "wasm", "webassembly", "web-worker", "browser", "concurrency"],
   "repository": {
     "type": "git",
     "url": "git+https://github.com/HelioCampus/typfolio.git",
@@ -24,9 +24,13 @@
     "./runtime": "./dist/runtime.js"
   },
   "dependencies": {
-    "@typfolio/core": "0.0.0-dev.1",
+    "@typfolio/core": "^0.1.0",
     "effect": "4.0.0-rc.118"
   },
+  "publishConfig": {
+    "access": "public"
+  },
+  "engines": { "node": ">=22" },
   "sideEffects": [
     "./dist/runtime.js"
   ]

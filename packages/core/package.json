@@ -1,10 +1,10 @@
 {
   "name": "@typfolio/core",
-  "version": "0.0.0-dev.1",
-  "private": true,
-  "description": "Framework-independent Typst PDF compiler (local development preview)",
+  "version": "0.1.0",
+  "description": "Framework-independent Typst PDF compiler for the browser and Node, running on WebAssembly",
   "type": "module",
   "license": "Apache-2.0",
+  "keywords": ["typst", "pdf", "pdf-ua", "accessibility", "wasm", "webassembly", "browser", "json", "template"],
   "repository": {
     "type": "git",
     "url": "git+https://github.com/HelioCampus/typfolio.git",
@@ -21,7 +21,7 @@
     "./internal": { "types": "./dist/internal.d.ts", "import": "./dist/internal.js" }
   },
   "dependencies": {
-    "@typfolio/wasm": "0.0.0-dev.1"
+    "@typfolio/wasm": "0.1.0"
   },
   "peerDependencies": {
     "html2canvas": "^1.4.1"
@@ -29,5 +29,9 @@
   "peerDependenciesMeta": {
     "html2canvas": { "optional": true }
   },
+  "publishConfig": {
+    "access": "public"
+  },
+  "engines": { "node": ">=22" },
   "sideEffects": false
 }
