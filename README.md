@@ -265,4 +265,4 @@ Example dev servers (details in [examples/README.md](./examples/README.md)):
 
 ## Status
 
-Typfolio is licensed under [Apache-2.0](./LICENSE) and is not yet published to npm. The compiler does not support Typst package imports beyond the bundled helper, page ranges or strict CSP without `unsafe-eval`; see [compatibility and limits](./docs/compiler-build.md#compatibility-and-limits).
+Typfolio is licensed under [Apache-2.0](./LICENSE). The packages are published to npm as `@typfolio/*` once released; until the first release, build them from this repository. The compiler does not support Typst package imports beyond the bundled helper, page ranges or strict CSP without `unsafe-eval`; see [compatibility and limits](./docs/compiler-build.md#compatibility-and-limits).

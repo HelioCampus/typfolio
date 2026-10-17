@@ -5,17 +5,24 @@ import { fileURLToPath } from 'node:url';
 import { join } from 'node:path';
 const root = fileURLToPath(new URL('../', import.meta.url));
 const dir = await mkdtemp(join(root, '.build/packed-consumer-'));
+// Tarball names follow each package's own version (npm pack writes typfolio-<name>-<version>.tgz), so they are
+// derived rather than hard-coded and keep working when Changesets bumps the versions.
+const tarballPath = async name => {
+  const { version } = JSON.parse(await readFile(join(root, 'packages', name, 'package.json'), 'utf8'));
+  return join(root, `.build/typfolio-${name}-${version}.tgz`);
+};
+const tarballs = Object.fromEntries(await Promise.all(['wasm', 'core', 'workers', 'react', 'dev-tools'].map(async name => [name, await tarballPath(name)])));
 const run = (command, args) => {
   const r = spawnSync(command, args, { cwd: dir, stdio: 'inherit' });
   if (r.error || r.status !== 0) throw r.error ?? new Error(`${command} exited ${r.status}`);
 };
 await writeFile(join(dir, 'package.json'), JSON.stringify({ name: 'packed-typfolio-smoke', private: true, type: 'module' }));
 run('npm', ['install', '--offline', '--ignore-scripts', '--no-audit', '--no-fund', '--package-lock=false',
-  join(root, '.build/typfolio-wasm-0.0.0-dev.1.tgz'),
-  join(root, '.build/typfolio-core-0.0.0-dev.1.tgz'),
-  join(root, '.build/typfolio-workers-0.0.0-dev.1.tgz'),
-  join(root, '.build/typfolio-react-0.0.0-dev.1.tgz'),
-  join(root, '.build/typfolio-dev-tools-0.0.0-dev.1.tgz'),
+  tarballs['wasm'],
+  tarballs['core'],
+  tarballs['workers'],
+  tarballs['react'],
+  tarballs['dev-tools'],
   'react@19.3.0',
   '@types/react@19.3.0']);
 // html2canvas is an optional peer of @typfolio/core: installing the tarballs must not bring it in.
@@ -46,7 +53,7 @@ for (const name of ['wasm', 'core', 'workers', 'react', 'dev-tools']) {
 }
 // The Typst package must ship as files (it is also the --package-path layout for editors), not only inside dist.
 const packageFiles = ['typst.toml', 'lib.typ', 'sample.typ'].map(name => `typst-packages/local/typfolio/0.1.0/${name}`);
-const tarball = spawnSync('tar', ['-tzf', join(root, '.build/typfolio-core-0.0.0-dev.1.tgz')], { encoding: 'utf8' });
+const tarball = spawnSync('tar', ['-tzf', tarballs.core], { encoding: 'utf8' });
 if (tarball.error || tarball.status !== 0) throw tarball.error ?? new Error('tar exited ' + tarball.status);
 const entries = tarball.stdout.split('\n');
 for (const name of packageFiles) {
@@ -56,7 +63,7 @@ for (const name of packageFiles) {
 // Every tarball must carry the licence; the wasm tarball also carries the NOTICE and third-party notices and licence texts.
 // npm adds LICENSE/NOTICE from a package's own root, so this guards the per-package copies.
 for (const [name, extra] of [['wasm', ['NOTICE', 'THIRD_PARTY_NOTICES.md', 'THIRD_PARTY_LICENSES.md', 'generated/LICENSE.typst-ts']], ['core', []], ['workers', []], ['react', []], ['dev-tools', []]]) {
-  const listing = spawnSync('tar', ['-tzf', join(root, `.build/typfolio-${name}-0.0.0-dev.1.tgz`)], { encoding: 'utf8' });
+  const listing = spawnSync('tar', ['-tzf', tarballs[name]], { encoding: 'utf8' });
   if (listing.error || listing.status !== 0) throw listing.error ?? new Error('tar exited ' + listing.status);
   const files = listing.stdout.split('\n');
   for (const file of ['LICENSE', ...extra]) assert.ok(files.includes(`package/${file}`), `the ${name} tarball must contain ${file}`);

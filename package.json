@@ -33,9 +33,13 @@
     "pack:react": "npm run build && npm pack --workspace packages/react --pack-destination .build",
     "test:browser": "npm run test:vite && node tools/serve-smoke.mjs",
     "test:browsers": "npm run test:vite && playwright test -c tests/browser",
-    "test:packed": "npm run pack:wasm && npm run pack:core && npm run pack:workers && npm run pack:react && npm run pack:dev-tools && node tools/test-packed.mjs"
+    "test:packed": "npm run pack:wasm && npm run pack:core && npm run pack:workers && npm run pack:react && npm run pack:dev-tools && node tools/test-packed.mjs",
+    "changeset": "changeset",
+    "version-packages": "changeset version && npm install --package-lock-only",
+    "release": "changeset publish"
   },
   "devDependencies": {
+    "@changesets/cli": "3.0.3",
     "@chenglou/pretext": "^0.0.9",
     "@playwright/test": "^1.64.0",
     "@testing-library/react": "^16.3.3",

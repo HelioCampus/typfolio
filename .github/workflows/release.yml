@@ -1,0 +1,274 @@
+name: Release
+
+# Versioning and publishing to npm with Changesets.
+#
+# On every push to main this workflow either
+#   - opens or updates the "Version Packages" pull request, when pending changesets exist in .changeset/, or
+#   - publishes the packages whose version in package.json is not on npm yet, when there are none (that is, right
+#     after the "Version Packages" pull request was merged).
+#
+# Publishing uses npm trusted publishing (OIDC), which also attaches provenance: there is no npm token in this
+# workflow. The first version of each package was published once by a maintainer (npm requires a package to exist
+# before a trusted publisher can be configured); see CONTRIBUTING.md ("Publishing").
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Releases must not overlap, and a running release must not be cancelled half-way through publishing.
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+env:
+  NODE_VERSION: '22'
+
+jobs:
+  # Same job as the `compiler` job in ci.yml, kept as a copy on purpose: a reusable workflow would rename the
+  # `compiler` check that the branch ruleset requires on pull requests (GitHub reports it as `compiler / compiler`).
+  # The cache keys are identical, so a build cached by CI on main is restored here in seconds. Keep the two in step.
+  #
+  # Builds the Wasm compiler from the pinned source (compiler-source.json) on a clean runner. Nothing from a
+  # developer's machine is used. The result is handed to the release job as the `compiler` artifact.
+  compiler:
+    name: compiler
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Read the compiler pins
+        id: pins
+        run: |
+          node --input-type=module - <<'EOF'
+          import { readFileSync, appendFileSync } from 'node:fs';
+          const pin = JSON.parse(readFileSync('compiler-source.json', 'utf8'));
+          const { optLevel, lto, codegenUnits } = pin.cargoProfile;
+          const outputs = {
+            revision: pin.revision,
+            rust: pin.rust,
+            'wasm-bindgen': pin.wasmBindgen,
+            'cargo-about': pin.cargoAbout,
+            profile: `${pin.profile}-o${optLevel}-lto${lto}-cgu${codegenUnits}`,
+          };
+          appendFileSync(process.env.GITHUB_OUTPUT, Object.entries(outputs).map(([k, v]) => `${k}=${v}`).join('\n') + '\n');
+          EOF
+
+      # The caches are restored and saved by separate steps so that they are written right after a successful build,
+      # before the reproducibility check below. A plain actions/cache step saves only when the whole job succeeds, so
+      # a build that fails the pinned-hash check would throw away a 20+ minute cold build every time.
+      #
+      # Cargo.lock is not available before the pinned revision is exported, and it is fully determined by that
+      # revision (the build uses --locked), so the revision stands in for it in the keys.
+      # The finished artifact is cached by the content of compiler-source.json. A pull request that does not change
+      # the pin restores it in seconds and skips the Rust build entirely; the cache is saved only after the
+      # reproducibility check below has passed, so a non-reproducing build is never reused.
+      - name: Restore the compiler artifact
+        id: cache-artifact
+        uses: actions/cache/restore@v6
+        with:
+          path: |
+            packages/wasm/generated
+            packages/wasm/THIRD_PARTY_NOTICES.md
+            packages/wasm/THIRD_PARTY_LICENSES.md
+          key: compiler-artifact-${{ runner.os }}-${{ hashFiles('compiler-source.json') }}
+
+      - name: Restore the Cargo registry and git caches
+        if: steps.cache-artifact.outputs.cache-hit != 'true'
+        id: cache-cargo
+        uses: actions/cache/restore@v6
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+          key: cargo-registry-${{ runner.os }}-${{ steps.pins.outputs.revision }}
+          restore-keys: |
+            cargo-registry-${{ runner.os }}-
+
+      - name: Restore the build tools (wasm-bindgen, cargo-about)
+        if: steps.cache-artifact.outputs.cache-hit != 'true'
+        id: cache-tools
+        uses: actions/cache/restore@v6
+        with:
+          path: .build/tools
+          key: tools-${{ runner.os }}-${{ runner.arch }}-rust${{ steps.pins.outputs.rust }}-bindgen${{ steps.pins.outputs.wasm-bindgen }}-about${{ steps.pins.outputs.cargo-about }}
+
+      - name: Restore the Cargo target directory
+        if: steps.cache-artifact.outputs.cache-hit != 'true'
+        id: cache-target
+        uses: actions/cache/restore@v6
+        with:
+          path: .build/target
+          key: target-${{ runner.os }}-${{ runner.arch }}-rust${{ steps.pins.outputs.rust }}-${{ steps.pins.outputs.profile }}-${{ steps.pins.outputs.revision }}
+          restore-keys: |
+            target-${{ runner.os }}-${{ runner.arch }}-rust${{ steps.pins.outputs.rust }}-${{ steps.pins.outputs.profile }}-
+
+      # Installs the pinned Rust toolchain and wasm32 target with rustup (preinstalled on the runner) and, unless the
+      # tools cache hit, builds wasm-bindgen-cli and cargo-about into .build/tools. Cargo skips an already
+      # installed version, so this stays cheap on a warm cache.
+      - name: Install the pinned toolchain and tools
+        if: steps.cache-artifact.outputs.cache-hit != 'true'
+        run: npm run setup:wasm
+
+      - run: npm ci
+        if: steps.cache-artifact.outputs.cache-hit != 'true'
+
+      # Exports the pinned commit into .build/upstream, builds the compiler, generates the bindings, the provenance
+      # file and the third-party notices. The job runner's core count is used for Cargo; the job count does not
+      # change the output.
+      - name: Build the compiler
+        if: steps.cache-artifact.outputs.cache-hit != 'true'
+        id: build
+        run: |
+          export CARGO_BUILD_JOBS="$(nproc)"
+          npm run build:wasm
+
+      - name: Save the Cargo registry and git caches
+        if: steps.cache-artifact.outputs.cache-hit != 'true' && steps.cache-cargo.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+          key: ${{ steps.cache-cargo.outputs.cache-primary-key }}
+
+      - name: Save the build tools
+        if: steps.cache-artifact.outputs.cache-hit != 'true' && steps.cache-tools.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: .build/tools
+          key: ${{ steps.cache-tools.outputs.cache-primary-key }}
+
+      - name: Save the Cargo target directory
+        if: steps.cache-artifact.outputs.cache-hit != 'true' && steps.cache-target.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: .build/target
+          key: ${{ steps.cache-target.outputs.cache-primary-key }}
+
+      - name: Show the artifact hashes
+        if: always()
+        run: |
+          node --input-type=module - <<'EOF'
+          import { readFileSync, appendFileSync, existsSync } from 'node:fs';
+          const pin = JSON.parse(readFileSync('compiler-source.json', 'utf8'));
+          const path = 'packages/wasm/generated/provenance.json';
+          const lines = ['## Compiler artifact', ''];
+          if (!existsSync(path)) {
+            lines.push('The build did not produce `provenance.json`.');
+          } else {
+            const provenance = JSON.parse(readFileSync(path, 'utf8'));
+            const rows = [
+              ['compiler_bg.wasm', provenance.wasm.sha256, pin.wasmSha256],
+              ['compiler.js', provenance.loaderSha256, pin.loaderSha256],
+            ];
+            lines.push('| File | Built SHA-256 | Pinned SHA-256 | Match |', '|---|---|---|---|');
+            for (const [file, built, pinned] of rows) lines.push(`| ${file} | \`${built}\` | \`${pinned}\` | ${built === pinned ? 'yes' : '**no**'} |`);
+            lines.push('', `Typst.ts revision \`${provenance.revision}\`, ${provenance.rustc}, ${provenance.wasmBindgenVersion}, ${provenance.wasm.bytes} bytes.`);
+          }
+          const text = lines.join('\n') + '\n';
+          console.log(text);
+          appendFileSync(process.env.GITHUB_STEP_SUMMARY, text);
+          EOF
+
+      # Uploaded before the reproducibility check so that a build whose hashes differ from the pins can still be
+      # downloaded and inspected. The other jobs run only when this job passes.
+      - name: Upload the compiler
+        if: always() && (steps.build.outcome == 'success' || steps.cache-artifact.outputs.cache-hit == 'true')
+        uses: actions/upload-artifact@v7
+        with:
+          name: compiler
+          path: |
+            packages/wasm/generated/
+            packages/wasm/THIRD_PARTY_NOTICES.md
+            packages/wasm/THIRD_PARTY_LICENSES.md
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Check that the build reproduces the pinned artifact
+        run: node tools/check-package.mjs
+
+      - name: Save the compiler artifact
+        if: steps.cache-artifact.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: |
+            packages/wasm/generated
+            packages/wasm/THIRD_PARTY_NOTICES.md
+            packages/wasm/THIRD_PARTY_LICENSES.md
+          key: ${{ steps.cache-artifact.outputs.cache-primary-key }}
+
+  release:
+    name: release
+    needs: compiler
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: write # commit the version changes, push tags, create GitHub releases
+      pull-requests: write # open and update the "Version Packages" pull request
+      id-token: write # OIDC: npm trusted publishing and provenance
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          registry-url: https://registry.npmjs.org
+
+      # npm trusted publishing needs npm 11.5.1 or newer and Node 22.14 or newer; the npm that ships with Node 22 is
+      # older. Pinned so that the publishing client does not change unreviewed.
+      - name: Install the npm that supports trusted publishing
+        run: |
+          npm install --global npm@11.13.0
+          npm --version
+
+      - name: Download the compiler
+        uses: actions/download-artifact@v8
+        with:
+          name: compiler
+          path: packages/wasm
+
+      - name: Check that the compiler landed in place
+        run: |
+          for f in generated/compiler_bg.wasm generated/compiler.js generated/compiler.d.ts generated/provenance.json THIRD_PARTY_NOTICES.md THIRD_PARTY_LICENSES.md; do
+            test -s "packages/wasm/$f" || { echo "::error::packages/wasm/$f is missing from the downloaded compiler artifact"; exit 1; }
+          done
+
+      - run: npm ci
+
+      - run: npm run build
+
+      # The gate: nothing is versioned or published unless the packages build, pass their tests against the real
+      # compiler, and install and work as tarballs in a clean consumer.
+      - run: npm test
+
+      - run: npm run test:packed
+
+      # Normal path: trusted publishing. No token is configured; the job's OIDC identity is the credential.
+      - name: Version Packages pull request or publish
+        uses: changesets/action@v2
+        with:
+          version-script: npm run version-packages
+          publish-script: npm run release
+          # changesets/action commits through the GitHub API as github-actions[bot] and does not sign off. The
+          # trailer keeps the "Version Packages" pull request passing the dco check (tools/check-dco.sh).
+          commit-message: |-
+            Version Packages
+
+            Signed-off-by: github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com>

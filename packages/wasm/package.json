@@ -1,10 +1,10 @@
 {
   "name": "@typfolio/wasm",
-  "version": "0.0.0-dev.1",
-  "private": true,
-  "description": "Generated Typst WASM compiler artifact and bindings for Typfolio (generated output only)",
+  "version": "0.1.0",
+  "description": "Typst compiler built to WebAssembly, with JavaScript bindings and build provenance, for @typfolio/core",
   "type": "module",
   "license": "Apache-2.0",
+  "keywords": ["typst", "pdf", "pdf-ua", "accessibility", "wasm", "webassembly", "browser"],
   "repository": {
     "type": "git",
     "url": "git+https://github.com/HelioCampus/typfolio.git",
@@ -18,5 +18,9 @@
     "./compiler.wasm": "./generated/compiler_bg.wasm",
     "./provenance": "./generated/provenance.json"
   },
+  "publishConfig": {
+    "access": "public"
+  },
+  "engines": { "node": ">=22" },
   "sideEffects": false
 }

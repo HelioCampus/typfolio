@@ -1,10 +1,10 @@
 {
   "name": "@typfolio/dev-tools",
-  "version": "0.0.0-dev.1",
-  "private": true,
-  "description": "Dev-time tools for Typfolio templates (install as a devDependency)",
+  "version": "0.1.0",
+  "description": "Dev-time tools for Typfolio templates: schema-based template checks and PDF inspection (install as a devDependency)",
   "type": "module",
   "license": "Apache-2.0",
+  "keywords": ["typst", "pdf", "pdf-ua", "accessibility", "template", "testing", "ci", "json-schema"],
   "repository": {
     "type": "git",
     "url": "git+https://github.com/HelioCampus/typfolio.git",
@@ -18,7 +18,7 @@
     "./pdf": { "types": "./dist/pdf.d.ts", "import": "./dist/pdf.js" }
   },
   "dependencies": {
-    "@typfolio/core": "0.0.0-dev.1"
+    "@typfolio/core": "^0.1.0"
   },
   "peerDependencies": {
     "pdfjs-dist": "^6.3.0"
@@ -26,5 +26,9 @@
   "peerDependenciesMeta": {
     "pdfjs-dist": { "optional": true }
   },
+  "publishConfig": {
+    "access": "public"
+  },
+  "engines": { "node": ">=22" },
   "sideEffects": false
 }
