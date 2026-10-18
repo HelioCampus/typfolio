@@ -34,7 +34,7 @@ export default defineConfig({
   webServer: [
     {
       // Serves fixtures/browser and the built examples/vite-app (.build/vite-app).
-      command: 'node tools/serve-smoke.mjs',
+      command: 'node tools/serve-smoke.ts',
       cwd: root,
       env: { PORT: String(smokePort) },
       url: `http://127.0.0.1:${smokePort}/fixtures/browser/index.html`,
@@ -42,7 +42,7 @@ export default defineConfig({
       timeout: startTimeout,
     },
     {
-      command: `npx vite --config examples/vite-capture/vite.config.mjs --port ${capturePort} --strictPort`,
+      command: `npx vite --config examples/vite-capture/vite.config.ts --port ${capturePort} --strictPort`,
       cwd: root,
       url: `http://127.0.0.1:${capturePort}/`,
       reuseExistingServer: false,

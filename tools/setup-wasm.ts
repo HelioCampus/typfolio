@@ -1,9 +1,10 @@
 import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
+import type { CompilerPin } from './types.ts';
 const root = fileURLToPath(new URL('../', import.meta.url));
-const pin = JSON.parse(readFileSync(new URL('../compiler-source.json', import.meta.url)));
-function run(command, args) {
+const pin: CompilerPin = JSON.parse(readFileSync(new URL('../compiler-source.json', import.meta.url), 'utf8'));
+function run(command: string, args: string[]) {
   const r = spawnSync(command, args, { cwd: root, stdio: 'inherit' });
   if (r.error || r.status !== 0) throw r.error ?? new Error(`${command} exited ${r.status}`);
 }

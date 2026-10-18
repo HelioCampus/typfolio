@@ -1,4 +1,4 @@
-# cargo-about configuration for tools/generate-third-party-notices.mjs.
+# cargo-about configuration for tools/generate-third-party-notices.ts.
 # `accepted` is a priority list: for a dual-licensed crate ("MIT OR Apache-2.0") the first listed licence
 # that satisfies the expression is used. A licence that is not listed here makes the generator fail, so a
 # new copyleft or unreviewed licence cannot enter the shipped binary unnoticed. This is exactly the set of

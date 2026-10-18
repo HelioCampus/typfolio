@@ -1,9 +1,10 @@
+import type { PdfRequest } from '@typfolio/core';
 import { createWorkerClient } from '@typfolio/workers';
 import wasmUrl from '@typfolio/wasm/compiler.wasm?url';
 import fontUrl from '../../fixtures/fonts/LibertinusSerif-Regular.otf?url';
 import chartUrl from '../../fixtures/basic/chart.svg?url';
 
-const status = document.querySelector('#status');
+const status = document.querySelector<HTMLElement>('#status')!;
 
 try {
   const compiler = createWorkerClient({
@@ -18,7 +19,7 @@ try {
       template: '#let input = json("/input.json")\n#set text(font: "Libertinus Serif")\n#set document(title: input.title)\n= #input.title',
       input: { title: 'Vite application build' },
       pdf: { standards: ['ua-1'] },
-    };
+    } satisfies PdfRequest;
     // The first compile carries a real asset, so the transfer path runs through a real Worker. The client
     // copies the asset once and transfers that copy; the buffer in `chart` stays usable here.
     const result = await compiler.compile({
@@ -38,7 +39,7 @@ try {
       await cancelled;
       throw new Error('Expected the active worker job to be cancelled');
     } catch (error) {
-      if (error?.code !== 'ABORTED') throw error;
+      if ((error as { code?: string } | undefined)?.code !== 'ABORTED') throw error;
     }
 
     const recovered = await compiler.compile({
@@ -54,6 +55,6 @@ try {
     await compiler.dispose();
   }
 } catch (error) {
-  status.textContent = String(error.stack ?? error);
+  status.textContent = String((error as Error).stack ?? error);
   status.dataset.status = 'failed';
 }

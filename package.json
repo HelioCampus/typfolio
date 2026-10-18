@@ -14,26 +14,26 @@
     "packages/*"
   ],
   "engines": {
-    "node": ">=22"
+    "node": ">=22.18"
   },
   "scripts": {
-    "setup:wasm": "node tools/setup-wasm.mjs",
-    "build:wasm": "node tools/build-wasm.mjs",
-    "notices:wasm": "node tools/generate-third-party-notices.mjs",
-    "build": "node tools/generate-typst-package.mjs && tsc -p packages/core/tsconfig.json && tsc -p packages/dev-tools/tsconfig.json && tsc -p packages/workers/tsconfig.json && tsc -p packages/react/tsconfig.json && tsc -p examples/vite-react/tsconfig.app.json && tsc -p examples/vite-react/tsconfig.node.json && tsc -p examples/pretext-hybrid/tsconfig.app.json && tsc -p examples/pretext-hybrid/tsconfig.node.json",
+    "setup:wasm": "node tools/setup-wasm.ts",
+    "build:wasm": "node tools/build-wasm.ts",
+    "notices:wasm": "node tools/generate-third-party-notices.ts",
+    "build": "node tools/generate-typst-package.ts && tsc -p packages/core/tsconfig.json && tsc -p packages/dev-tools/tsconfig.json && tsc -p packages/workers/tsconfig.json && tsc -p packages/react/tsconfig.json && tsc -p examples/vite-react/tsconfig.app.json && tsc -p examples/vite-react/tsconfig.node.json && tsc -p examples/pretext-hybrid/tsconfig.app.json && tsc -p examples/pretext-hybrid/tsconfig.node.json && tsc -p tools/tsconfig.json && tsc -p examples/vite-app/tsconfig.app.json && tsc -p examples/vite-app/tsconfig.node.json && tsc -p examples/vite-capture/tsconfig.app.json && tsc -p examples/vite-capture/tsconfig.node.json && tsc -p examples/vite-library/tsconfig.app.json && tsc -p examples/vite-library/tsconfig.node.json",
     "dev:react": "vite --config examples/vite-react/vite.config.ts",
     "dev:pretext": "vite --config examples/pretext-hybrid/vite.config.ts",
-    "dev:capture": "vite --config examples/vite-capture/vite.config.mjs",
+    "dev:capture": "vite --config examples/vite-capture/vite.config.ts",
     "test": "npm run build && node --test packages/core/test/*.test.mjs packages/dev-tools/test/*.test.mjs packages/workers/test/*.test.mjs packages/react/test/*.test.mjs",
-    "test:vite": "npm run build && node tools/test-vite-builds.mjs",
-    "pack:wasm": "node tools/check-package.mjs && npm pack --workspace packages/wasm --pack-destination .build",
+    "test:vite": "npm run build && node tools/test-vite-builds.ts",
+    "pack:wasm": "node tools/check-package.ts && npm pack --workspace packages/wasm --pack-destination .build",
     "pack:core": "npm run build && npm pack --workspace packages/core --pack-destination .build",
     "pack:dev-tools": "npm run build && npm pack --workspace packages/dev-tools --pack-destination .build",
     "pack:workers": "npm run build && npm pack --workspace packages/workers --pack-destination .build",
     "pack:react": "npm run build && npm pack --workspace packages/react --pack-destination .build",
-    "test:browser": "npm run test:vite && node tools/serve-smoke.mjs",
+    "test:browser": "npm run test:vite && node tools/serve-smoke.ts",
     "test:browsers": "npm run test:vite && playwright test -c tests/browser",
-    "test:packed": "npm run pack:wasm && npm run pack:core && npm run pack:workers && npm run pack:react && npm run pack:dev-tools && node tools/test-packed.mjs",
+    "test:packed": "npm run pack:wasm && npm run pack:core && npm run pack:workers && npm run pack:react && npm run pack:dev-tools && node tools/test-packed.ts",
     "changeset": "changeset",
     "version-packages": "changeset version && npm install --package-lock-only",
     "release": "changeset publish"

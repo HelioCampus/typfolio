@@ -7,12 +7,12 @@ const root = fileURLToPath(new URL('../', import.meta.url));
 const dir = await mkdtemp(join(root, '.build/packed-consumer-'));
 // Tarball names follow each package's own version (npm pack writes typfolio-<name>-<version>.tgz), so they are
 // derived rather than hard-coded and keep working when Changesets bumps the versions.
-const tarballPath = async name => {
+const tarballPath = async (name: string) => {
   const { version } = JSON.parse(await readFile(join(root, 'packages', name, 'package.json'), 'utf8'));
   return join(root, `.build/typfolio-${name}-${version}.tgz`);
 };
 const tarballs = Object.fromEntries(await Promise.all(['wasm', 'core', 'workers', 'react', 'dev-tools'].map(async name => [name, await tarballPath(name)])));
-const run = (command, args) => {
+const run = (command: string, args: string[]) => {
   const r = spawnSync(command, args, { cwd: dir, stdio: 'inherit' });
   if (r.error || r.status !== 0) throw r.error ?? new Error(`${command} exited ${r.status}`);
 };
@@ -62,7 +62,7 @@ for (const name of packageFiles) {
 }
 // Every tarball must carry the licence; the wasm tarball also carries the NOTICE and third-party notices and licence texts.
 // npm adds LICENSE/NOTICE from a package's own root, so this guards the per-package copies.
-for (const [name, extra] of [['wasm', ['NOTICE', 'THIRD_PARTY_NOTICES.md', 'THIRD_PARTY_LICENSES.md', 'generated/LICENSE.typst-ts']], ['core', []], ['workers', []], ['react', []], ['dev-tools', []]]) {
+for (const [name, extra] of [['wasm', ['NOTICE', 'THIRD_PARTY_NOTICES.md', 'THIRD_PARTY_LICENSES.md', 'generated/LICENSE.typst-ts']], ['core', []], ['workers', []], ['react', []], ['dev-tools', []]] as [string, string[]][]) {
   const listing = spawnSync('tar', ['-tzf', tarballs[name]], { encoding: 'utf8' });
   if (listing.error || listing.status !== 0) throw listing.error ?? new Error('tar exited ' + listing.status);
   const files = listing.stdout.split('\n');

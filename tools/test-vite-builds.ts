@@ -4,18 +4,19 @@ import { mkdir, readdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { build as viteBuild } from 'vite';
+import type { CompilerPin, Provenance } from './types.ts';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 const vite = fileURLToPath(new URL('../node_modules/vite/bin/vite.js', import.meta.url));
-const provenance = JSON.parse(await readFile(new URL('../packages/wasm/generated/provenance.json', import.meta.url)));
+const provenance: Provenance = JSON.parse(await readFile(new URL('../packages/wasm/generated/provenance.json', import.meta.url), 'utf8'));
 
-const pin = JSON.parse(await readFile(new URL('../compiler-source.json', import.meta.url)));
+const pin: CompilerPin = JSON.parse(await readFile(new URL('../compiler-source.json', import.meta.url), 'utf8'));
 assert.equal(provenance.revision, pin.revision, 'provenance must record the pinned source revision');
 assert.equal(provenance.crateType, pin.crateType, 'provenance must record the pinned crate type');
 assert.equal(provenance.wasmOpt, pin.wasmOpt, 'provenance must record the pinned wasm-opt setting');
 assert.deepEqual(provenance.cargoProfile, pin.cargoProfile, 'provenance must record the pinned cargo profile');
 
-function build(config, ...args) {
+function build(config: string, ...args: string[]) {
   const result = spawnSync(process.execPath, [vite, 'build', '--config', config, ...args], {
     cwd: root,
     stdio: 'inherit',
@@ -25,7 +26,7 @@ function build(config, ...args) {
   }
 }
 
-async function files(directory) {
+async function files(directory: string): Promise<string[]> {
   const entries = await readdir(directory, { withFileTypes: true });
   const nested = await Promise.all(entries.map(async entry => {
     const path = directory + '/' + entry.name;
@@ -34,7 +35,7 @@ async function files(directory) {
   return nested.flat();
 }
 
-async function verify(name, { largeScripts = [] } = {}) {
+async function verify(name: string, { largeScripts = [] }: { largeScripts?: RegExp[] } = {}) {
   const directory = root + '.build/' + name;
   const output = await files(directory);
   const wasmFiles = output.filter(path => path.endsWith('.wasm'));
@@ -154,11 +155,11 @@ const html2canvasMarkers = [
 ];
 
 async function verifyCaptureBuilds() {
-  const read = async name => {
+  const read = async (name: string) => {
     const output = (await files(root + '.build/' + name)).filter(path => /\.m?js$/.test(path));
     return Promise.all(output.map(async path => ({ path, source: await readFile(path, 'utf8') })));
   };
-  const hasMarkers = source => html2canvasMarkers.every(marker => source.includes(marker));
+  const hasMarkers = (source: string) => html2canvasMarkers.every(marker => source.includes(marker));
 
   // Applications that use captureAssets/captureProps and svgCapture never get html2canvas.
   const svg = await read('vite-capture-svg');
@@ -190,12 +191,12 @@ async function verifyCaptureBuilds() {
   return { entryBytes: entry.source.length, html2canvasChunk: chunkName, html2canvasBytes: chunk.source.length };
 }
 
-build('examples/vite-app/vite.config.mjs');
-build('examples/vite-library/vite.config.mjs');
+build('examples/vite-app/vite.config.ts');
+build('examples/vite-library/vite.config.ts');
 build('examples/vite-react/vite.config.ts');
 build('examples/pretext-hybrid/vite.config.ts');
-build('examples/vite-capture/vite.config.mjs', '--mode', 'svg');
-build('examples/vite-capture/vite.config.mjs', '--mode', 'dom');
+build('examples/vite-capture/vite.config.ts', '--mode', 'svg');
+build('examples/vite-capture/vite.config.ts', '--mode', 'dom');
 await verifyReactBoundary();
 const captureBuilds = await verifyCaptureBuilds();
 const devToolsBuild = await verifyDevToolsBuild();
