@@ -264,7 +264,7 @@ test('sample-from-schema: preferences, merging, formats, type arrays and inferen
   });
 });
 
-test('sample-from-schema: a recursive $ref ends instead of looping', async () => {
+test('sample-from-schema: a recursive $ref is expanded one level, then ends in empty lists', async () => {
   const s = await sample({
     $ref: '#/$defs/Node',
     $defs: {
@@ -274,9 +274,20 @@ test('sample-from-schema: a recursive $ref ends instead of looping', async () =>
       },
     },
   });
+  // One level down a node is drawn again; below that the recursion ends: an empty list, a null
+  // where the schema allows one. A list never holds a null item a template would trip over.
+  const leaf = { name: 'Sample text', parent: null, children: [] };
   assert.equal(s.name, 'Sample text');
-  assert.equal(s.parent, null);
-  assert.deepEqual(s.children, [null]);
+  assert.deepEqual(s.parent, leaf);
+  assert.deepEqual(s.children, [leaf]);
+});
+
+test('sample-from-schema: a schema that refers to itself with "#" is expanded one level', async () => {
+  const s = await sample({
+    type: 'object',
+    properties: { name: { type: 'string' }, children: { type: 'array', items: { $ref: '#' } } },
+  });
+  assert.deepEqual(s, { name: 'Sample text', children: [{ name: 'Sample text', children: [] }] });
 });
 
 test('imports other than the bundled package fail with COMPILATION naming the supported one', async () => {
@@ -408,7 +419,7 @@ test('sample-from-schema minimal: required only, nullables, empty arrays, minimu
   assert.deepEqual(await sample({ type: 'object', properties: { a: { type: 'string' } } }, 'minimal'), {});
 });
 
-test('sample-from-schema minimal: a recursive $ref ends instead of looping', async () => {
+test('sample-from-schema minimal: a recursive $ref is expanded one level, then ends', async () => {
   const s = await sample({
     $ref: '#/$defs/Node',
     $defs: {
@@ -419,9 +430,11 @@ test('sample-from-schema minimal: a recursive $ref ends instead of looping', asy
       },
     },
   }, 'minimal');
+  // A required recursive property cannot be left out, so it ends in null; a list ends empty.
+  const leaf = { name: '', next: null, children: [] };
   assert.equal(s.name, '');
-  assert.equal(s.next, null);
-  assert.deepEqual(s.children, [null]);
+  assert.deepEqual(s.next, leaf);
+  assert.deepEqual(s.children, [leaf]);
 });
 
 test('sample-from-schema defaults to full mode and rejects an unknown mode', async () => {

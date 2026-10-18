@@ -17,7 +17,9 @@ try {
 }
 ```
 
-`checkTemplate(template, { wasm, fonts, modes?, pdf? })` is the one-shot form that creates and disposes a checker.
+`check` also takes `assets`, the files a template reads besides its input (shared settings, a logo), exactly as a request's `assets`: a template that reads `json("/export-settings.json")` can be checked with that file in place.
+
+`checkTemplate(template, { wasm, fonts, modes?, pdf?, assets? })` is the one-shot form that creates and disposes a checker.
 
 A check compiles the template once per sample mode (`minimal`, then `full`) the way an editor does, so `input()` builds a sample from the JSON Schema in `template.files`. A compile error is reported in that mode's result; a malformed template or option is thrown. Nothing is written to disk. See "Build-time checks" in [docs/template-authoring.md](../../docs/template-authoring.md) for the rules and a test recipe.
 

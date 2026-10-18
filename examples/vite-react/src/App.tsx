@@ -5,8 +5,8 @@ import {
   usePdfObjectUrl,
   type PdfCompilationStatus,
 } from '@typfolio/react';
-import { Link, NavLink } from 'react-router-dom';
 import type { ReportInput } from './report/input.ts';
+import { Topbar } from './Topbar.tsx';
 
 export interface RuntimeProfile {
   readonly eyebrow: string;
@@ -98,30 +98,7 @@ export function App({ profile }: AppProps) {
 
   return (
     <div className="app-shell">
-      <header className="topbar">
-        <Link className="brand" to="/" aria-label="Typfolio home">
-          <span className="brand-mark">T</span>
-          <span>
-            <strong>Typfolio</strong>
-            <small>Document workspace</small>
-          </span>
-        </Link>
-        <div className="topbar-actions">
-          <nav className="runtime-nav" aria-label="Compiler examples">
-            <NavLink className={({ isActive }) => isActive ? 'active' : undefined} end to="/">
-              Direct
-            </NavLink>
-            <NavLink className={({ isActive }) => isActive ? 'active' : undefined} to="/workers">
-              Workers
-            </NavLink>
-          </nav>
-          <div className="runtime-badges" aria-label="Runtime details">
-            <span className="badge badge--live"><i /> Client ready</span>
-            <span className="badge">{profile.clientBadge}</span>
-            <span className="badge">{profile.executionBadge}</span>
-          </div>
-        </div>
-      </header>
+      <Topbar clientBadge={profile.clientBadge} executionBadge={profile.executionBadge} />
 
       <main>
         <section className="hero">

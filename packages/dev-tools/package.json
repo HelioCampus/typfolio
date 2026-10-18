@@ -13,9 +13,15 @@
   "homepage": "https://github.com/HelioCampus/typfolio#readme",
   "bugs": { "url": "https://github.com/HelioCampus/typfolio/issues" },
   "files": ["dist", "README.md"],
+  "types": "./dist/index.d.ts",
   "exports": {
     ".": { "types": "./dist/index.d.ts", "import": "./dist/index.js" },
     "./pdf": { "types": "./dist/pdf.d.ts", "import": "./dist/pdf.js" }
+  },
+  "typesVersions": {
+    "*": {
+      "pdf": ["./dist/pdf.d.ts"]
+    }
   },
   "dependencies": {
     "@typfolio/core": "^0.1.0"

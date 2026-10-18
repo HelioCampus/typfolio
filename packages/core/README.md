@@ -69,8 +69,8 @@ Tools used while building and testing templates, not while serving requests, liv
 Browser-only helpers live behind separate subpath entries so Node, worker, and server code that imports `@typfolio/core` never loads DOM code. The main entry exports none of them, and none touch browser globals at import time.
 
 - `@typfolio/core/capture`: `captureProps`, `captureAssets`, `TypfolioCaptureError`, and the adapter and result types.
-- `@typfolio/core/capture/svg`: `svgCapture`, a dependency-free adapter that serializes one inline SVG and preserves vector output.
-- `@typfolio/core/capture/dom`: `domPngCapture`, an opt-in PNG fallback for arbitrary DOM. It loads `html2canvas` by dynamic import only when it first runs. `html2canvas` is an optional peer dependency: install it only if you use this adapter. If it is missing when the default rasterizer runs, the capture rejects with `CAPTURE_FAILED` and the import error as `cause`; passing your own `rasterize` never loads it.
+- `@typfolio/core/capture/svg`: `svgCapture`, a dependency-free adapter that serializes one inline SVG and preserves vector output, and `serializeSvg(svg, { fontFamily?, beforeSerialize? })`, the same serializer for an SVG element you already hold. It inlines the computed paint and text styles (chart libraries often style SVGs from page CSS), rewrites `url(#id)` references to be local, writes the drawn size, and returns the file as bytes. The SVG must be in a document and have a rendered size. `beforeSerialize(svg)` runs on the copy just before it is written (remove a tooltip, add a `<title>`); the live SVG is never passed to it. `@typfolio/react`'s `usePdf` uses it for charts.
+- `@typfolio/core/capture/dom`: `domPngCapture`, an opt-in PNG fallback for arbitrary DOM. It loads `html2canvas` by dynamic import only when it first runs. `html2canvas` is an optional peer dependency: install it only if you use this adapter. If it is missing when the default rasterizer runs, the capture rejects with `CAPTURE_FAILED` and the import error as `cause`; passing your own `rasterize` never loads it. `beforeRasterize(element)` runs on html2canvas's copy of the element before it is drawn, never on the live page.
 
 Each marked region owns its adapter `kind` and its alt text. `captureProps` returns the data attributes (`data-typfolio-capture`, `data-typfolio-capture-kind`, and `data-typfolio-capture-alt` or `data-typfolio-capture-decorative`) to spread onto any element. They add no role or accessible name. `@typfolio/react/capture` offers a `CaptureRegion` component over the same attributes; plain DOM and other frameworks can spread `captureProps` directly.
 
@@ -89,7 +89,7 @@ for (const [name, value] of Object.entries(captureProps({
 
 const captured = await captureAssets(document.querySelector('#report'), {
   adapters: {
-    svg: svgCapture({ removeSelectors: ['.chart-tooltip'] }),
+    svg: svgCapture({ beforeSerialize: svg => svg.querySelector('.chart-tooltip')?.remove() }),
     png: domPngCapture({ pixelRatio: 2, backgroundColor: '#fff' }),
   },
   require: ['performance-chart'],

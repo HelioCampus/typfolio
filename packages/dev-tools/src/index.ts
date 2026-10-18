@@ -13,6 +13,8 @@ export interface TemplateCheckOptions {
   modes?: readonly SampleMode[];
   /** Same options as a request's `pdf`. */
   pdf?: PdfOptions;
+  /** Files the template reads besides its input, such as shared settings or a logo: same as a request's `assets`. */
+  assets?: Readonly<Record<string, Uint8Array>>;
 }
 
 export interface TemplateCheckResult {
@@ -44,15 +46,15 @@ export interface TemplateChecker {
   dispose(): Promise<void>;
 }
 
-function parseOptions(options: unknown): { modes: readonly SampleMode[]; pdf?: PdfOptions } {
+function parseOptions(options: unknown): Omit<TemplateCheckOptions, 'modes'> & { modes: readonly SampleMode[] } {
   if (options === undefined) return { modes: sampleModes };
   if (!options || typeof options !== 'object' || Array.isArray(options)) throw new TypstPdfError('INVALID_REQUEST', 'check options must be a plain object');
-  const { modes = sampleModes, pdf, ...rest } = options as TemplateCheckOptions;
+  const { modes = sampleModes, pdf, assets, ...rest } = options as TemplateCheckOptions;
   for (const key of Object.keys(rest)) throw new TypstPdfError('UNSUPPORTED_OPTION', `Unsupported check option ${key}`);
   if (!Array.isArray(modes) || !modes.length) throw new TypstPdfError('INVALID_REQUEST', 'modes must be a non-empty array');
   for (const mode of modes) if (!sampleModes.includes(mode)) throw new TypstPdfError('UNSUPPORTED_OPTION', `Unsupported sample mode ${String(mode)}`);
   if (new Set(modes).size !== modes.length) throw new TypstPdfError('INVALID_REQUEST', 'modes must not repeat');
-  return { modes, pdf };
+  return { modes, pdf, assets };
 }
 
 /** Same options as `createCompiler`. One active check per checker. */
@@ -71,9 +73,9 @@ export async function createTemplateChecker(options: CompilerOptions): Promise<T
     async check(template, checkOptions) {
       if (closed) throw new TypstPdfError('DISPOSED', 'The template checker is disposed');
       if (busy) throw new TypstPdfError('BUSY', 'The template checker already has an active check');
-      const { modes, pdf } = parseOptions(checkOptions);
+      const { modes, pdf, assets } = parseOptions(checkOptions);
       // `input: null` only fills the reserved /input.json; the editor branch never reads it.
-      const prepared = prepareRequest({ template, input: null, pdf });
+      const prepared = prepareRequest({ template, input: null, pdf, ...(assets === undefined ? {} : { assets }) });
       busy = true;
       let release!: () => void;
       finished = new Promise<void>(resolve => { release = resolve; });

@@ -16,6 +16,7 @@
     "dist",
     "README.md"
   ],
+  "types": "./dist/index.d.ts",
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",

@@ -25,7 +25,10 @@ export interface PdfCompilationOptions extends PdfCompilationCallbacks {
   readonly signal?: AbortSignal;
 }
 
-export interface UsePdfCompilationOptions extends PdfCompilationCallbacks {}
+export interface UsePdfCompilationOptions extends PdfCompilationCallbacks {
+  /** Compiles with this client instead of the one from `PdfProvider`. */
+  readonly client?: PdfClient;
+}
 
 export interface PdfCompilation extends PdfCompilationState {
   readonly diagnostics: readonly Diagnostic[];
@@ -114,7 +117,7 @@ function notifyCancellation(
  * previous call, and stale calls can never replace newer state.
  */
 export function usePdfCompilation(options: UsePdfCompilationOptions = {}): PdfCompilation {
-  const client = usePdfClient();
+  const client = usePdfClient(options.client);
   const clientRef = useRef<PdfClient>(client);
   const optionsRef = useRef(options);
   const activeRef = useRef<ActiveCompilation | undefined>(undefined);

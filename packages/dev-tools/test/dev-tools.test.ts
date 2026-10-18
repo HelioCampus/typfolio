@@ -153,6 +153,47 @@ test('pdf options pass through to every compile', async () => {
   await assert.rejects(checker.check(template, { pdf: { standards: ['ua-1'], tags: false } }), hasCode('INVALID_REQUEST'));
 });
 
+test('a recursive schema is expanded one level, then ends in empty lists, in both modes', async () => {
+  // A tree as Zod writes it: the root refers to itself with "#", and through $defs.
+  const selfReferring = {
+    type: 'object',
+    properties: { name: { type: 'string' }, children: { type: 'array', items: { $ref: '#' } } },
+    required: ['name', 'children'],
+  };
+  const throughDefs = {
+    $ref: '#/$defs/Node',
+    $defs: { Node: { ...selfReferring, properties: { ...selfReferring.properties, children: { type: 'array', items: { $ref: '#/$defs/Node' } }, parent: { $ref: '#/$defs/Node' } } } },
+  };
+  for (const schema of [selfReferring, throughDefs]) {
+    const report = await checker.check({ files: {
+      'main.typ': read(
+        '#let data = input(json.with("./tree.schema.json"))',
+        '#data.name',
+        '#for child in data.children [ - #child.name (#child.children.len()) ]',
+        '#repr(data.at("parent", default: "none"))'),
+      'tree.schema.json': JSON.stringify(schema),
+    } });
+    assert.equal(report.ok, true, JSON.stringify(report.results.map(r => r.error?.message)));
+  }
+});
+
+test('assets reach every compile, beside the sample input', async () => {
+  const template = { files: {
+    'main.typ': read(
+      '#let data = input(json.with("./report.schema.json"))',
+      '#let settings = json("/export-settings.json")',
+      '#settings.institution: #data.title'),
+    'report.schema.json': schemaFile,
+  } };
+  const assets = { 'export-settings.json': new TextEncoder().encode('{"institution":"Northwind"}') };
+  const report = await checker.check(template, { assets });
+  assert.equal(report.ok, true, JSON.stringify(report.results.map(r => r.error?.message)));
+  const without = await checker.check(template);
+  assert.equal(without.ok, false);
+  assert.match(without.results[0].error!.message, /failed to load file|not found/);
+  await assert.rejects(checker.check(template, { assets: { '/input.json': new Uint8Array([1]) } }), hasCode('INVALID_REQUEST'));
+});
+
 const zodLike = {
   type: 'object',
   properties: {

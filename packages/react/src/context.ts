@@ -19,8 +19,10 @@ export function PdfProvider({ client, children }: PdfProviderProps): ReactElemen
   return createElement(PdfClientContext.Provider, { value: client }, children);
 }
 
-export function usePdfClient(): PdfClient {
-  const client = useContext(PdfClientContext);
-  if (client === undefined) throw new Error('usePdfClient must be used within a PdfProvider');
-  return client;
+/** The given client, else the one from the nearest `PdfProvider`. */
+export function usePdfClient(client?: PdfClient): PdfClient {
+  const provided = useContext(PdfClientContext);
+  const resolved = client ?? provided;
+  if (resolved === undefined) throw new Error('usePdfClient: pass a client, or use it within a PdfProvider');
+  return resolved;
 }

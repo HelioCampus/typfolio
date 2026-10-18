@@ -98,3 +98,22 @@ for (const [name, path] of [['direct', '/'], ['workers', '/workers']]) {
     }
   });
 }
+
+test('React example (charts route): usePdf draws charts into a PDF/UA compile', async ({ page, browserName }) => {
+  const messages = watch(page);
+  await page.goto(`${react}/charts`);
+  await page.getByRole('button', { name: 'Generate PDF' }).click();
+  const output = page.locator('section.output-panel');
+  try {
+    await expect(output.locator('.status')).toContainText(/complete/i);
+    const summary = output.locator('.result-summary');
+    await expect(summary.locator('div', { hasText: 'Charts' }).locator('strong')).toHaveText('6');
+    await expect(summary.locator('div', { hasText: 'Diagnostics' }).locator('strong')).toHaveText('0');
+    // The hidden renderer element is removed once the charts are drawn.
+    await expect(page.locator('[data-typfolio-asset-renderer]')).toHaveCount(0);
+    console.log(`[${browserName}] react charts`, (await summary.innerText()).replace(/\s+/g, ' '));
+  } catch (error) {
+    const text = await output.innerText().catch(() => '(output panel unavailable)');
+    throw new Error(`${(error as Error).message}\n--- output panel ---\n${text}\n--- browser messages ---\n${messages.join('\n')}`);
+  }
+});

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import type { PdfClient } from '@typfolio/core';
 import { PdfProvider } from '@typfolio/react';
 import { App, type RuntimeProfile } from './App.tsx';
@@ -12,6 +12,8 @@ interface ClientPageProps {
   readonly createClient: () => DisposablePdfClient | Promise<DisposablePdfClient>;
   readonly loadingCopy: string;
   readonly profile: RuntimeProfile;
+  /** The page shown once the client is ready; defaults to the report workspace. */
+  readonly children?: ReactNode;
 }
 
 type ClientState =
@@ -23,7 +25,7 @@ function describeError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-export function ClientPage({ createClient, loadingCopy, profile }: ClientPageProps) {
+export function ClientPage({ createClient, loadingCopy, profile, children }: ClientPageProps) {
   const [state, setState] = useState<ClientState>({ status: 'loading' });
 
   useEffect(() => {
@@ -88,7 +90,7 @@ export function ClientPage({ createClient, loadingCopy, profile }: ClientPagePro
 
   return (
     <PdfProvider client={state.client}>
-      <App profile={profile} />
+      {children ?? <App profile={profile} />}
     </PdfProvider>
   );
 }

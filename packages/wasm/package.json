@@ -13,6 +13,7 @@
   "homepage": "https://github.com/HelioCampus/typfolio#readme",
   "bugs": { "url": "https://github.com/HelioCampus/typfolio/issues" },
   "files": ["generated", "NOTICE", "THIRD_PARTY_NOTICES.md", "THIRD_PARTY_LICENSES.md", "README.md"],
+  "types": "./generated/compiler.d.ts",
   "exports": {
     ".": { "types": "./generated/compiler.d.ts", "import": "./generated/compiler.js" },
     "./compiler.wasm": "./generated/compiler_bg.wasm",

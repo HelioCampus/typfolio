@@ -63,7 +63,8 @@ export interface DomPngRasterizeOptions {
   readonly useCORS: boolean;
   readonly imageTimeoutMs?: number;
   readonly logging: boolean;
-  readonly removeSelectors: readonly string[];
+  /** Runs on the rasterizer's clone of the element, never on the live page. */
+  readonly beforeRasterize?: (element: HTMLElement) => void;
 }
 
 export type DomPngRasterizer = (
@@ -79,7 +80,11 @@ export interface DomPngCaptureOptions {
   readonly useCORS?: boolean;
   readonly imageTimeoutMs?: number;
   readonly logging?: boolean;
-  readonly removeSelectors?: readonly string[];
+  /**
+   * Runs on html2canvas's clone of the element before it is drawn: remove transient parts such
+   * as tooltips or focus rings. The live element on the page is never passed here.
+   */
+  readonly beforeRasterize?: (element: HTMLElement) => void;
   /** Custom-host and test escape hatch. */
   readonly rasterize?: DomPngRasterizer;
 }
@@ -107,9 +112,7 @@ async function defaultRasterizer(
     imageTimeout: options.imageTimeoutMs,
     logging: options.logging,
     onclone(_document, clonedElement) {
-      for (const selector of options.removeSelectors) {
-        for (const removable of clonedElement.querySelectorAll(selector)) removable.remove();
-      }
+      options.beforeRasterize?.(clonedElement);
     },
     scale: options.pixelRatio,
     useCORS: options.useCORS,
@@ -169,7 +172,7 @@ export function domPngCapture({
   useCORS = false,
   imageTimeoutMs,
   logging = false,
-  removeSelectors = [],
+  beforeRasterize,
   rasterize,
 }: DomPngCaptureOptions = {}): CaptureAdapter {
   if (pixelRatio !== undefined && (!Number.isFinite(pixelRatio) || pixelRatio <= 0)) {
@@ -178,10 +181,9 @@ export function domPngCapture({
   if (imageTimeoutMs !== undefined && (!Number.isInteger(imageTimeoutMs) || imageTimeoutMs < 0)) {
     throw new TypfolioCaptureError('INVALID_OPTIONS', 'DOM imageTimeoutMs must be a non-negative integer');
   }
-  if (removeSelectors.some(value => !value.trim())) {
-    throw new TypfolioCaptureError('INVALID_OPTIONS', 'DOM removeSelectors must be non-empty');
+  if (beforeRasterize !== undefined && typeof beforeRasterize !== 'function') {
+    throw new TypfolioCaptureError('INVALID_OPTIONS', 'DOM beforeRasterize must be a function');
   }
-  const selectors = Object.freeze([...removeSelectors]);
 
   return Object.freeze({
     name: 'DOM PNG capture',
@@ -212,7 +214,7 @@ export function domPngCapture({
         useCORS,
         imageTimeoutMs,
         logging,
-        removeSelectors: selectors,
+        beforeRasterize,
       };
       const canvas = rasterize === undefined
         ? await defaultRasterizer(element, rasterizeOptions, context)

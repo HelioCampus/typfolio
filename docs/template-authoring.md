@@ -82,7 +82,7 @@ There are two sample modes, selected by `sys.inputs.at("typfolio-sample", defaul
 
 - Every declared property is present, so an optional field appears. An array has at least one item (`minItems` is honored). Nullable shapes such as `anyOf` with `null` produce the non-null shape.
 - `examples`, `default`, `const`, and `enum` are preferred in that order. An empty `[]` or `{}` default does not replace a generated shape, and a partial object default is merged into the generated object.
-- Local `$ref` (`#/$defs/...`) is resolved with a recursion guard: a reference that loops back to itself ends in `null`. `anyOf` and `oneOf` take the first non-null branch, `allOf` merges objects. Type arrays use the first non-null type, and a missing `type` is inferred from `properties` or `items`.
+- Local `$ref` (`#`, `#/$defs/...`) is resolved, and a recursive schema is expanded one level: a tree gets one child, whose own recursive parts end. There, a list is empty, an optional property is left out, and a required one is `null`, so a template that loops over children is checked with real items and never meets a `null` item. `anyOf` and `oneOf` take the first non-null branch, `allOf` merges objects. Type arrays use the first non-null type, and a missing `type` is inferred from `properties` or `items`.
 - Strings are `"Sample text"` or a fixed value for `date`, `date-time`, `email`, `uri`, and `uuid` formats. Numbers are `minimum` or `1`; booleans are `true`.
 - The sample is not validated against the schema, and keywords that only restrict a value (`pattern`, `maximum`, `exclusiveMinimum`, `minLength`, `additionalProperties`, ...) are ignored by `full`. (`minimal` honours `minLength`, `minItems`, `minimum` and `exclusiveMinimum`.) External `$ref` is not supported.
 

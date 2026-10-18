@@ -86,7 +86,7 @@ The compiler never touches the host file system or the network. Everything a com
 | [`@typfolio/core`](./packages/core/README.md) | Compilation of template files, JSON input and assets into PDF bytes and diagnostics. Subpaths: `/capture`, `/capture/svg`, `/capture/dom` (browser asset capture), kept out of the main entry |
 | [`@typfolio/dev-tools`](./packages/dev-tools/README.md) | Dev-time tools, installed as a devDependency and never needed at runtime: template checks against schema samples, and `inspectPdf` (optional `pdfjs-dist` peer) to report a compiled PDF's structure for tests |
 | [`@typfolio/workers`](./packages/workers/README.md) | Module-worker execution: pools, queues, cancellation, timeouts, batches |
-| [`@typfolio/react`](./packages/react/README.md) | Headless provider and hooks, plus the `CaptureRegion` marker component |
+| [`@typfolio/react`](./packages/react/README.md) | Headless provider and hooks, `useRenderedAssets` for charts drawn at the PDF's size, and the `CaptureRegion` marker component |
 | [`@typfolio/wasm`](./packages/wasm/README.md) | The generated compiler binary, its bindings, the upstream licence and the build provenance; no hand-written code |
 
 Core has no runtime dependency other than `@typfolio/wasm`. `html2canvas` (DOM capture) is an optional peer dependency and is never bundled unless you import the DOM adapter.
@@ -261,7 +261,7 @@ npm run test:browser   # builds and serves the production worker smoke test for 
 
 Example dev servers (details in [examples/README.md](./examples/README.md)):
 
-- `npm run dev:react`: routed Vite React app with direct-core and worker-backed pages over the same components.
+- `npm run dev:react`: routed Vite React app with direct-core and worker-backed pages over the same components, and a Charts page that draws charts for the PDF with `useRenderedAssets`.
 - `npm run dev:pretext`: two [pretext](https://github.com/chenglou/pretext) demos rendered as PDFs; pretext lays out the text in the browser and Typst draws the result.
 - `npm run dev:capture`: browser smoke page for the SVG and DOM capture adapters.
 

@@ -19,8 +19,9 @@
   "uuid": "123e4567-e89b-12d3-a456-426614174000",
 )
 
-// Resolves a local "#/..." reference against the root schema.
+// Resolves a local "#" or "#/..." reference against the root schema.
 #let _resolve(root, ref) = {
+  if ref == "#" { return root }
   let node = root
   for part in ref.slice(2).split("/") {
     node = node.at(part.replace("~1", "/").replace("~0", "~"))
@@ -28,8 +29,28 @@
   node
 }
 
-// `seen` holds the $ref values being expanded on the current path, so a recursive schema ends at
-// `none` instead of recursing; `depth` bounds anything else.
+// `seen` holds the $ref values being expanded on the current path. A recursive schema is expanded
+// one level (a tree gets one child) and then cut: the cut value is `_cut`, which an array turns into
+// no items and an object into a missing optional property, so a recursive list ends empty instead
+// of holding `none`. `depth` bounds anything else.
+#let _cut = "\u{E000}typfolio-recursion-cut"
+#let _recursing(seen, ref) = seen.filter(r => r == ref).len() >= 2
+
+// An object's properties from their samples: a cut optional property is left out, a cut required
+// one is `none` (the schema demands an endless value there).
+#let _object(node, sampled) = {
+  let required = node.at("required", default: ())
+  let out = (:)
+  for (key, v) in sampled {
+    if v == _cut {
+      if key in required { out.insert(key, none) }
+    } else {
+      out.insert(key, v)
+    }
+  }
+  out
+}
+
 #let _sample(root, node, depth, seen) = {
   if depth > 16 or type(node) != dictionary { return none }
   let candidates = ()
@@ -45,14 +66,14 @@
   }
   if "$ref" in node {
     let ref = node.at("$ref")
-    if ref in seen { return none }
+    if _recursing(seen, ref) { return _cut }
     return _sample(root, _resolve(root, ref), depth + 1, seen + (ref,))
   }
   for key in ("anyOf", "oneOf") {
     if key in node {
       for branch in node.at(key) {
         let v = _sample(root, branch, depth + 1, seen)
-        if v != none { return v }
+        if v != none and v != _cut { return v }
       }
     }
   }
@@ -70,10 +91,11 @@
     if "properties" in node { t = "object" } else if "items" in node { t = "array" }
   }
   if t == "object" {
-    let out = (:)
+    let sampled = (:)
     for (key, sub) in node.at("properties", default: (:)) {
-      out.insert(key, _sample(root, sub, depth + 1, seen))
+      sampled.insert(key, _sample(root, sub, depth + 1, seen))
     }
+    let out = _object(node, sampled)
     // A partial object default fills in the generated shape rather than replacing it.
     if filled.len() > 0 { out += filled.first() }
     return out
@@ -81,16 +103,15 @@
   if t == "array" {
     let items = node.at("items", default: none)
     if items == none { return () }
-    return range(calc.max(1, node.at("minItems", default: 1))).map(_ => _sample(root, items, depth + 1, seen))
+    let item = _sample(root, items, depth + 1, seen)
+    if item == _cut { return () }
+    return range(calc.max(1, node.at("minItems", default: 1))).map(_ => item)
   }
   if t == "string" { return _formats.at(node.at("format", default: ""), default: "Sample text") }
   if t == "integer" or t == "number" { return node.at("minimum", default: 1) }
   if t == "boolean" { return true }
   none
 }
-
-/// Builds a shape-complete sample value from a JSON Schema (a dictionary).
-#let sample-from-schema(schema) = _sample(schema, schema, 0, ())
 
 // Minimal mode. Only `required` properties, nullable values are `none`, arrays are empty unless
 // `minItems` says otherwise, `examples` and `default` are ignored. `$ref` and `allOf` follow full mode.
@@ -112,12 +133,13 @@
   if "enum" in node and node.at("enum").len() > 0 { return node.at("enum").first() }
   if "$ref" in node {
     let ref = node.at("$ref")
-    if ref in seen { return none }
+    if _recursing(seen, ref) { return _cut }
     return _minimal(root, _resolve(root, ref), depth + 1, seen + (ref,))
   }
   for key in ("anyOf", "oneOf") {
     if key in node and node.at(key).len() > 0 {
-      return _minimal(root, node.at(key).first(), depth + 1, seen)
+      let v = _minimal(root, node.at(key).first(), depth + 1, seen)
+      return if v == _cut { none } else { v }
     }
   }
   if "allOf" in node {
@@ -134,18 +156,20 @@
     if "properties" in node { t = "object" } else if "items" in node { t = "array" }
   }
   if t == "object" {
-    let out = (:)
+    let sampled = (:)
     let properties = node.at("properties", default: (:))
     for key in node.at("required", default: ()) {
-      out.insert(key, _minimal(root, properties.at(key, default: none), depth + 1, seen))
+      sampled.insert(key, _minimal(root, properties.at(key, default: none), depth + 1, seen))
     }
-    return out
+    return _object(node, sampled)
   }
   if t == "array" {
     let items = node.at("items", default: none)
     let count = node.at("minItems", default: 0)
     if items == none or count <= 0 { return () }
-    return range(count).map(_ => _minimal(root, items, depth + 1, seen))
+    let item = _minimal(root, items, depth + 1, seen)
+    if item == _cut { return () }
+    return range(count).map(_ => item)
   }
   if t == "string" { return "a" * node.at("minLength", default: 0) }
   if t == "integer" or t == "number" {
@@ -160,7 +184,9 @@
 
 /// Builds a sample value from a JSON Schema (a dictionary). `mode` is "full" or "minimal".
 #let sample-from-schema(schema, mode: "full") = {
-  if mode == "full" { _sample(schema, schema, 0, ()) }
-  else if mode == "minimal" { _minimal(schema, schema, 0, ()) }
-  else { panic("@local/typfolio: sample mode must be \"full\" or \"minimal\", got " + repr(mode)) }
+  // The root is itself an expansion of "#", so a schema that refers to itself recurses one level too.
+  let value = if mode == "full" { _sample(schema, schema, 0, ("#",)) }
+    else if mode == "minimal" { _minimal(schema, schema, 0, ("#",)) }
+    else { panic("@local/typfolio: sample mode must be \"full\" or \"minimal\", got " + repr(mode)) }
+  if value == _cut { none } else { value }
 }

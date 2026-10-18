@@ -24,7 +24,9 @@ run('npm', ['install', '--offline', '--ignore-scripts', '--no-audit', '--no-fund
   tarballs['react'],
   tarballs['dev-tools'],
   'react@19.3.0',
-  '@types/react@19.3.0']);
+  'react-dom@19.3.0',
+  '@types/react@19.3.0',
+  '@types/react-dom@19.3.0']);
 // html2canvas is an optional peer of @typfolio/core: installing the tarballs must not bring it in.
 // (This directory sits inside the repository, so bare-specifier resolution could still find the
 // workspace's own copy; the assertions below therefore inspect the installed tree directly.)
@@ -87,14 +89,14 @@ import { readFile } from 'node:fs/promises';
 import assert from 'node:assert/strict';
 import { createCompiler, templateFromFiles } from '@typfolio/core';
 import { createWorkerClient } from '@typfolio/workers';
-import { PdfProvider, usePdfCompilation, usePdfObjectUrl } from '@typfolio/react';
+import { PdfProvider, usePdf, usePdfCompilation, usePdfObjectUrl, useRenderedAssets } from '@typfolio/react';
 import * as coreMain from '@typfolio/core';
 import * as devTools from '@typfolio/dev-tools';
 import { checkTemplate, createTemplateChecker } from '@typfolio/dev-tools';
 import * as devToolsPdf from '@typfolio/dev-tools/pdf';
 import { inspectPdf } from '@typfolio/dev-tools/pdf';
 import { captureAssets, captureProps } from '@typfolio/core/capture';
-import { svgCapture } from '@typfolio/core/capture/svg';
+import { serializeSvg, svgCapture } from '@typfolio/core/capture/svg';
 import { domPngCapture } from '@typfolio/core/capture/dom';
 import { CaptureRegion } from '@typfolio/react/capture';
 import * as reactCapture from '@typfolio/react/capture';
@@ -102,6 +104,9 @@ assert.equal(typeof createWorkerClient, 'function');
 assert.equal(typeof PdfProvider, 'function');
 assert.equal(typeof usePdfCompilation, 'function');
 assert.equal(typeof usePdfObjectUrl, 'function');
+assert.equal(typeof useRenderedAssets, 'function');
+assert.equal(typeof usePdf, 'function');
+assert.equal(typeof serializeSvg, 'function');
 assert.equal(typeof CaptureRegion, 'function');
 assert.equal(typeof captureAssets, 'function');
 assert.equal(typeof captureProps, 'function');
@@ -178,6 +183,15 @@ import {
   type PdfCompilationOptions,
   type PdfProviderProps,
   type UsePdfCompilationOptions,
+  usePdf,
+  type PdfDocument,
+  type PdfStatus,
+  type UsePdfOptions,
+  useRenderedAssets,
+  type RenderAsset,
+  type RenderAssetsOptions,
+  type RenderedAssets,
+  type UseRenderedAssetsOptions,
 } from '@typfolio/react';
 import {
   captureAssets,
@@ -187,7 +201,7 @@ import {
   type CaptureMarker,
   type CapturedAssets,
 } from '@typfolio/core/capture';
-import { svgCapture } from '@typfolio/core/capture/svg';
+import { serializeSvg, svgCapture, type SvgSerializeOptions } from '@typfolio/core/capture/svg';
 import { domPngCapture } from '@typfolio/core/capture/dom';
 import { CaptureRegion, type CaptureRegionProps } from '@typfolio/react/capture';
 import {
@@ -292,7 +306,7 @@ const wrongInput: PdfRequest<ReportInput> = { template: 'Hello', input: { title:
 void wrongInput;
 // Dev-time template checks.
 const checker: TemplateChecker = await createTemplateChecker({ wasm, fonts: [font] });
-const checkOptions: TemplateCheckOptions = { modes: ['minimal', 'full'], pdf: { standards: ['ua-1'] } };
+const checkOptions: TemplateCheckOptions = { modes: ['minimal', 'full'], pdf: { standards: ['ua-1'] }, assets: { 'settings.json': new Uint8Array([123, 125]) } };
 const report: TemplateCheckReport = await checker.check({ entrypoint: 'main.typ', files: { 'main.typ': 'Hello' } }, checkOptions);
 report.ok satisfies boolean;
 const checkResult: TemplateCheckResult | undefined = report.results[0];
@@ -324,8 +338,59 @@ void badMode;
 // A plain PdfRequest keeps working, and a loaded template folder is a PdfTemplate.
 const folderTemplate: PdfTemplate = templateFromFiles({ './report/main.typ': 'Hello' }, { entrypoint: 'main.typ' });
 await compiler.compile({ template: folderTemplate, input: {} });
+// A PDF kept up to date with its inputs, and its charts.
+const chartOptions: RenderAssetsOptions = {
+  fontFamily: 'Libertinus Serif',
+  fonts: [{ family: 'Libertinus Serif', source: '/fonts/LibertinusSerif-Regular.otf', descriptors: { weight: '400' } }],
+  beforeSerialize: svg => svg.querySelector('.tooltip')?.remove(),
+  directory: 'figures',
+};
+const pdfOptions: UsePdfOptions<{ title: string; chart: string }> = {
+  template: folderTemplate,
+  input: ({ render }) => ({ title: 'T', chart: render(null as never) }),
+  deps: ['T'],
+  assets: { 'logo.png': new Uint8Array([1]) },
+  pdf: { standards: ['ua-1'] },
+  charts: chartOptions,
+  enabled: true,
+  onSuccess: value => value.bytes satisfies Uint8Array,
+  onError: error => error satisfies unknown,
+};
+const plainPdfOptions: UsePdfOptions<{ title: string }> = { template: 'Hello', input: { title: 'T' } };
+declare const pdfDocument: PdfDocument;
+pdfDocument.status satisfies PdfStatus;
+pdfDocument.result?.bytes satisfies Uint8Array | undefined;
+pdfDocument.url satisfies string | undefined;
+pdfDocument.download('report');
+pdfDocument.rebuild();
+pdfDocument.cancel();
+pdfDocument.AssetRenderer satisfies import('react').ComponentType;
+usePdf satisfies <Input>(options: UsePdfOptions<Input>) => PdfDocument;
+const renderedOptions: UseRenderedAssetsOptions<{ chart: string }> = {
+  ...chartOptions,
+  deps: [1],
+  enabled: false,
+  onReady: (assets, value) => void [assets['figures/0.svg'], value.chart],
+  onError: error => error.message satisfies string,
+};
+declare const rendered: RenderedAssets<{ chart: string }>;
+rendered.assets satisfies PdfRequest['assets'];
+rendered.value.chart satisfies string;
+rendered.status satisfies 'idle' | 'drawing' | 'ready' | 'error';
+rendered.rebuild();
+const renderChart: RenderAsset = () => 'charts/0.svg';
+useRenderedAssets satisfies <T>(build: (tools: { readonly render: RenderAsset }) => T, options?: UseRenderedAssetsOptions<T>) => RenderedAssets<T>;
+serializeSvg satisfies (svg: SVGSVGElement, options?: SvgSerializeOptions) => Uint8Array;
+// @ts-expect-error removeSelectors was replaced by beforeSerialize
+svgCapture({ removeSelectors: ['.tooltip'] });
+void [pdfOptions, plainPdfOptions, renderedOptions, renderChart];
 `);
 run(process.execPath, ['smoke.mjs', root]);
-run(process.execPath, [join(root, 'node_modules/typescript/bin/tsc'), '--noEmit', '--strict', '--target', 'ES2022',
+const tsc = join(root, 'node_modules/typescript/bin/tsc');
+run(process.execPath, [tsc, '--noEmit', '--strict', '--target', 'ES2022',
   '--module', 'NodeNext', '--moduleResolution', 'NodeNext', '--lib', 'ES2022,DOM', 'consumer.ts']);
-console.log('Packed public TypeScript declarations check without skipLibCheck.');
+// Older applications resolve with `moduleResolution: "node"`, which ignores `exports`: the packages'
+// `types` and `typesVersions` fields must lead it to the same declarations.
+run(process.execPath, [tsc, '--noEmit', '--strict', '--target', 'ES2022',
+  '--module', 'ESNext', '--moduleResolution', 'node', '--lib', 'ES2022,DOM', 'consumer.ts']);
+console.log('Packed public TypeScript declarations check without skipLibCheck, with NodeNext and with node resolution.');
