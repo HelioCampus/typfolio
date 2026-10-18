@@ -3,15 +3,28 @@ import { before, after, test } from 'node:test';
 import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { performance } from 'node:perf_hooks';
 import { createCompiler, pdfStandards, TypstPdfError } from '../dist/index.js';
+import type { ErrorCode, PdfCompiler, PdfOptions, PdfRequest, PdfTemplate } from '../dist/index.js';
 import { prepareRequest } from '../dist/internal.js';
 
+// The fixture requests, narrowed from the public PdfRequest so the tests can read and change the parts they use.
+interface FixtureRequest<Input> extends PdfRequest<Input> {
+  template: { entrypoint: string; files: Record<string, string> };
+  assets?: Record<string, Uint8Array>;
+}
+type BasicRequest = FixtureRequest<{ title: string }> & { assets: Record<string, Uint8Array> };
+type OutcomeSetsRequest = FixtureRequest<{ document: { title: string } }>;
+
 const root = new URL('../../../', import.meta.url);
-const file = path => readFile(new URL(path, root));
-const text = async path => (await file(path)).toString();
+const file = (path: string) => readFile(new URL(path, root));
+const text = async (path: string) => (await file(path)).toString();
 const output = new URL('.build/test-output/', root);
-let compiler, request, outcomeSetsRequest, wasm, fonts;
-const timings = {};
-const hasCode = code => error => error instanceof TypstPdfError && error.code === code;
+let compiler!: PdfCompiler;
+let request!: BasicRequest;
+let outcomeSetsRequest!: OutcomeSetsRequest;
+let wasm!: Buffer;
+let fonts!: Buffer[];
+const timings: Record<string, number> = {};
+const hasCode = (code: ErrorCode) => (error: unknown) => error instanceof TypstPdfError && error.code === code;
 before(async () => {
   await mkdir(output, { recursive: true });
   wasm = await file('packages/wasm/generated/compiler_bg.wasm');
@@ -65,7 +78,7 @@ test('compiles a representative Outcome Sets document model', async () => {
 
 test('PDF/UA rejects an image without alternative text', async () => {
   const source = request.template.files['main.typ'].replace(', alt: "A blue bar representing the completed outcome."', '');
-  await assert.rejects(compiler.compile({ ...request, template: { ...request.template, files: { ...request.template.files, 'main.typ': source } } }), error => {
+  await assert.rejects(compiler.compile({ ...request, template: { ...request.template, files: { ...request.template.files, 'main.typ': source } } }), (error: TypstPdfError) => {
     assert.equal(error.code, 'COMPILATION');
     assert.match(error.message, /alt|alternative/i);
     return true;
@@ -92,10 +105,11 @@ test('copyAssets defaults to a defensive copy; false mounts the caller views and
   const svg = request.assets['assets/chart.svg'];
   assert.notEqual(prepareRequest(request).files.get('/assets/chart.svg'), svg);
   assert.notEqual(prepareRequest(request, { copyAssets: true }).files.get('/assets/chart.svg'), svg);
-  assert.deepEqual([...prepareRequest(request).files.get('/assets/chart.svg')], [...svg]);
+  assert.deepEqual([...prepareRequest(request).files.get('/assets/chart.svg')!], [...svg]);
   assert.equal(prepareRequest(request, { copyAssets: false }).files.get('/assets/chart.svg'), svg);
 
   const own = { copyAssets: false };
+  // @ts-expect-error an asset that is not a Uint8Array must be rejected at run time
   assert.throws(() => prepareRequest({ ...request, assets: { 'assets/a.bin': [1, 2] } }, own), hasCode('INVALID_REQUEST'));
   assert.throws(() => prepareRequest({ ...request, assets: { '/input.json': svg } }, own), hasCode('INVALID_REQUEST'));
   assert.throws(() => prepareRequest({ ...request, assets: { '../a.bin': svg } }, own), hasCode('INVALID_REQUEST'));
@@ -126,7 +140,7 @@ test('files, input and export options are isolated across success and failure', 
 
 test('returns source diagnostics and keeps successful warnings', async () => {
   const syntax = { ...request, template: { entrypoint: 'main.typ', files: { 'main.typ': '#let broken =' } } };
-  await assert.rejects(compiler.compile(syntax), error => {
+  await assert.rejects(compiler.compile(syntax), (error: TypstPdfError) => {
     assert.equal(error.code, 'COMPILATION');
     assert.ok(error.diagnostics.some(d => d.path?.includes('main.typ') && d.range));
     return true;
@@ -150,13 +164,13 @@ test('an object template without entrypoint defaults to main.typ', async () => {
   const files = { 'main.typ': '#import "partials/title.typ": title\n#title', 'partials/title.typ': '#let title = json("/input.json").title' };
   const result = await compiler.compile({ template: { files }, input: { title: 'Default entrypoint' } });
   assert.equal(Buffer.from(result.bytes.subarray(0, 5)).toString(), '%PDF-');
-  await assert.rejects(compiler.compile({ template: { files: { 'other.typ': 'x' } }, input: null }), error => {
+  await assert.rejects(compiler.compile({ template: { files: { 'other.typ': 'x' } }, input: null }), (error: TypstPdfError) => {
     assert.ok(hasCode('INVALID_REQUEST')(error));
     assert.match(error.message, /entrypoint was omitted and defaulted to main\.typ/);
     return true;
   });
   // An explicit entrypoint keeps its original error.
-  await assert.rejects(compiler.compile({ template: { entrypoint: 'other.typ', files: { 'main.typ': 'x' } }, input: null }), error => {
+  await assert.rejects(compiler.compile({ template: { entrypoint: 'other.typ', files: { 'main.typ': 'x' } }, input: null }), (error: TypstPdfError) => {
     assert.ok(hasCode('INVALID_REQUEST')(error));
     assert.match(error.message, /Entrypoint \/other\.typ must be a template file/);
     return true;
@@ -164,18 +178,20 @@ test('an object template without entrypoint defaults to main.typ', async () => {
 });
 
 test('a string template still obeys the normalised request rules', async () => {
-  await assert.rejects(compiler.compile({ template: 'x', input: null, assets: { 'main.typ': new Uint8Array([1]) } }), error => {
+  await assert.rejects(compiler.compile({ template: 'x', input: null, assets: { 'main.typ': new Uint8Array([1]) } }), (error: TypstPdfError) => {
     assert.ok(hasCode('INVALID_REQUEST')(error));
     assert.match(error.message, /Duplicate virtual path: \/main\.typ/);
     return true;
   });
-  for (const template of [null, undefined, 1, true, ['x'], new Map(), new (class Template { files = {}; })()]) {
-    await assert.rejects(compiler.compile({ template, input: null }), hasCode('INVALID_REQUEST'));
+  const templates: unknown[] = [null, undefined, 1, true, ['x'], new Map(), new (class Template { files = {}; })()];
+  for (const template of templates) {
+    // The cast stands in for a caller that bypasses the types; the compiler must still reject the value.
+    await assert.rejects(compiler.compile({ template: template as PdfTemplate, input: null }), hasCode('INVALID_REQUEST'));
   }
 });
 
 test('a compile error in a string template reports /main.typ', async () => {
-  await assert.rejects(compiler.compile({ template: '#let broken =', input: null }), error => {
+  await assert.rejects(compiler.compile({ template: '#let broken =', input: null }), (error: TypstPdfError) => {
     assert.equal(error.code, 'COMPILATION');
     assert.ok(error.diagnostics.some(d => d.path === '/main.typ' && d.range));
     return true;
@@ -190,7 +206,9 @@ test('each advertised single PDF standard reaches the exporter', async () => {
 });
 
 test('rejects unsupported options, reserved input collisions and unsafe paths', async () => {
-  for (const pdf of [{ pages: '1' }, { standards: ['ua-1', 'a-2b'] }, { standards: ['imaginary'] }, { features: ['a11y-extras'] }]) {
+  // Options the types do not allow (unknown fields, a made-up standard, two standards); the cast keeps them reachable at run time.
+  const unsupported = [{ pages: '1' }, { standards: ['ua-1', 'a-2b'] }, { standards: ['imaginary'] }, { features: ['a11y-extras'] }] as unknown as PdfOptions[];
+  for (const pdf of unsupported) {
     await assert.rejects(compiler.compile({ ...request, pdf }), hasCode('UNSUPPORTED_OPTION'));
   }
   await assert.rejects(compiler.compile({ ...request, pdf: { standards: ['ua-1'], tags: false } }), hasCode('INVALID_REQUEST'));
@@ -201,7 +219,7 @@ test('rejects unsupported options, reserved input collisions and unsafe paths', 
 });
 
 test('rejects non-JSON transport values without domain schema validation', async () => {
-  const cycle = {}; cycle.self = cycle;
+  const cycle: Record<string, unknown> = {}; cycle.self = cycle;
   for (const input of [undefined, { a: undefined }, { a: NaN }, 1n, new Date(), cycle, [ , 1]]) {
     await assert.rejects(compiler.compile({ ...request, input }), hasCode('INVALID_REQUEST'));
   }

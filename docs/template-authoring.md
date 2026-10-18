@@ -125,14 +125,15 @@ What a check does:
 - Nothing is written to disk. The samples exist only inside the compile, and `@typfolio/dev-tools` imports no file-system module. Writing the PDFs somewhere is up to the caller.
 - A checker runs one check at a time, like a compiler.
 
-A complete `node:test` recipe, which reads the template folder and its schema from disk:
+A complete `node:test` recipe, which reads the template folder and its schema from disk. It is TypeScript that Node runs by stripping the types (`node --test test/report.template.test.ts` on Node 22.18 or newer; no build step), and it type-checks under `strict`:
 
-```js
-// test/report.template.test.mjs
+```ts
+// test/report.template.test.ts
 import assert from 'node:assert/strict';
 import { after, before, test } from 'node:test';
 import { readdir, readFile } from 'node:fs/promises';
 import { createTemplateChecker } from '@typfolio/dev-tools';
+import type { TemplateChecker } from '@typfolio/dev-tools';
 
 const folder = new URL('../src/report/', import.meta.url);
 const font = new Uint8Array(await readFile(new URL('../fonts/report.otf', import.meta.url)));
@@ -140,14 +141,14 @@ const wasm = await readFile(new URL(import.meta.resolve('@typfolio/wasm/compiler
 
 // Every .typ file of the folder, plus the schema, keyed by their path relative to main.typ.
 async function loadTemplate() {
-  const files = {};
+  const files: Record<string, string> = {};
   for (const path of await readdir(folder, { recursive: true })) {
     if (path.endsWith('.typ') || path === 'report.schema.json') files[path.split('\\').join('/')] = await readFile(new URL(path, folder), 'utf8');
   }
   return { files };
 }
 
-let checker;
+let checker: TemplateChecker;
 before(async () => { checker = await createTemplateChecker({ wasm, fonts: [font] }); });
 after(() => checker.dispose());
 

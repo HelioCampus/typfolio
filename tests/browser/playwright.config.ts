@@ -11,7 +11,7 @@ const startTimeout = 180_000;
 
 export default defineConfig({
   testDir: fileURLToPath(new URL('.', import.meta.url)),
-  testMatch: '*.spec.mjs',
+  testMatch: '*.spec.ts',
   outputDir: root + 'test-results',
   timeout: 120_000,
   expect: { timeout: 90_000 },

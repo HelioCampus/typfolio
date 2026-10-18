@@ -2,11 +2,12 @@ import assert from 'node:assert/strict';
 import { after, before, test } from 'node:test';
 import { readFile } from 'node:fs/promises';
 import { createCompiler, templateFromFiles, TypstPdfError } from '../dist/index.js';
+import type { PdfCompiler } from '../dist/index.js';
 
 const root = new URL('../../../', import.meta.url);
-const file = path => readFile(new URL(path, root));
-const invalid = error => error instanceof TypstPdfError && error.code === 'INVALID_REQUEST';
-let compiler;
+const file = (path: string) => readFile(new URL(path, root));
+const invalid = (error: unknown): error is TypstPdfError => error instanceof TypstPdfError && error.code === 'INVALID_REQUEST';
+let compiler!: PdfCompiler;
 before(async () => {
   compiler = await createCompiler({
     wasm: await file('packages/wasm/generated/compiler_bg.wasm'),
@@ -51,7 +52,9 @@ test('entrypoint is passed through only when given', () => {
 
 test('rejects an empty record, bad keys and non-string values', () => {
   assert.throws(() => templateFromFiles({}), invalid);
+  // @ts-expect-error a missing record must be rejected at run time
   assert.throws(() => templateFromFiles(undefined), invalid);
+  // @ts-expect-error an array is not a record of files
   assert.throws(() => templateFromFiles(['x']), invalid);
   assert.throws(() => templateFromFiles({ './a/main.typ': 'x', './b/p.typ': 'y' }, { base: './a' }), error =>
     invalid(error) && /\.\/b\/p\.typ is not under base/.test(error.message));
@@ -63,8 +66,10 @@ test('rejects an empty record, bad keys and non-string values', () => {
 });
 
 test('a non-string value hints at the glob options', () => {
-  for (const value of [() => Promise.resolve('x'), { default: 'x' }, null, 1]) {
-    assert.throws(() => templateFromFiles({ './a/main.typ': value }), error => {
+  const values: unknown[] = [() => Promise.resolve('x'), { default: 'x' }, null, 1];
+  for (const value of values) {
+    // The cast stands in for a glob loaded without the raw-string options.
+    assert.throws(() => templateFromFiles({ './a/main.typ': value as string }), (error: TypstPdfError) => {
       assert.ok(invalid(error));
       assert.match(error.message, /\.\/a\/main\.typ/);
       assert.match(error.message, /query: '\?raw', import: 'default', eager: true/);
@@ -76,10 +81,10 @@ test('a non-string value hints at the glob options', () => {
 test('does not duplicate request validation', async () => {
   // These shapes are accepted by the loader and rejected by the compiler's own rules.
   const missing = templateFromFiles({ './a/other.typ': 'x' });
-  await assert.rejects(compiler.compile({ template: missing, input: null }), error =>
+  await assert.rejects(compiler.compile({ template: missing, input: null }), (error: TypstPdfError) =>
     invalid(error) && /defaulted to main\.typ/.test(error.message));
   const reserved = templateFromFiles({ './a/main.typ': 'x', './a/input.json': '{}' });
-  await assert.rejects(compiler.compile({ template: reserved, input: null }), error =>
+  await assert.rejects(compiler.compile({ template: reserved, input: null }), (error: TypstPdfError) =>
     invalid(error) && /input\.json is reserved/.test(error.message));
 });
 

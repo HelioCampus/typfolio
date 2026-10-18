@@ -1,7 +1,10 @@
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
+import type { AddressInfo } from 'node:net';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
+import type { PdfRequest, PdfResult } from '@typfolio/core';
+import type { RuntimeMessage } from '../dist/protocol.js';
 import { transferableBuffers } from '../dist/snapshot.js';
 import {
   collectBatch,
@@ -9,32 +12,60 @@ import {
   createWorkerClient,
   TypfolioWorkerError,
 } from '../dist/index.js';
+import type {
+  CreateWorkerClientOptions,
+  PdfBatchOutcome,
+  PdfBatchProgress,
+  WorkerErrorCode,
+  WorkerFontSource,
+} from '../dist/index.js';
+import type { SerializedCompilerOptions } from '../dist/types.js';
 import { installWorkerRuntime } from '../dist/worker-runtime.js';
 
-const request = title => ({
+type TitleRequest = PdfRequest<{ title: string }>;
+type AssetRequest = TitleRequest & { assets: Record<string, Uint8Array> };
+type RuntimeFailure = Extract<RuntimeMessage, { type: 'failure' }>;
+type MessageListener = (event: MessageEvent<unknown>) => void;
+
+/**
+ * A message as a worker receives it from the client. The protocol's union is flattened: the tests check `type`
+ * (with an assertion the compiler cannot follow) before they read the fields of one variant.
+ */
+interface ReceivedMessage {
+  protocol: 1;
+  type: 'initialize' | 'compile';
+  id: number;
+  compiler: SerializedCompilerOptions;
+  request: AssetRequest;
+}
+
+type WorkerEventType = 'message' | 'error' | 'messageerror';
+
+const request = (title: string): TitleRequest => ({
   template: { entrypoint: 'main.typ', files: { 'main.typ': '#input.title' } },
   input: { title },
 });
 
-const result = title => ({
+const result = (title: string): PdfResult => ({
   bytes: new Uint8Array([37, 80, 68, 70, 45]),
   diagnostics: [],
   metadata: { title },
 });
 
 class FakeWorker {
-  listeners = { message: [], error: [], messageerror: [] };
-  messages = []; // what the worker receives: a structured clone, with transferred buffers moved
-  posted = []; // the objects the client handed to postMessage, whose transferred buffers are now detached
-  transfers = [];
+  listeners: Record<WorkerEventType, ((event: unknown) => void)[]> = { message: [], error: [], messageerror: [] };
+  messages: ReceivedMessage[] = []; // what the worker receives: a structured clone, with transferred buffers moved
+  posted: ReceivedMessage[] = []; // the objects the client handed to postMessage, whose transferred buffers are now detached
+  transfers: Transferable[][] = [];
   terminated = false;
+  handle: ((message: ReceivedMessage, worker: FakeWorker) => void) | undefined;
 
-  constructor(handle) { this.handle = handle; }
+  constructor(handle?: (message: ReceivedMessage, worker: FakeWorker) => void) { this.handle = handle; }
 
-  addEventListener(type, listener) { this.listeners[type].push(listener); }
+  addEventListener(type: WorkerEventType, listener: (event: unknown) => void) { this.listeners[type].push(listener); }
 
   // Like a real Worker: the receiver gets a clone, and every buffer in the transfer list is detached here.
-  postMessage(message, transfer = []) {
+  postMessage(message: ReceivedMessage, transfer: Transferable[] = []) {
     const received = structuredClone(message, { transfer });
     this.posted.push(message);
     this.transfers.push(transfer);
@@ -42,7 +73,7 @@ class FakeWorker {
     this.handle?.(received, this);
   }
 
-  emit(type, value) {
+  emit(type: WorkerEventType, value: unknown) {
     const event = type === 'message' ? { data: value } : value;
     for (const listener of this.listeners[type]) listener(event);
   }
@@ -50,29 +81,32 @@ class FakeWorker {
   terminate() { this.terminated = true; }
 }
 
-function ready(worker) {
+// FakeWorker has the part of the Worker interface that the client uses, and nothing else.
+const asWorkerFactory = (factory: () => FakeWorker) => factory as unknown as NonNullable<CreateWorkerClientOptions['workerFactory']>;
+
+function ready(worker: FakeWorker) {
   worker.emit('message', { protocol: 1, type: 'ready' });
 }
 
-function success(worker, id, title) {
+function success(worker: FakeWorker, id: number, title: string) {
   worker.emit('message', { protocol: 1, type: 'result', id, result: result(title) });
 }
 
-function options(workerFactory, extra = {}) {
+function options(workerFactory: () => FakeWorker, extra: Partial<CreateWorkerClientOptions> = {}): CreateWorkerClientOptions {
   return {
     compiler: { wasm: 'https://example.test/compiler.wasm', fonts: [new Uint8Array([1])] },
-    workerFactory,
+    workerFactory: asWorkerFactory(workerFactory),
     ...extra,
   };
 }
 
-function assertCode(error, code) {
+function assertCode(error: unknown, code: WorkerErrorCode) {
   assert.ok(error instanceof TypfolioWorkerError);
   assert.equal(error.code, code);
   return true;
 }
 
-async function waitFor(predicate) {
+async function waitFor(predicate: () => boolean) {
   for (let attempt = 0; attempt < 20; attempt += 1) {
     if (predicate()) return;
     await new Promise(resolve => setTimeout(resolve, 0));
@@ -89,13 +123,13 @@ test('queues work in order, keeps one worker warm, and snapshots requests', asyn
   firstRequest.input.title = 'Mutated';
 
   ready(worker);
-  const firstMessage = worker.messages.at(-1);
+  const firstMessage = worker.messages.at(-1)!;
   assert.equal(firstMessage.type, 'compile');
   assert.equal(firstMessage.request.input.title, 'First');
   assert.equal(worker.messages.filter(message => message.type === 'compile').length, 1);
 
   success(worker, firstMessage.id, 'First');
-  const secondMessage = worker.messages.at(-1);
+  const secondMessage = worker.messages.at(-1)!;
   assert.equal(secondMessage.type, 'compile');
   assert.equal(secondMessage.request.input.title, 'Second');
   success(worker, secondMessage.id, 'Second');
@@ -112,7 +146,7 @@ test('a string template crosses the worker boundary unchanged', async () => {
   const client = createWorkerClient(options(() => worker));
   const pending = client.compile({ template: '#input.title', input: { title: 'String' } });
   ready(worker);
-  const message = worker.messages.at(-1);
+  const message = worker.messages.at(-1)!;
   assert.equal(message.type, 'compile');
   assert.equal(message.request.template, '#input.title');
   success(worker, message.id, 'String');
@@ -125,7 +159,7 @@ test('cancels a queued job without disturbing active work', async () => {
   const client = createWorkerClient(options(() => worker));
   const active = client.compile(request('Active'));
   ready(worker);
-  const activeMessage = worker.messages.at(-1);
+  const activeMessage = worker.messages.at(-1)!;
   const controller = new AbortController();
   const queued = client.compile(request('Queued'), { signal: controller.signal });
   controller.abort('not needed');
@@ -138,7 +172,7 @@ test('cancels a queued job without disturbing active work', async () => {
 });
 
 test('hard-cancels active work, replaces the worker, and preserves queued jobs', async () => {
-  const workers = [];
+  const workers: FakeWorker[] = [];
   const client = createWorkerClient(options(() => {
     const worker = new FakeWorker();
     workers.push(worker);
@@ -151,18 +185,18 @@ test('hard-cancels active work, replaces the worker, and preserves queued jobs',
   controller.abort();
 
   await assert.rejects(cancelled, error => assertCode(error, 'ABORTED'));
-  await new Promise(resolve => queueMicrotask(resolve));
+  await new Promise<void>(resolve => queueMicrotask(resolve));
   assert.equal(workers[0].terminated, true);
   assert.equal(workers.length, 2);
   ready(workers[1]);
-  const message = workers[1].messages.at(-1);
+  const message = workers[1].messages.at(-1)!;
   success(workers[1], message.id, 'Keep');
   assert.equal((await waiting).metadata.title, 'Keep');
   await client.dispose();
 });
 
 test('enforces active timeouts by terminating and replacing the worker', async () => {
-  const workers = [];
+  const workers: FakeWorker[] = [];
   const client = createWorkerClient(options(() => {
     const worker = new FakeWorker();
     workers.push(worker);
@@ -173,17 +207,17 @@ test('enforces active timeouts by terminating and replacing the worker', async (
   const waiting = client.compile(request('Next'), { timeoutMs: 100 });
 
   await assert.rejects(timedOut, error => assertCode(error, 'TIMEOUT'));
-  await new Promise(resolve => queueMicrotask(resolve));
+  await new Promise<void>(resolve => queueMicrotask(resolve));
   assert.equal(workers[0].terminated, true);
   ready(workers[1]);
-  const message = workers[1].messages.at(-1);
+  const message = workers[1].messages.at(-1)!;
   success(workers[1], message.id, 'Next');
   assert.equal((await waiting).metadata.title, 'Next');
   await client.dispose();
 });
 
 test('replaces a crashed worker and settles its active job', async () => {
-  const workers = [];
+  const workers: FakeWorker[] = [];
   const client = createWorkerClient(options(() => {
     const worker = new FakeWorker();
     workers.push(worker);
@@ -197,7 +231,7 @@ test('replaces a crashed worker and settles its active job', async () => {
   await assert.rejects(failed, error => assertCode(error, 'WORKER'));
   await waitFor(() => workers.length === 2);
   ready(workers[1]);
-  const message = workers[1].messages.at(-1);
+  const message = workers[1].messages.at(-1)!;
   success(workers[1], message.id, 'Recover');
   assert.equal((await waiting).metadata.title, 'Recover');
   await client.dispose();
@@ -209,7 +243,7 @@ test('bounds the waiting queue', async () => {
   const first = client.compile(request('First'));
   await assert.rejects(client.compile(request('Overflow')), error => assertCode(error, 'QUEUE_FULL'));
   ready(worker);
-  const message = worker.messages.at(-1);
+  const message = worker.messages.at(-1)!;
   success(worker, message.id, 'First');
   await first;
   await client.dispose();
@@ -236,7 +270,7 @@ test('transports compile failures without replacing a healthy worker', async () 
   const client = createWorkerClient(options(() => worker));
   const failed = client.compile(request('Invalid'));
   ready(worker);
-  const failedMessage = worker.messages.at(-1);
+  const failedMessage = worker.messages.at(-1)!;
   worker.emit('message', {
     protocol: 1,
     type: 'failure',
@@ -246,7 +280,7 @@ test('transports compile failures without replacing a healthy worker', async () 
   await assert.rejects(failed, error => assertCode(error, 'COMPILATION'));
 
   const next = client.compile(request('Valid'));
-  const nextMessage = worker.messages.at(-1);
+  const nextMessage = worker.messages.at(-1)!;
   success(worker, nextMessage.id, 'Valid');
   assert.equal((await next).metadata.title, 'Valid');
   assert.equal(worker.terminated, false);
@@ -254,7 +288,7 @@ test('transports compile failures without replacing a healthy worker', async () 
 });
 
 test('runs on a bounded pool and hard cancellation preserves unrelated active work', async () => {
-  const workers = [];
+  const workers: FakeWorker[] = [];
   const client = createWorkerClient(options(() => {
     const worker = new FakeWorker();
     workers.push(worker);
@@ -268,8 +302,8 @@ test('runs on a bounded pool and hard cancellation preserves unrelated active wo
   assert.equal(workers.length, 2);
   ready(workers[0]);
   ready(workers[1]);
-  const firstMessage = workers[0].messages.at(-1);
-  const secondMessage = workers[1].messages.at(-1);
+  const firstMessage = workers[0].messages.at(-1)!;
+  const secondMessage = workers[1].messages.at(-1)!;
   controller.abort();
 
   await assert.rejects(first, error => assertCode(error, 'ABORTED'));
@@ -300,7 +334,7 @@ test('rejects uncloneable accessors without invoking them or creating a worker',
   await client.dispose();
 });
 
-function automaticWorker(delays = {}) {
+function automaticWorker(delays: Record<string, number> = {}) {
   return new FakeWorker((message, worker) => {
     if (message.type === 'initialize') {
       queueMicrotask(() => ready(worker));
@@ -323,13 +357,13 @@ function automaticWorker(delays = {}) {
 }
 
 test('streams batch outcomes in completion order and reports progress', async () => {
-  const progress = [];
+  const progress: PdfBatchProgress<string>[] = [];
   const client = createWorkerClient(options(
     () => automaticWorker({ First: 15, Second: 1, Third: 1 }),
     { workerCount: 2 },
   ));
   const jobs = ['First', 'Second', 'Third', 'Error'].map(title => ({ id: title, request: request(title) }));
-  const outcomes = [];
+  const outcomes: PdfBatchOutcome<string>[] = [];
   for await (const outcome of compileBatch(client, jobs, {
     onProgress: value => progress.push(value),
   })) outcomes.push(outcome);
@@ -360,7 +394,7 @@ test('collects batch outcomes in input order', async () => {
 });
 
 test('stopping batch iteration interrupts remaining Effect work', async () => {
-  const workers = [];
+  const workers: FakeWorker[] = [];
   const client = createWorkerClient(options(() => {
     const worker = new FakeWorker();
     workers.push(worker);
@@ -375,18 +409,18 @@ test('stopping batch iteration interrupts remaining Effect work', async () => {
   await waitFor(() => workers.length === 2);
   ready(workers[0]);
   ready(workers[1]);
-  const firstMessage = workers[0].messages.at(-1);
+  const firstMessage = workers[0].messages.at(-1)!;
   success(workers[0], firstMessage.id, 'First');
 
   assert.equal((await firstOutcome).value.id, 'first');
-  await iterator.return();
+  await iterator.return!();
   await waitFor(() => workers[1].terminated);
   assert.equal(workers[0].terminated, false);
   await client.dispose();
 });
 
 test('batch cancellation cancels only its jobs on a shared client', async () => {
-  const workers = [];
+  const workers: FakeWorker[] = [];
   const client = createWorkerClient(options(() => {
     const worker = new FakeWorker();
     workers.push(worker);
@@ -401,7 +435,7 @@ test('batch cancellation cancels only its jobs on a shared client', async () => 
     { id: 'batch-2', request: request('Batch 2') },
   ], { signal: controller.signal });
   const collecting = (async () => {
-    const values = [];
+    const values: PdfBatchOutcome<string>[] = [];
     for await (const value of stream) values.push(value);
     return values;
   })();
@@ -412,15 +446,15 @@ test('batch cancellation cancels only its jobs on a shared client', async () => 
   const outcomes = await collecting;
   assert.ok(outcomes.every(outcome => outcome.status === 'cancelled'));
   assert.equal(workers[0].terminated, false);
-  const unrelatedMessage = workers[0].messages.find(message => message.type === 'compile');
+  const unrelatedMessage = workers[0].messages.find(message => message.type === 'compile')!;
   success(workers[0], unrelatedMessage.id, 'Unrelated');
   assert.equal((await unrelated).metadata.title, 'Unrelated');
   await client.dispose();
 });
 
-const assetRequest = (title, assets) => ({ ...request(title), assets });
+const assetRequest = (title: string, assets: Record<string, Uint8Array>): AssetRequest => ({ ...request(title), assets });
 
-function compileMessages(worker) {
+function compileMessages(worker: FakeWorker) {
   return worker.messages.filter(message => message.type === 'compile');
 }
 
@@ -442,7 +476,7 @@ test('transfers the snapshot buffers, leaves the caller buffers intact, and the 
 
   const [message] = compileMessages(worker);
   const [posted] = worker.posted.filter(candidate => candidate.type === 'compile');
-  const transfer = worker.transfers.at(-1);
+  const transfer = worker.transfers.at(-1)!;
   assert.equal(transfer.length, 3, 'one transfer entry per distinct buffer');
   assert.equal(new Set(transfer).size, 3);
 
@@ -468,7 +502,7 @@ test('transfers the snapshot buffers, leaves the caller buffers intact, and the 
   await pending;
   // The caller can submit the same buffers again.
   const again = client.compile(callerRequest);
-  const next = compileMessages(worker).at(-1);
+  const next = compileMessages(worker).at(-1)!;
   assert.deepEqual(next.request.assets['big.bin'], expected[0]);
   success(worker, next.id, 'Assets');
   await again;
@@ -488,8 +522,8 @@ test('a SharedArrayBuffer asset is not transferred and still arrives intact', as
   const [message] = compileMessages(worker);
   assert.deepEqual([...message.request.assets['shared.bin']], [5, 6, 7, 8]);
   assert.deepEqual([...message.request.assets['ordinary.bin']], [1, 2, 3]);
-  assert.equal(worker.transfers.at(-1).length, 1);
-  assert.ok(worker.transfers.at(-1).every(buffer => buffer instanceof ArrayBuffer));
+  assert.equal(worker.transfers.at(-1)!.length, 1);
+  assert.ok(worker.transfers.at(-1)!.every(buffer => buffer instanceof ArrayBuffer));
   assert.deepEqual([...view], [5, 6, 7, 8]);
   assert.deepEqual([...ordinary], [1, 2, 3]);
   success(worker, message.id, 'Shared');
@@ -510,7 +544,9 @@ test('transferableBuffers lists distinct transferable buffers only', () => {
       b: new Uint8Array(buffer, 4, 4),
       shared: new Uint8Array(new SharedArrayBuffer(2)),
       detached: detachedView,
+      // @ts-expect-error not bytes: the helper skips it
       notBytes: null,
+      // @ts-expect-error not bytes either
       alsoNotBytes: 3,
     },
   });
@@ -521,18 +557,19 @@ test('transferableBuffers lists distinct transferable buffers only', () => {
 test('a malformed asset value does not break posting; the worker side rejects it', async () => {
   const worker = new FakeWorker();
   const client = createWorkerClient(options(() => worker));
+  // @ts-expect-error a malformed asset value must still reach the worker, which rejects it
   const pending = client.compile(assetRequest('Odd', { 'odd.bin': null }));
   ready(worker);
   const [message] = compileMessages(worker);
   assert.equal(message.request.assets['odd.bin'], null);
-  assert.equal(worker.transfers.at(-1).length, 0);
+  assert.equal(worker.transfers.at(-1)!.length, 0);
   success(worker, message.id, 'Odd');
   await pending;
   await client.dispose();
 });
 
 test('a request is posted once: cancelled, timed-out and crashed jobs are rejected, not re-posted', async () => {
-  const workers = [];
+  const workers: FakeWorker[] = [];
   const client = createWorkerClient(options(() => {
     const worker = new FakeWorker();
     workers.push(worker);
@@ -565,16 +602,17 @@ test('a request is posted once: cancelled, timed-out and crashed jobs are reject
 });
 
 test('assets are copied once on the client, for compile and for each batch job', async () => {
-  const requestClones = [];
+  const requestClones: unknown[] = [];
   const original = globalThis.structuredClone;
-  globalThis.structuredClone = (value, ...rest) => {
-    if (value?.template !== undefined) requestClones.push(value); // a request, not a worker message
+  const spy = (value: unknown, ...rest: [StructuredSerializeOptions?]) => {
+    if ((value as { template?: unknown } | null | undefined)?.template !== undefined) requestClones.push(value); // a request, not a worker message
     return original(value, ...rest);
   };
+  globalThis.structuredClone = spy as typeof structuredClone;
   try {
     const worker = automaticWorker();
     const client = createWorkerClient(options(() => worker));
-    const make = title => assetRequest(title, { 'a.bin': new Uint8Array(64).fill(7) });
+    const make = (title: string) => assetRequest(title, { 'a.bin': new Uint8Array(64).fill(7) });
 
     const single = make('Single');
     await client.compile(single);
@@ -600,11 +638,11 @@ test('assets are copied once on the client, for compile and for each batch job',
   }
 });
 
-async function withLocation(href, run) {
+async function withLocation<Result>(href: string, run: () => Result | Promise<Result>) {
   const original = Object.getOwnPropertyDescriptor(globalThis, 'location');
   Object.defineProperty(globalThis, 'location', { value: { href }, configurable: true, writable: true });
   try { return await run(); } finally {
-    if (original) Object.defineProperty(globalThis, 'location', original); else delete globalThis.location;
+    if (original) Object.defineProperty(globalThis, 'location', original); else Reflect.deleteProperty(globalThis, 'location');
   }
 }
 
@@ -617,7 +655,7 @@ test('font URLs travel as strings: bytes are copied, a URL becomes its href, a s
         wasm: 'https://example.test/compiler.wasm',
         fonts: [bytes, new URL('https://fonts.test/a.otf'), 'https://fonts.test/b.otf', 'fonts/c.otf', '/d.otf'],
       },
-      workerFactory: () => worker,
+      workerFactory: asWorkerFactory(() => worker),
     });
     assert.ok(!(created instanceof Promise), 'creating a worker client stays synchronous');
     return created;
@@ -638,7 +676,7 @@ test('font URLs travel as strings: bytes are copied, a URL becomes its href, a s
   assert.deepEqual([...fonts[0]], [1, 2, 3]);
   assert.doesNotThrow(() => structuredClone(initialize), 'the message is structured-cloneable');
   ready(worker);
-  success(worker, worker.messages.at(-1).id, 'Fonts');
+  success(worker, worker.messages.at(-1)!.id, 'Fonts');
   await pending;
   await client.dispose();
 });
@@ -646,9 +684,10 @@ test('font URLs travel as strings: bytes are copied, a URL becomes its href, a s
 test('a font string that cannot be resolved fails synchronously, before any worker exists', () => {
   assert.equal(globalThis.location, undefined);
   let created = 0;
-  const attempt = fonts => () => createWorkerClient({
-    compiler: { wasm: 'https://example.test/compiler.wasm', fonts },
-    workerFactory: () => { created += 1; return new FakeWorker(); },
+  // The values include fonts the types do not allow; each must be rejected at run time.
+  const attempt = (fonts: unknown[]) => () => createWorkerClient({
+    compiler: { wasm: 'https://example.test/compiler.wasm', fonts: fonts as WorkerFontSource[] },
+    workerFactory: asWorkerFactory(() => { created += 1; return new FakeWorker(); }),
   });
   assert.throws(attempt(['fonts/relative.otf']), TypeError);
   assert.throws(attempt(['']), TypeError);
@@ -660,7 +699,7 @@ test('a font string that cannot be resolved fails synchronously, before any work
 });
 
 test('an INITIALIZATION failure reported by the worker rejects the job with that code and message', async () => {
-  const workers = [];
+  const workers: FakeWorker[] = [];
   const client = createWorkerClient(options(() => {
     const worker = new FakeWorker();
     workers.push(worker);
@@ -673,7 +712,7 @@ test('an INITIALIZATION failure reported by the worker rejects the job with that
     type: 'failure',
     error: { code: 'INITIALIZATION', message, diagnostics: [] },
   });
-  await assert.rejects(failed, error => {
+  await assert.rejects(failed, (error: TypfolioWorkerError) => {
     assertCode(error, 'INITIALIZATION');
     assert.equal(error.message, message);
     return true;
@@ -683,31 +722,32 @@ test('an INITIALIZATION failure reported by the worker rejects the job with that
 });
 
 // A realm accepts one WASM source value, so the runtime tests share one buffer.
-let wasmBytes;
-const loadWasm = async root => wasmBytes ??= await readFile(new URL('packages/wasm/generated/compiler_bg.wasm', root));
+let wasmBytes: Buffer | undefined;
+const loadWasm = async (root: URL) => wasmBytes ??= await readFile(new URL('packages/wasm/generated/compiler_bg.wasm', root));
 
 test('the worker runtime hands font URLs to core, which fetches them inside the worker', async () => {
   const root = new URL('../../../', import.meta.url);
   const font = await readFile(new URL('fixtures/fonts/LibertinusSerif-Regular.otf', root));
   const wasm = await loadWasm(root);
-  const requested = [];
+  const requested: (string | undefined)[] = [];
   const server = createServer((incoming, response) => {
     requested.push(incoming.url);
     if (incoming.url === '/font.otf') response.writeHead(200).end(font);
     else response.writeHead(404).end();
   });
-  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
-  const origin = `http://127.0.0.1:${server.address().port}`;
+  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+  const origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
   try {
-    const run = fonts => new Promise(resolve => {
-      let listener;
+    const run = (fonts: string[]) => new Promise<RuntimeMessage>(resolve => {
+      let listener = undefined as MessageListener | undefined;
       installWorkerRuntime({
         addEventListener: (_type, handler) => { listener = handler; },
         postMessage: resolve,
       });
-      listener({ data: { protocol: 1, type: 'initialize', compiler: { wasm, fonts } } });
+      // The runtime reads only `data` from the event.
+      listener!({ data: { protocol: 1, type: 'initialize', compiler: { wasm, fonts } } } as MessageEvent<unknown>);
     });
-    const failure = await run([`${origin}/missing.otf`]);
+    const failure = await run([`${origin}/missing.otf`]) as RuntimeFailure;
     assert.equal(failure.type, 'failure');
     assert.equal(failure.error.code, 'INITIALIZATION');
     assert.ok(failure.error.message.includes(`${origin}/missing.otf`));
@@ -722,13 +762,15 @@ test('the worker runtime compiles transferred assets, mounting them without a se
   const wasm = await loadWasm(root);
   const font = await readFile(new URL('fixtures/fonts/LibertinusSerif-Regular.otf', root));
   const svg = new Uint8Array(await readFile(new URL('fixtures/basic/chart.svg', root)));
-  const messages = [];
-  let listener;
-  const settled = (type, id) => new Promise((resolve, reject) => {
+  const messages: RuntimeMessage[] = [];
+  let listener = undefined as MessageListener | undefined;
+  // `ready` has no id; every other message names the job it belongs to, or none for a failure of the worker itself.
+  const idOf = (message: RuntimeMessage) => (message as { id?: number }).id;
+  const settled = <Type extends RuntimeMessage['type']>(type: Type, id: number | undefined) => new Promise<Extract<RuntimeMessage, { type: Type }>>((resolve, reject) => {
     const poll = () => {
-      const found = messages.find(message => message.type === type && message.id === id);
-      const failed = messages.find(message => message.type === 'failure' && message.id === undefined);
-      if (found) resolve(found); else if (failed) reject(new Error(failed.error.message)); else setTimeout(poll, 5);
+      const found = messages.find(message => message.type === type && idOf(message) === id);
+      const failed = messages.find(message => message.type === 'failure' && message.id === undefined) as RuntimeFailure | undefined;
+      if (found) resolve(found as Extract<RuntimeMessage, { type: Type }>); else if (failed) reject(new Error(failed.error.message)); else setTimeout(poll, 5);
     };
     poll();
   });
@@ -736,12 +778,14 @@ test('the worker runtime compiles transferred assets, mounting them without a se
     addEventListener: (_type, handler) => { listener = handler; },
     postMessage: message => messages.push(message),
   });
-  listener({ data: { protocol: 1, type: 'initialize', compiler: { wasm, fonts: [new Uint8Array(font)] } } });
+  // The runtime reads only `data` from the event.
+  const dispatch = (data: unknown) => listener!({ data } as MessageEvent<unknown>);
+  dispatch({ protocol: 1, type: 'initialize', compiler: { wasm, fonts: [new Uint8Array(font)] } });
   await settled('ready', undefined);
 
   const template = '#set text(font: "Libertinus Serif")\n#image("chart.svg", alt: "A bar")';
-  const send = (id, assets) => listener({
-    data: { protocol: 1, type: 'compile', id, request: { template, input: null, assets } },
+  const send = (id: number, assets: Record<string, Uint8Array>) => dispatch({
+    protocol: 1, type: 'compile', id, request: { template, input: null, assets },
   });
   send(1, { 'chart.svg': svg });
   const done = await settled('result', 1);

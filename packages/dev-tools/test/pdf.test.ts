@@ -5,18 +5,22 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { createCompiler, pdfStandards, TypstPdfError } from '@typfolio/core';
+import type { ErrorCode, PdfCompiler, PdfOptions, PdfRequest } from '@typfolio/core';
 import * as main from '../dist/index.js';
 import * as pdfModule from '../dist/pdf.js';
 import { inspectPdf } from '../dist/pdf.js';
 
 const root = new URL('../../../', import.meta.url);
-const file = path => readFile(new URL(path, root));
-const text = async path => (await file(path)).toString();
-const hasCode = code => error => error instanceof TypstPdfError && error.code === code;
+type PdfModule = typeof import('../dist/pdf.js');
+
+const file = (path: string) => readFile(new URL(path, root));
+const text = async (path: string) => (await file(path)).toString();
+const hasCode = (code: ErrorCode) => (error: unknown) => error instanceof TypstPdfError && error.code === code;
 const timestamp = 1700000000;
 
-let compiler, request;
-const compile = async (overrides = {}) => (await compiler.compile({ ...request, ...overrides })).bytes;
+let compiler!: PdfCompiler;
+let request!: PdfRequest<{ title: string }>;
+const compile = async (overrides: Partial<PdfRequest<unknown>> = {}) => (await compiler.compile({ ...request, ...overrides })).bytes;
 before(async () => {
   const wasm = await file('packages/wasm/generated/compiler_bg.wasm');
   const fonts = await Promise.all(['Regular', 'Bold'].map(style => file(`fixtures/fonts/LibertinusSerif-${style}.otf`)));
@@ -101,7 +105,7 @@ test('each advertised PDF standard is declared by the file it produces', async (
       assert.equal(new TextDecoder('latin1').decode(bytes.subarray(0, 8)), `%PDF-${standard}`, standard);
       assert.deepEqual(report.standard, { pdfUa: undefined, pdfA: undefined }, standard);
     } else if (standard.startsWith('a-')) {
-      const expected = { part: Number(standard[2]) };
+      const expected: { part: number; conformance?: string } = { part: Number(standard[2]) };
       if (standard.length > 3) expected.conformance = standard[3].toUpperCase();
       assert.deepEqual(report.standard.pdfA, expected, standard);
     } else {
@@ -112,7 +116,7 @@ test('each advertised PDF standard is declared by the file it produces', async (
 });
 
 test('reports the headings and PDF/UA declaration of the outcome-sets fixture', async () => {
-  const input = JSON.parse(await text('fixtures/outcome-sets/input.json'));
+  const input: { document: { title: string } } = JSON.parse(await text('fixtures/outcome-sets/input.json'));
   const bytes = (await compiler.compile({
     template: { entrypoint: 'main.typ', files: {
       'main.typ': await text('fixtures/outcome-sets/main.typ'),
@@ -131,7 +135,7 @@ test('reports the headings and PDF/UA declaration of the outcome-sets fixture', 
 });
 
 const levels = '#set text(font: "Libertinus Serif", lang: "en")\n#set document(title: "Levels")\n';
-const compileSource = async (source, pdf = {}) => (await compiler.compile({ template: source, input: null, pdf })).bytes;
+const compileSource = async (source: string, pdf: PdfOptions = {}) => (await compiler.compile({ template: source, input: null, pdf })).bytes;
 
 test('headings come back in document order with their levels and text', async () => {
   const report = await inspectPdf(await compileSource(levels + '= A\nText.\n== B\n=== C with *emphasis* and a long long long tail that wraps to a second line because it is longer than the line is wide'));
@@ -181,18 +185,20 @@ test('a font the file does not carry is reported as not embedded, and an untitle
 });
 
 test('input that is not a PDF rejects with a clear message', async () => {
-  await assert.rejects(inspectPdf(new TextEncoder().encode('hello, not a pdf')), error => {
+  await assert.rejects(inspectPdf(new TextEncoder().encode('hello, not a pdf')), (error: TypstPdfError) => {
     assert.ok(hasCode('INVALID_REQUEST')(error));
     assert.match(error.message, /not a PDF/);
     return true;
   });
   await assert.rejects(inspectPdf(new Uint8Array()), hasCode('INVALID_REQUEST'));
-  await assert.rejects(inspectPdf('%PDF-1.7'), error => hasCode('INVALID_REQUEST')(error) && /Uint8Array/.test(error.message));
+  // @ts-expect-error a string is not PDF bytes
+  await assert.rejects(inspectPdf('%PDF-1.7'), (error: TypstPdfError) => hasCode('INVALID_REQUEST')(error) && /Uint8Array/.test(error.message));
+  // @ts-expect-error null is not PDF bytes
   await assert.rejects(inspectPdf(null), hasCode('INVALID_REQUEST'));
 });
 
 test('a file with a PDF header that pdf.js cannot read rejects with INVALID_REQUEST', async () => {
-  await assert.rejects(inspectPdf(new TextEncoder().encode('%PDF-1.7\nthis is not a pdf body\n')), error => {
+  await assert.rejects(inspectPdf(new TextEncoder().encode('%PDF-1.7\nthis is not a pdf body\n')), (error: TypstPdfError) => {
     assert.ok(hasCode('INVALID_REQUEST')(error));
     assert.match(error.message, /could not read the PDF/);
     assert.ok(error.cause);
@@ -203,8 +209,8 @@ test('a file with a PDF header that pdf.js cannot read rejects with INVALID_REQU
 test('the main entry has no inspectPdf and never reaches the pdf module or pdfjs-dist', async () => {
   assert.equal('inspectPdf' in main, false);
   assert.deepEqual(Object.keys(pdfModule), ['inspectPdf']);
-  const seen = new Set();
-  const visit = async url => {
+  const seen = new Set<string>();
+  const visit = async (url: URL): Promise<void> => {
     if (seen.has(url.href)) return;
     seen.add(url.href);
     const source = await readFile(url, 'utf8');
@@ -225,18 +231,18 @@ test('a missing pdfjs-dist rejects with an install hint', async () => {
     await writeFile(join(directory, 'package.json'), '{"type":"module"}');
     await mkdir(join(directory, 'node_modules/@typfolio'), { recursive: true });
     await symlink(fileURLToPath(new URL('../../core', import.meta.url)), join(directory, 'node_modules/@typfolio/core'), 'dir');
-    const copy = await import(pathToFileURL(join(directory, 'pdf.js')).href);
+    const copy: PdfModule = await import(pathToFileURL(join(directory, 'pdf.js')).href);
     const bytes = await compile();
     for (let attempt = 0; attempt < 2; attempt += 1) {
-      await assert.rejects(copy.inspectPdf(bytes), error => {
+      await assert.rejects(copy.inspectPdf(bytes), (error: TypstPdfError) => {
         assert.ok(hasCode('INITIALIZATION')(error));
         assert.match(error.message, /install pdfjs-dist/i);
-        assert.equal(error.cause?.code, 'ERR_MODULE_NOT_FOUND');
+        assert.equal((error.cause as { code?: string } | undefined)?.code, 'ERR_MODULE_NOT_FOUND');
         return true;
       });
     }
     // Input checks come first, so they need no pdfjs-dist.
-    await assert.rejects(copy.inspectPdf(new Uint8Array(4)), error => hasCode('INVALID_REQUEST')(error) && /not a PDF/.test(error.message));
+    await assert.rejects(copy.inspectPdf(new Uint8Array(4)), (error: TypstPdfError) => hasCode('INVALID_REQUEST')(error) && /not a PDF/.test(error.message));
   } finally {
     await rm(directory, { recursive: true, force: true });
   }

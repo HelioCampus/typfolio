@@ -4,31 +4,44 @@ import { readdir, readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import init, { TypstCompilerBuilder } from '@typfolio/wasm';
 import { capabilities, createCompiler, TypstPdfError } from '../dist/index.js';
+import type { ErrorCode, PdfCompiler, PdfResult } from '../dist/index.js';
 import { typfolioPackage } from '../dist/typst-package.generated.js';
 import { sampleFile, sampleSource } from '../../dev-tools/dist/sample-source.generated.js'; // built before the tests run (`npm test` builds first)
 
 const root = new URL('../../../', import.meta.url);
-const file = path => readFile(new URL(path, root));
+const file = (path: string) => readFile(new URL(path, root));
 const packageRoot = new URL('packages/core/typst-packages/', root);
-const hasCode = code => error => error instanceof TypstPdfError && error.code === code;
+const hasCode = (code: ErrorCode) => (error: unknown) => error instanceof TypstPdfError && error.code === code;
 const encoder = new TextEncoder();
 const helper = '#import "@local/typfolio:0.1.0": input\n';
 // Prints the value as JSON in the document title so tests can assert on the whole structure.
-const dump = expression => `#set document(title: json.encode(${expression}, pretty: false))\n`;
-const sampleOf = result => JSON.parse(result.metadata.title);
+const dump = (expression: string) => `#set document(title: json.encode(${expression}, pretty: false))\n`;
+const sampleOf = (result: PdfResult): Record<string, unknown> => JSON.parse(result.metadata.title!);
 
-let compiler, wasm, raw;
+interface RawResult {
+  ok: boolean;
+  message: string;
+  title: string | undefined;
+}
+
+interface RawCompiler {
+  compile(files: Record<string, string>, entrypoint?: string, inputs?: string[][]): RawResult;
+}
+
+let compiler!: PdfCompiler;
+let wasm!: Buffer;
+let raw!: RawCompiler;
 
 // The editor branch cannot go through createCompiler (core always sets the marker), so this drives the
 // binding like engine.ts does, but with no marker and every shipped package file (including sample.typ) read from disk.
-async function createRaw() {
+async function createRaw(): Promise<RawCompiler> {
   const packageDir = '/@editor/typfolio';
   const builder = new TypstCompilerBuilder();
-  await builder.set_access_model(undefined, () => 0, () => false, path => path, path => { throw new Error(`Not supplied: ${path}`); });
+  await builder.set_access_model(undefined, () => 0, () => false, (path: string) => path, (path: string) => { throw new Error(`Not supplied: ${path}`); });
   await builder.set_package_registry(undefined, () => packageDir);
   await builder.add_raw_font(new Uint8Array(await file('fixtures/fonts/LibertinusSerif-Regular.otf')));
   const compiler = await builder.build();
-  const sources = Object.fromEntries(await Promise.all(['typst.toml', 'lib.typ', 'sample.typ'].map(async name =>
+  const sources = Object.fromEntries(await Promise.all(['typst.toml', 'lib.typ', 'sample.typ'].map(async (name): Promise<[string, Buffer]> =>
     [name, await readFile(new URL(`local/typfolio/0.1.0/${name}`, packageRoot))])));
   return {
     compile(files, entrypoint = '/main.typ', inputs = []) {
@@ -39,7 +52,7 @@ async function createRaw() {
         const world = compiler.snapshot('/', entrypoint, inputs);
         try {
           const compiled = world.compile(0, 3);
-          return { ok: !compiled.hasError, message: compiled.diagnostics.map(d => d.message).join('\n'), title: world.title(0) };
+          return { ok: !compiled.hasError, message: compiled.diagnostics.map((d: { message: string }) => d.message).join('\n'), title: world.title(0) };
         } finally { world.free(); }
       } finally { compiler.reset_shadow(); }
     },
@@ -101,7 +114,7 @@ before(async () => {
 });
 after(() => compiler?.dispose());
 
-const reportTemplate = path => `${helper}#let data = input(json.with("${path}"))\n#set document(title: data.title)\n= #data.title\n`;
+const reportTemplate = (path: string) => `${helper}#let data = input(json.with("${path}"))\n#set document(title: data.title)\n= #data.title\n`;
 
 test('the runtime branch returns request.input and needs no schema file in the request', async () => {
   const result = await compiler.compile({ template: reportTemplate('./report.schema.json'), input: { title: 'From the request' } });
@@ -156,7 +169,7 @@ test('the editor branch builds a shape-complete sample from a Zod-4-shaped schem
     '/report.schema.json': JSON.stringify(zodSchema),
   });
   assert.equal(result.ok, true, result.message);
-  assert.deepEqual(JSON.parse(result.title), zodSample);
+  assert.deepEqual(JSON.parse(result.title!), zodSample);
 });
 
 test('the editor branch resolves the schema path relative to a nested template', () => {
@@ -166,7 +179,7 @@ test('the editor branch resolves the schema path relative to a nested template',
     '/reports/outcome/schemas/report.schema.json': JSON.stringify(zodSchema),
   }, entrypoint);
   assert.equal(result.ok, true, result.message);
-  assert.deepEqual(JSON.parse(result.title), zodSample);
+  assert.deepEqual(JSON.parse(result.title!), zodSample);
 });
 
 test('input accepts a loaded schema dictionary in the editor branch', () => {
@@ -175,7 +188,7 @@ test('input accepts a loaded schema dictionary in the editor branch', () => {
     '/report.schema.json': JSON.stringify({ type: 'object', properties: { n: { type: 'integer' } } }),
   });
   assert.equal(result.ok, true, result.message);
-  assert.deepEqual(JSON.parse(result.title), { n: 1 });
+  assert.deepEqual(JSON.parse(result.title!), { n: 1 });
 });
 
 test('input(none) panics with a message that names json.with in the editor branch', () => {
@@ -189,7 +202,7 @@ test('input(none) panics with a message that names json.with in the editor branc
 });
 
 // sample.typ is not part of the package a runtime compile sees, so these tests mount its source as a template file.
-async function sample(schema, mode = 'full', name = 'schema.json') {
+async function sample(schema: unknown, mode = 'full', name = 'schema.json') {
   const result = await compiler.compile({
     template: { files: {
       'main.typ': `#import "sample.typ": sample-from-schema\n#let schema = json("${name}")\n${dump(`sample-from-schema(schema, mode: "${mode}")`)}`,
@@ -268,7 +281,7 @@ test('sample-from-schema: a recursive $ref ends instead of looping', async () =>
 
 test('imports other than the bundled package fail with COMPILATION naming the supported one', async () => {
   for (const spec of ['@local/typfolio:0.2.0', '@local/other:0.1.0', '@preview/cetz:0.3.0']) {
-    await assert.rejects(compiler.compile({ template: `#import "${spec}": x`, input: null }), error => {
+    await assert.rejects(compiler.compile({ template: `#import "${spec}": x`, input: null }), (error: TypstPdfError) => {
       assert.ok(hasCode('COMPILATION')(error));
       assert.match(error.message, /Only @local\/typfolio:0\.1\.0 is available; remote Typst packages are not supported/);
       assert.ok(error.message.includes(`requested ${spec}`), error.message);
@@ -280,7 +293,7 @@ test('imports other than the bundled package fail with COMPILATION naming the su
 test('template files and assets under the reserved package directory are rejected', async () => {
   const bundled = '/@typfolio/packages/local/typfolio/0.1.0/lib.typ';
   for (const name of ['@typfolio/packages/local/typfolio/0.1.0/lib.typ', bundled, '@typfolio/other.typ', '@typfolio/packages/local/typfolio/0.1.0/input.json', '@typfolio']) {
-    await assert.rejects(compiler.compile({ template: { files: { 'main.typ': 'x', [name]: 'y' } }, input: null }), error => {
+    await assert.rejects(compiler.compile({ template: { files: { 'main.typ': 'x', [name]: 'y' } }, input: null }), (error: TypstPdfError) => {
       assert.ok(hasCode('INVALID_REQUEST')(error), error.message);
       assert.match(error.message, /@typfolio.* reserved|reserved.*@typfolio/);
       return true;
@@ -298,7 +311,7 @@ test('capabilities advertise the bundled package and still no remote packages', 
   assert.equal(compiler.capabilities, capabilities);
 });
 
-async function walk(directory) {
+async function walk(directory: URL): Promise<URL[]> {
   const entries = await readdir(directory, { withFileTypes: true });
   return (await Promise.all(entries.map(entry => {
     const path = new URL(entry.name + (entry.isDirectory() ? '/' : ''), directory);
@@ -323,9 +336,9 @@ test('the editor branch builds the minimal sample when --input typfolio-sample=m
   };
   const minimal = raw.compile(files, '/main.typ', [['typfolio-sample', 'minimal']]);
   assert.equal(minimal.ok, true, minimal.message);
-  assert.deepEqual(JSON.parse(minimal.title), minimalZodSample);
+  assert.deepEqual(JSON.parse(minimal.title!), minimalZodSample);
   const full = raw.compile(files, '/main.typ', [['typfolio-sample', 'full']]);
-  assert.deepEqual(JSON.parse(full.title), zodSample);
+  assert.deepEqual(JSON.parse(full.title!), zodSample);
   const bad = raw.compile(files, '/main.typ', [['typfolio-sample', 'sparse']]);
   assert.equal(bad.ok, false);
   assert.match(bad.message, /sample mode must be "full" or "minimal"/);
@@ -414,12 +427,12 @@ test('sample-from-schema minimal: a recursive $ref ends instead of looping', asy
 test('sample-from-schema defaults to full mode and rejects an unknown mode', async () => {
   const schema = { type: 'object', properties: { a: { type: 'string' } } };
   assert.deepEqual(await sample(schema), { a: 'Sample text' });
-  await assert.rejects(sample(schema, 'sparse'), error => hasCode('COMPILATION')(error) && /sample mode must be "full" or "minimal"/.test(error.message));
+  await assert.rejects(sample(schema, 'sparse'), (error: TypstPdfError) => hasCode('COMPILATION')(error) && /sample mode must be "full" or "minimal"/.test(error.message));
 });
 
 test('the generated modules equal the shipped package files, and the runtime module has no sample.typ', async () => {
   const directory = new URL(`${typfolioPackage.namespace}/${typfolioPackage.name}/${typfolioPackage.version}/`, packageRoot);
-  const onDisk = {};
+  const onDisk: Record<string, string> = {};
   for (const path of await walk(directory)) onDisk[fileURLToPath(path).slice(fileURLToPath(directory).length)] = await readFile(path, 'utf8');
   assert.deepEqual(Object.keys(onDisk).sort(), ['lib.typ', 'sample.typ', 'typst.toml']);
   // The runtime module embeds typst.toml and lib.typ only.

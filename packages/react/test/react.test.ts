@@ -4,11 +4,13 @@ import { JSDOM } from 'jsdom';
 import { createElement } from 'react';
 import { renderToString } from 'react-dom/server';
 import { act, render } from '@testing-library/react';
+import type { PdfRequest, PdfResult } from '@typfolio/core';
 import {
   PdfProvider,
   usePdfCompilation,
   usePdfObjectUrl,
 } from '../dist/index.js';
+import type { PdfCompilation, UsePdfCompilationOptions } from '../dist/index.js';
 
 const dom = new JSDOM('<!doctype html><html><body></body></html>', { url: 'https://typfolio.test/' });
 globalThis.window = dom.window;
@@ -20,22 +22,37 @@ Object.defineProperty(globalThis, 'navigator', {
 globalThis.HTMLElement = dom.window.HTMLElement;
 globalThis.MutationObserver = dom.window.MutationObserver;
 
-const request = title => ({
+const request = (title: string): PdfRequest<{ title: string }> => ({
   template: { entrypoint: 'main.typ', files: { 'main.typ': '#input.title' } },
   input: { title },
 });
 
-const result = title => ({
+const result = (title: string): PdfResult => ({
   bytes: new Uint8Array([37, 80, 68, 70]),
   diagnostics: [{ severity: 'warning', message: title }],
   metadata: { title },
 });
 
+interface FakeCall {
+  request: PdfRequest<unknown>;
+  signal: AbortSignal | undefined;
+  resolve: (value: PdfResult) => void;
+  reject: (reason?: unknown) => void;
+}
+
+interface LifecycleEvent {
+  type: string;
+  value?: PdfResult;
+  error?: unknown;
+  input?: PdfRequest<unknown>;
+}
+
+// What the hooks do with their `PdfClient`: it records every call and settles it when the test says so.
 class FakeClient {
-  calls = [];
+  calls: FakeCall[] = [];
   disposals = 0;
 
-  compile(value, options = {}) {
+  compile(value: PdfRequest<unknown>, options: { signal?: AbortSignal } = {}): Promise<PdfResult> {
     return new Promise((resolve, reject) => {
       const call = { request: value, signal: options.signal, resolve, reject };
       this.calls.push(call);
@@ -52,7 +69,7 @@ class FakeClient {
 
 test('manual compilation exposes state, diagnostics, and stable actions', async () => {
   const client = new FakeClient();
-  let current;
+  let current!: PdfCompilation;
   function Harness() {
     current = usePdfCompilation();
     return null;
@@ -67,7 +84,7 @@ test('manual compilation exposes state, diagnostics, and stable actions', async 
   assert.equal(current.isCompiling, false);
   assert.equal(current.isRecompiling, false);
 
-  let pending;
+  let pending!: Promise<PdfResult>;
   await act(async () => {
     pending = current.compile(request('Manual'));
   });
@@ -86,7 +103,7 @@ test('manual compilation exposes state, diagnostics, and stable actions', async 
   assert.equal(current.status, 'success');
   assert.equal(current.isSuccess, true);
   assert.equal(current.isCompiling, false);
-  assert.equal(current.result.metadata.title, 'Manual');
+  assert.equal(current.result!.metadata.title, 'Manual');
   assert.equal(current.diagnostics[0].message, 'Manual');
 
   view.unmount();
@@ -95,14 +112,14 @@ test('manual compilation exposes state, diagnostics, and stable actions', async 
 
 test('lifecycle callbacks follow the latest visible compilation without changing actions', async () => {
   const client = new FakeClient();
-  const staleEvents = [];
-  const events = [];
-  let current;
-  function Harness({ options }) {
+  const staleEvents: PdfResult[] = [];
+  const events: LifecycleEvent[] = [];
+  let current!: PdfCompilation;
+  function Harness({ options }: { options: UsePdfCompilationOptions }) {
     current = usePdfCompilation(options);
     return null;
   }
-  const component = options => createElement(
+  const component = (options: UsePdfCompilationOptions) => createElement(
     PdfProvider,
     { client },
     createElement(Harness, { options }),
@@ -128,7 +145,7 @@ test('lifecycle callbacks follow the latest visible compilation without changing
   assert.equal(current.cancel, actions.cancel);
   assert.equal(current.reset, actions.reset);
 
-  let successful;
+  let successful!: Promise<PdfResult>;
   const successfulRequest = request('Callback success');
   await act(async () => {
     successful = current.compile(successfulRequest, {
@@ -145,20 +162,20 @@ test('lifecycle callbacks follow the latest visible compilation without changing
   assert.deepEqual(events.map(event => event.type), [
     'hook-success', 'call-success', 'hook-settled', 'call-settled',
   ]);
-  assert.equal(events[0].value.metadata.title, 'Callback success');
+  assert.equal(events[0].value!.metadata.title, 'Callback success');
   assert.equal(events[0].input, successfulRequest);
   assert.equal(events[2].error, undefined);
 
   const failure = new Error('Callback failure');
   const failedRequest = request('Callback failure');
-  let failed;
+  let failed!: Promise<PdfResult | Error>;
   await act(async () => {
     failed = current.compile(failedRequest, {
       onError: (error, input) => events.push({ type: 'call-error', error, input }),
       onSettled: (value, error, input) => events.push({
         type: 'call-settled', value, error, input,
       }),
-    }).catch(error => error);
+    }).catch((error: Error) => error);
     await Promise.resolve();
     client.calls[1].reject(failure);
     await failed;
@@ -171,14 +188,14 @@ test('lifecycle callbacks follow the latest visible compilation without changing
   assert.equal(events[6].value, undefined);
 
   const cancelledRequest = request('Callback cancellation');
-  let cancelled;
+  let cancelled!: Promise<PdfResult | Error>;
   await act(async () => {
     cancelled = current.compile(cancelledRequest, {
       onCancel: (error, input) => events.push({ type: 'call-cancel', error, input }),
       onSettled: (value, error, input) => events.push({
         type: 'call-settled', value, error, input,
       }),
-    }).catch(error => error);
+    }).catch((error: Error) => error);
     await Promise.resolve();
     current.cancel('No longer needed');
     await cancelled;
@@ -186,50 +203,50 @@ test('lifecycle callbacks follow the latest visible compilation without changing
   assert.deepEqual(events.slice(8).map(event => event.type), [
     'hook-cancel', 'call-cancel', 'hook-settled', 'call-settled',
   ]);
-  assert.match(events[8].error.message, /cancelled/);
-  assert.equal(events[8].error.cause, 'No longer needed');
+  assert.match((events[8].error as Error).message, /cancelled/);
+  assert.equal((events[8].error as Error).cause, 'No longer needed');
   assert.equal(events[8].input, cancelledRequest);
   view.unmount();
 });
 
 test('a newer manual request cancels the old request and owns the visible result', async () => {
   const client = new FakeClient();
-  let current;
+  let current!: PdfCompilation;
   function Harness() {
     current = usePdfCompilation();
     return null;
   }
   const view = render(createElement(PdfProvider, { client }, createElement(Harness)));
 
-  let first;
-  let second;
+  let first!: Promise<PdfResult | Error>;
+  let second!: Promise<PdfResult>;
   await act(async () => {
-    first = current.compile(request('Old')).catch(error => error);
+    first = current.compile(request('Old')).catch((error: Error) => error);
     second = current.compile(request('New'));
     await Promise.resolve();
   });
-  assert.match((await first).message, /superseded/);
-  assert.equal(client.calls[0].signal.aborted, true);
+  assert.match((await first as Error).message, /superseded/);
+  assert.equal(client.calls[0].signal!.aborted, true);
 
   await act(async () => {
     client.calls[1].resolve(result('New'));
     await second;
   });
   assert.equal(current.status, 'success');
-  assert.equal(current.result.metadata.title, 'New');
+  assert.equal(current.result!.metadata.title, 'New');
   view.unmount();
 });
 
 test('recompilation preserves the latest result through failure, cancellation, and reset', async () => {
   const client = new FakeClient();
-  let current;
+  let current!: PdfCompilation;
   function Harness() {
     current = usePdfCompilation();
     return null;
   }
   const view = render(createElement(PdfProvider, { client }, createElement(Harness)));
 
-  let initial;
+  let initial!: Promise<PdfResult>;
   await act(async () => {
     initial = current.compile(request('Retained'));
     await Promise.resolve();
@@ -238,25 +255,25 @@ test('recompilation preserves the latest result through failure, cancellation, a
   });
 
   const failure = new Error('Replacement failed');
-  let failed;
+  let failed!: Promise<PdfResult | Error>;
   await act(async () => {
-    failed = current.compile(request('Failed replacement')).catch(error => error);
+    failed = current.compile(request('Failed replacement')).catch((error: Error) => error);
   });
   assert.equal(current.isCompiling, true);
   assert.equal(current.isRecompiling, true);
-  assert.equal(current.result.metadata.title, 'Retained');
+  assert.equal(current.result!.metadata.title, 'Retained');
   await act(async () => {
     client.calls[1].reject(failure);
     await failed;
   });
   assert.equal(current.isError, true);
   assert.equal(current.error, failure);
-  assert.equal(current.result.metadata.title, 'Retained');
+  assert.equal(current.result!.metadata.title, 'Retained');
   assert.equal(current.diagnostics[0].message, 'Retained');
 
-  let cancelled;
+  let cancelled!: Promise<PdfResult | Error>;
   await act(async () => {
-    cancelled = current.compile(request('Cancelled replacement')).catch(error => error);
+    cancelled = current.compile(request('Cancelled replacement')).catch((error: Error) => error);
   });
   assert.equal(current.isRecompiling, true);
   await act(async () => {
@@ -264,7 +281,7 @@ test('recompilation preserves the latest result through failure, cancellation, a
     await cancelled;
   });
   assert.equal(current.isCancelled, true);
-  assert.equal(current.result.metadata.title, 'Retained');
+  assert.equal(current.result!.metadata.title, 'Retained');
 
   act(() => current.reset());
   assert.equal(current.isIdle, true);
@@ -275,42 +292,42 @@ test('recompilation preserves the latest result through failure, cancellation, a
 
 test('unmount cancels hook-owned work without disposing the injected client', async () => {
   const client = new FakeClient();
-  let current;
+  let current!: PdfCompilation;
   function Harness() {
     current = usePdfCompilation();
     return null;
   }
   const view = render(createElement(PdfProvider, { client }, createElement(Harness)));
-  let pending;
+  let pending!: Promise<PdfResult | Error>;
   await act(async () => {
-    pending = current.compile(request('Unmount')).catch(error => error);
+    pending = current.compile(request('Unmount')).catch((error: Error) => error);
   });
   view.unmount();
   await pending;
-  assert.equal(client.calls[0].signal.aborted, true);
+  assert.equal(client.calls[0].signal!.aborted, true);
   assert.equal(client.disposals, 0);
 });
 
 test('the PDF object URL hook creates exact blobs and revokes replaced URLs', () => {
   const createDescriptor = Object.getOwnPropertyDescriptor(URL, 'createObjectURL');
   const revokeDescriptor = Object.getOwnPropertyDescriptor(URL, 'revokeObjectURL');
-  const created = [];
-  const revoked = [];
+  const created: Blob[] = [];
+  const revoked: string[] = [];
   Object.defineProperty(URL, 'createObjectURL', {
     configurable: true,
-    value: blob => {
+    value: (blob: Blob) => {
       created.push(blob);
       return `blob:typfolio-${created.length}`;
     },
   });
   Object.defineProperty(URL, 'revokeObjectURL', {
     configurable: true,
-    value: url => revoked.push(url),
+    value: (url: string) => revoked.push(url),
   });
 
   try {
-    let current;
-    function Harness({ value }) {
+    let current: string | undefined;
+    function Harness({ value }: { value: PdfResult | undefined }) {
       current = usePdfObjectUrl(value);
       return null;
     }

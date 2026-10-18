@@ -71,8 +71,8 @@ Generated files live in `packages/wasm/generated/`, the only content of the `@ty
 npm test
 
 # Structural checks of the compiled PDFs (tagging, title, language, headings, figure alt text, declared
-# standards) are in packages/dev-tools/test/pdf.test.mjs, which `npm test` runs. They report facts, not conformance.
-node --test packages/dev-tools/test/pdf.test.mjs
+# standards) are in packages/dev-tools/test/pdf.test.ts, which `npm test` runs. They report facts, not conformance.
+node --test packages/dev-tools/test/pdf.test.ts
 
 # External validator, the conformance step; see https://docs.verapdf.org/cli/validation/
 verapdf --format json --flavour ua1 .build/test-output/ua.pdf
