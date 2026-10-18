@@ -4,9 +4,10 @@ import { JSDOM } from 'jsdom';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { TypfolioCaptureError, captureAssets } from '@typfolio/core/capture';
+import type { CaptureAdapter } from '@typfolio/core/capture';
 import { CaptureRegion } from '../dist/capture.js';
 
-const adapter = {
+const adapter: CaptureAdapter = {
   name: 'fake',
   extensions: ['.bin'],
   capture: () => new Uint8Array([1]),

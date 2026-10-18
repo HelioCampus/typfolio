@@ -4,14 +4,16 @@ import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import * as main from '@typfolio/core';
 import { TypstPdfError } from '@typfolio/core';
+import type { ErrorCode } from '@typfolio/core';
 import * as devTools from '../dist/index.js';
 import { checkTemplate, createTemplateChecker } from '../dist/index.js';
+import type { SampleMode, TemplateCheckReport, TemplateChecker, TemplateCheckResult } from '../dist/index.js';
 
 const root = new URL('../../../', import.meta.url);
-const file = path => readFile(new URL(path, root));
-const hasCode = code => error => error instanceof TypstPdfError && error.code === code;
+const file = (path: string) => readFile(new URL(path, root));
+const hasCode = (code: ErrorCode) => (error: unknown) => error instanceof TypstPdfError && error.code === code;
 const helper = '#import "@local/typfolio:0.1.0": input\n';
-const read = (...lines) => helper + lines.join('\n') + '\n';
+const read = (...lines: string[]) => helper + lines.join('\n') + '\n';
 const schemaFile = JSON.stringify({
   type: 'object',
   properties: {
@@ -22,9 +24,11 @@ const schemaFile = JSON.stringify({
   required: ['title', 'rows'],
 });
 const sampleMarkers = ['_is-nullable', 'Sample text', '123e4567-e89b-12d3-a456-426614174000'];
-const byMode = report => Object.fromEntries(report.results.map(result => [result.mode, result]));
+const byMode = (report: TemplateCheckReport): Record<string, TemplateCheckResult> => Object.fromEntries(report.results.map(result => [result.mode, result]));
 
-let checker, wasm, fonts;
+let checker!: TemplateChecker;
+let wasm!: Buffer;
+let fonts!: Buffer[];
 before(async () => {
   wasm = await file('packages/wasm/generated/compiler_bg.wasm');
   fonts = [await file('fixtures/fonts/LibertinusSerif-Regular.otf')];
@@ -36,8 +40,8 @@ test('the core main entry exports nothing from dev-tools and never reaches it', 
   for (const name of Object.keys(devTools)) assert.equal(name in main, false, `${name} leaked into the main entry`);
   assert.deepEqual(Object.keys(devTools).sort(), ['checkTemplate', 'createTemplateChecker']);
   // Follow the static import graph of the main entry's compiled files.
-  const seen = new Set();
-  const visit = async url => {
+  const seen = new Set<string>();
+  const visit = async (url: URL): Promise<void> => {
     if (seen.has(url.href)) return;
     seen.add(url.href);
     const source = await readFile(url, 'utf8');
@@ -51,8 +55,8 @@ test('the core main entry exports nothing from dev-tools and never reaches it', 
 });
 
 test('dev-tools can write nothing: it imports no file system or network module', async () => {
-  const seen = new Set();
-  const visit = async url => {
+  const seen = new Set<string>();
+  const visit = async (url: URL): Promise<void> => {
     if (seen.has(url.href)) return;
     seen.add(url.href);
     const source = await readFile(url, 'utf8');
@@ -95,7 +99,7 @@ test('a template that reads an optional field without a default fails only under
   assert.equal(minimal.ok, false);
   assert.ok(hasCode('COMPILATION')(minimal.error));
   assert.equal(minimal.bytes, undefined);
-  assert.match(minimal.error.message, /dictionary does not contain key "subtitle"/);
+  assert.match(minimal.error!.message, /dictionary does not contain key "subtitle"/);
   assert.equal(minimal.diagnostics[0].path, '/main.typ');
   assert.equal(minimal.diagnostics[0].severity, 'error');
 });
@@ -108,7 +112,7 @@ test('a template that calls first() on an array fails only under minimal', async
   const { minimal, full } = byMode(report);
   assert.equal(full.ok, true);
   assert.equal(minimal.ok, false);
-  assert.match(minimal.error.message, /array is empty/);
+  assert.match(minimal.error!.message, /array is empty/);
 });
 
 test('a template that reads a field the schema does not declare fails under both modes', async () => {
@@ -119,7 +123,7 @@ test('a template that reads a field the schema does not declare fails under both
   assert.equal(report.ok, false);
   for (const result of report.results) {
     assert.equal(result.ok, false, result.mode);
-    assert.match(result.error.message, /dictionary does not contain key "undeclared"/);
+    assert.match(result.error!.message, /dictionary does not contain key "undeclared"/);
   }
 });
 
@@ -134,7 +138,7 @@ test('a nested entrypoint finds its schema at a path relative to itself', async 
   const missing = await checker.check({ entrypoint, files: { [entrypoint]: read('#let data = input(json.with("./schemas/report.schema.json"))', '#data.title') } });
   assert.equal(missing.ok, false);
   assert.equal(missing.results.length, 2);
-  assert.match(missing.results[0].error.message, /failed to load file/);
+  assert.match(missing.results[0].error!.message, /failed to load file/);
 });
 
 test('pdf options pass through to every compile', async () => {
@@ -142,8 +146,9 @@ test('pdf options pass through to every compile', async () => {
   const plain = await checker.check(template);
   const ua = await checker.check(template, { pdf: { standards: ['ua-1'] } });
   assert.equal(ua.ok, true);
-  for (const result of plain.results) assert.ok(!Buffer.from(result.bytes).includes('pdfuaid'));
-  for (const result of ua.results) assert.ok(Buffer.from(result.bytes).includes('pdfuaid'), `${result.mode} was not compiled as PDF/UA`);
+  for (const result of plain.results) assert.ok(!Buffer.from(result.bytes!).includes('pdfuaid'));
+  for (const result of ua.results) assert.ok(Buffer.from(result.bytes!).includes('pdfuaid'), `${result.mode} was not compiled as PDF/UA`);
+  // @ts-expect-error a PDF standard that does not exist must be rejected at run time
   await assert.rejects(checker.check(template, { pdf: { standards: ['imaginary'] } }), hasCode('UNSUPPORTED_OPTION'));
   await assert.rejects(checker.check(template, { pdf: { standards: ['ua-1'], tags: false } }), hasCode('INVALID_REQUEST'));
 });
@@ -170,7 +175,7 @@ const zodLike = {
   },
 };
 const student = { name: 'Sample text', score: 0, tags: ['Sample text'] };
-const expected = {
+const expected: Record<SampleMode, unknown> = {
   minimal: { title: '', status: 'draft', author: null, students: [], extras: [], meta: { version: 0, label: '' } },
   full: { title: 'Sample text', subtitle: 'Sample text', status: 'draft', author: { name: 'Sample text' }, students: [student], extras: [student], meta: { version: 1, label: 'Sample text' } },
 };
@@ -178,12 +183,12 @@ const expected = {
 test('a Zod-4-shaped schema gets the minimal and the full sample', async () => {
   // The report carries bytes and diagnostics only, so the template asserts the sample it received
   // against an expected value shipped as a template file; a mismatch fails that mode.
-  const template = value => ({ files: {
+  const template = (value: unknown) => ({ files: {
     'main.typ': read('#let data = input(json.with("./report.schema.json"))', `#assert.eq(data, json("expected.json"))`, '#data.title'),
     'report.schema.json': JSON.stringify(zodLike),
     'expected.json': JSON.stringify(value),
   } });
-  for (const mode of ['minimal', 'full']) {
+  for (const mode of ['minimal', 'full'] as const) {
     const report = await checker.check(template(expected[mode]), { modes: [mode] });
     assert.equal(report.results.length, 1);
     assert.equal(report.results[0].mode, mode);
@@ -192,7 +197,7 @@ test('a Zod-4-shaped schema gets the minimal and the full sample', async () => {
     const other = mode === 'minimal' ? 'full' : 'minimal';
     const mismatch = await checker.check(template(expected[other]), { modes: [mode] });
     assert.equal(mismatch.ok, false, `${mode} must not equal the ${other} sample`);
-    assert.match(mismatch.results[0].error.message, /equality assertion failed/);
+    assert.match(mismatch.results[0].error!.message, /equality assertion failed/);
   }
 });
 
@@ -202,9 +207,11 @@ test('modes are validated, subsettable and reported in the order given', async (
   assert.deepEqual(full.results.map(result => result.mode), ['full']);
   const reversed = await checker.check(template, { modes: ['full', 'minimal'] });
   assert.deepEqual(reversed.results.map(result => result.mode), ['full', 'minimal']);
+  // @ts-expect-error an unknown mode must be rejected at run time
   await assert.rejects(checker.check(template, { modes: ['sparse'] }), hasCode('UNSUPPORTED_OPTION'));
   await assert.rejects(checker.check(template, { modes: [] }), hasCode('INVALID_REQUEST'));
   await assert.rejects(checker.check(template, { modes: ['full', 'full'] }), hasCode('INVALID_REQUEST'));
+  // @ts-expect-error an unknown option must be rejected at run time
   await assert.rejects(checker.check(template, { extra: true }), hasCode('UNSUPPORTED_OPTION'));
 });
 
@@ -218,7 +225,7 @@ test('the editor sample.typ is mounted only by the check, and runtime imports st
   // A check imports the package like the editor does; a different package is still refused.
   const report = await checker.check({ files: { 'main.typ': '#import "@local/typfolio:0.2.0": input' } });
   assert.equal(report.ok, false);
-  assert.match(report.results[0].error.message, /Only @local\/typfolio:0\.1\.0 is available/);
+  assert.match(report.results[0].error!.message, /Only @local\/typfolio:0\.1\.0 is available/);
 });
 
 test('a checker runs one check at a time and refuses work once disposed', async () => {

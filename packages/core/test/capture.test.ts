@@ -11,10 +11,20 @@ import {
   captureAssets,
   captureProps,
 } from '../dist/capture.js';
+import type {
+  CaptureAdapter,
+  CaptureAdapterContext,
+  CaptureErrorCode,
+  CaptureMarker,
+} from '../dist/capture.js';
 import { domPngCapture } from '../dist/capture/dom.js';
+import type { DomPngRasterizeOptions } from '../dist/capture/dom.js';
 import { svgCapture } from '../dist/capture/svg.js';
 
-const bounds = (width = 400, height = 120) => ({
+type CaptureModule = typeof import('../dist/capture.js');
+type DomModule = typeof import('../dist/capture/dom.js');
+
+const bounds = (width = 400, height = 120): DOMRect => ({
   width,
   height,
   x: 0,
@@ -26,10 +36,14 @@ const bounds = (width = 400, height = 120) => ({
   toJSON: () => ({}),
 });
 
-const isCaptureError = code => error =>
+const isCaptureError = (code: CaptureErrorCode) => (error: unknown): error is TypfolioCaptureError =>
   error instanceof TypfolioCaptureError && error.code === code;
 
-const fake = (extension = '.bin', bytes = [1, 2, 3], onCapture = () => {}) => ({
+const fake = (
+  extension = '.bin',
+  bytes: number[] = [1, 2, 3],
+  onCapture: (element: Element, context: CaptureAdapterContext) => void = () => {},
+): CaptureAdapter => ({
   name: `fake ${extension}`,
   extensions: [extension],
   capture(element, context) {
@@ -38,9 +52,9 @@ const fake = (extension = '.bin', bytes = [1, 2, 3], onCapture = () => {}) => ({
   },
 });
 
-const rootOf = html => {
+const rootOf = (html: string) => {
   const dom = new JSDOM(`<!doctype html><body><main id="root">${html}</main></body>`);
-  return dom.window.document.querySelector('#root');
+  return dom.window.document.querySelector('#root')!;
 };
 
 test('the main entry does not expose capture code', () => {
@@ -75,9 +89,11 @@ test('captureProps rejects invalid ids and kinds but tolerates empty alt text', 
       JSON.stringify(id),
     );
   }
-  for (const kind of ['', '  ', undefined, 3]) {
+  const kinds: unknown[] = ['', '  ', undefined, 3];
+  for (const kind of kinds) {
     assert.throws(
-      () => captureProps({ id: 'chart', kind, altText: 'x' }),
+      // The cast stands in for a caller that bypasses the types; the kind must still be rejected at run time.
+      () => captureProps({ id: 'chart', kind: kind as string, altText: 'x' }),
       isCaptureError('INVALID_OPTIONS'),
     );
   }
@@ -101,7 +117,7 @@ test('SVG capture discovers regions and returns compiler assets and references',
         <g class="tooltip"><text>Transient</text></g>
       </svg>
     </section>`);
-  root.querySelector('svg').getBoundingClientRect = () => bounds();
+  root.querySelector('svg')!.getBoundingClientRect = () => bounds();
 
   const captured = await captureAssets(root, {
     adapters: { svg: svgCapture({ fontFamily: 'Open Sans', removeSelectors: ['.tooltip'] }) },
@@ -130,29 +146,30 @@ test('SVG capture discovers regions and returns compiler assets and references',
 test('DOM capture rasterizes only when requested and trims alt text', async () => {
   const root = rootOf(`<article data-typfolio-capture="card" data-typfolio-capture-kind="png"
       data-typfolio-capture-alt="  Assessment outcome summary.  "><h2>Summary</h2></article>`);
-  const card = root.querySelector('article');
+  const card = root.querySelector('article')!;
   card.getBoundingClientRect = () => bounds(320, 180);
   const expected = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]);
-  let rasterized;
+  let rasterized = undefined as { element: HTMLElement; options: DomPngRasterizeOptions } | undefined;
   const adapter = domPngCapture({
     pixelRatio: 2,
     backgroundColor: null,
     removeSelectors: ['.transient'],
     rasterize: async (element, options) => {
       rasterized = { element, options };
+      // A canvas stand-in: the adapter only asks it for a blob.
       return {
-        toBlob(callback, type) {
+        toBlob(callback: BlobCallback, type?: string) {
           callback(new Blob([expected], { type }));
         },
-      };
+      } as unknown as HTMLCanvasElement;
     },
   });
 
   const captured = await captureAssets(root, { adapters: { png: adapter } });
-  assert.equal(rasterized.element, card);
-  assert.equal(rasterized.options.pixelRatio, 2);
-  assert.equal(rasterized.options.backgroundColor, null);
-  assert.deepEqual(rasterized.options.removeSelectors, ['.transient']);
+  assert.equal(rasterized!.element, card);
+  assert.equal(rasterized!.options.pixelRatio, 2);
+  assert.equal(rasterized!.options.backgroundColor, null);
+  assert.deepEqual(rasterized!.options.removeSelectors, ['.transient']);
   assert.deepEqual(captured.assets['captures/card.png'], expected);
   assert.deepEqual(captured.references.card, {
     path: 'captures/card.png',
@@ -167,11 +184,11 @@ test('the default DOM rasterizer reports a missing html2canvas with an install h
   try {
     await cp(new URL('../dist', import.meta.url), directory, { recursive: true });
     await writeFile(join(directory, 'package.json'), '{"type":"module"}');
-    const capture = await import(pathToFileURL(join(directory, 'capture.js')).href);
-    const dom = await import(pathToFileURL(join(directory, 'capture/dom.js')).href);
+    const capture: CaptureModule = await import(pathToFileURL(join(directory, 'capture.js')).href);
+    const dom: DomModule = await import(pathToFileURL(join(directory, 'capture/dom.js')).href);
     const root = rootOf(`<article data-typfolio-capture="card" data-typfolio-capture-kind="png"
         data-typfolio-capture-alt="Card"></article>`);
-    root.querySelector('article').getBoundingClientRect = () => bounds(10, 10);
+    root.querySelector('article')!.getBoundingClientRect = () => bounds(10, 10);
 
     await assert.rejects(
       capture.captureAssets(root, { adapters: { png: dom.domPngCapture() } }),
@@ -182,7 +199,7 @@ test('the default DOM rasterizer reports a missing html2canvas with an install h
         assert.match(error.message, /custom rasterize/);
         assert.equal(error.captureId, 'card');
         assert.equal(error.path, 'captures/card.png');
-        assert.equal(error.cause?.code, 'ERR_MODULE_NOT_FOUND');
+        assert.equal((error.cause as { code?: string } | undefined)?.code, 'ERR_MODULE_NOT_FOUND');
         return true;
       },
     );
@@ -197,8 +214,8 @@ test('regions are discovered in DOM order and paths use the first adapter extens
       <div data-typfolio-capture="nested.one" data-typfolio-capture-kind="a" data-typfolio-capture-alt="Nested"></div>
     </div>
     <p data-typfolio-capture="third" data-typfolio-capture-kind="a" data-typfolio-capture-decorative></p>`);
-  const order = [];
-  const record = (_element, context) => order.push([context.captureId, context.path]);
+  const order: string[][] = [];
+  const record = (_element: Element, context: CaptureAdapterContext) => order.push([context.captureId, context.path]);
   const a = { ...fake('.aa', [1], record), extensions: ['.aa', '.alt'] };
   const b = fake('.bb', [2], record);
 
@@ -217,7 +234,7 @@ test('the root element itself can be the region', async () => {
   root.setAttribute('data-typfolio-capture', 'self');
   root.setAttribute('data-typfolio-capture-kind', 'x');
   root.setAttribute('data-typfolio-capture-alt', 'Whole root');
-  const seen = [];
+  const seen: Element[] = [];
   const captured = await captureAssets(root, {
     adapters: { x: fake('.x', [9], element => seen.push(element)) },
   });
@@ -268,7 +285,7 @@ test('required ids that are missing fail with NOT_FOUND', async () => {
 });
 
 test('invalid regions fail before any adapter runs', async () => {
-  const bad = {
+  const bad: Record<string, [html: string, code: CaptureErrorCode]> = {
     duplicate: [
       `<div data-typfolio-capture="chart" data-typfolio-capture-kind="x" data-typfolio-capture-alt="One"></div>
        <div data-typfolio-capture="chart" data-typfolio-capture-kind="x" data-typfolio-capture-alt="Two"></div>`,
@@ -320,7 +337,8 @@ test('invalid regions fail before any adapter runs', async () => {
 
 test('invalid adapters and options are rejected', async () => {
   const root = rootOf('');
-  const invalid = [
+  // Adapters the types do not allow; each must be rejected at run time.
+  const invalid: unknown[] = [
     undefined,
     { name: 'no extensions', extensions: [], capture() {} },
     { name: 'dotless', extensions: ['svg'], capture() {} },
@@ -331,12 +349,14 @@ test('invalid adapters and options are rejected', async () => {
   ];
   for (const adapter of invalid) {
     await assert.rejects(
-      captureAssets(root, { adapters: { x: adapter } }),
+      captureAssets(root, { adapters: { x: adapter as CaptureAdapter } }),
       isCaptureError('INVALID_OPTIONS'),
     );
   }
+  // @ts-expect-error options without adapters must be rejected at run time
   await assert.rejects(captureAssets(root, {}), isCaptureError('INVALID_OPTIONS'));
   await assert.rejects(
+    // @ts-expect-error require must be an array of ids
     captureAssets(root, { adapters: {}, require: 'chart' }),
     isCaptureError('INVALID_OPTIONS'),
   );
@@ -392,11 +412,12 @@ test('capture cancellation is observed before and between captures', async () =>
 test('captureProps output round-trips through discovery', async () => {
   const dom = new JSDOM('<!doctype html><body><main id="root"></main></body>');
   const { document } = dom.window;
-  const root = document.querySelector('#root');
-  for (const marker of [
+  const root = document.querySelector('#root')!;
+  const markers: CaptureMarker[] = [
     { id: 'chart', kind: 'x', altText: 'Chart' },
     { id: 'rule', kind: 'x', decorative: true },
-  ]) {
+  ];
+  for (const marker of markers) {
     const element = document.createElement('div');
     for (const [name, value] of Object.entries(captureProps(marker))) element.setAttribute(name, value);
     root.append(element);
