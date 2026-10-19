@@ -3,8 +3,8 @@ import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
-import { defineInput, definePartial, defineTemplate } from '@typfolio/core';
-import type { PdfRequest, PdfResult, StandardSchemaV1 } from '@typfolio/core';
+import { definePartial, defineTemplate } from '@typfolio/core';
+import type { AnyTemplate, Assets, PdfResult, StandardSchemaV1 } from '@typfolio/core';
 import type { RuntimeMessage } from '../dist/protocol.js';
 import { transferableBuffers } from '../dist/snapshot.js';
 import {
@@ -23,8 +23,6 @@ import type {
 import type { SerializedCompilerOptions } from '../dist/types.js';
 import { installWorkerRuntime } from '../dist/worker-runtime.js';
 
-type TitleRequest = PdfRequest<{ title: string }>;
-type AssetRequest = TitleRequest & { assets: Record<string, Uint8Array> };
 type RuntimeFailure = Extract<RuntimeMessage, { type: 'failure' }>;
 type MessageListener = (event: MessageEvent<unknown>) => void;
 
@@ -37,15 +35,24 @@ interface ReceivedMessage {
   type: 'initialize' | 'compile';
   id: number;
   compiler: SerializedCompilerOptions;
-  request: AssetRequest;
+  request: ReceivedRequest;
+}
+
+/** A resolved request as the tests read it: every piece of data in these tests has a title. */
+interface ReceivedRequest {
+  entrypoint: string;
+  files: Record<string, string>;
+  documents: Record<string, { title: string }>;
+  assets: Record<string, Uint8Array>;
 }
 
 type WorkerEventType = 'message' | 'error' | 'messageerror';
 
-const request = (title: string): TitleRequest => ({
-  template: { entrypoint: 'main.typ', files: { 'main.typ': '#input.title' } },
-  input: { title },
-});
+// A template whose data is mounted at input.json and read there directly, without a schema.
+const titledTemplate = defineTemplate({ files: { 'main.typ': '#json("/input.json").title' }, schemaPath: 'input.json' });
+const request = (title: string) => titledTemplate({ title });
+// The title of a request built by `request`, as the worker received it.
+const titleOf = (message: ReceivedMessage) => message.request.documents['input.json'].title;
 
 const result = (title: string): PdfResult => ({
   bytes: new Uint8Array([37, 80, 68, 70, 45]),
@@ -118,21 +125,25 @@ async function waitFor(predicate: () => boolean) {
 test('queues work in order, keeps one worker warm, and snapshots requests', async () => {
   const worker = new FakeWorker();
   const client = createWorkerClient(options(() => worker));
-  const firstRequest = request('First');
-  const first = client.compile(firstRequest);
+  const firstData = { title: 'First' };
+  const first = client.compile(titledTemplate(firstData));
   const second = client.compile(request('Second'));
-  firstRequest.input.title = 'Mutated';
+  firstData.title = 'Mutated';
 
   ready(worker);
   const firstMessage = worker.messages.at(-1)!;
   assert.equal(firstMessage.type, 'compile');
-  assert.equal(firstMessage.request.input.title, 'First');
+  assert.deepEqual(firstMessage.request, {
+    entrypoint: 'main.typ',
+    files: { 'main.typ': '#json("/input.json").title' },
+    documents: { 'input.json': { title: 'First' } },
+  });
   assert.equal(worker.messages.filter(message => message.type === 'compile').length, 1);
 
   success(worker, firstMessage.id, 'First');
   const secondMessage = worker.messages.at(-1)!;
   assert.equal(secondMessage.type, 'compile');
-  assert.equal(secondMessage.request.input.title, 'Second');
+  assert.equal(titleOf(secondMessage), 'Second');
   success(worker, secondMessage.id, 'Second');
 
   assert.equal((await first).metadata.title, 'First');
@@ -142,16 +153,22 @@ test('queues work in order, keeps one worker warm, and snapshots requests', asyn
   assert.equal(worker.terminated, true);
 });
 
-test('a string template crosses the worker boundary unchanged', async () => {
+test('a template without data crosses the worker boundary as its files alone', async () => {
   const worker = new FakeWorker();
   const client = createWorkerClient(options(() => worker));
-  const pending = client.compile({ template: '#input.title', input: { title: 'String' } });
+  const plain = defineTemplate({ entrypoint: 'doc.typ', files: { 'doc.typ': 'Plain', 'part.typ': 'Part' } });
+  const pending = client.compile(plain(), { pdf: { tags: true } });
   ready(worker);
   const message = worker.messages.at(-1)!;
   assert.equal(message.type, 'compile');
-  assert.equal(message.request.template, '#input.title');
-  success(worker, message.id, 'String');
-  assert.equal((await pending).metadata.title, 'String');
+  assert.deepEqual(message.request, {
+    entrypoint: 'doc.typ',
+    files: { 'doc.typ': 'Plain', 'part.typ': 'Part' },
+    documents: {},
+    pdf: { tags: true },
+  });
+  success(worker, message.id, 'Plain');
+  assert.equal((await pending).metadata.title, 'Plain');
   await client.dispose();
 });
 
@@ -329,7 +346,7 @@ test('rejects uncloneable accessors without invoking them or creating a worker',
     return new FakeWorker();
   }));
 
-  await assert.rejects(client.compile({ ...request('Ignored'), input }), error => assertCode(error, 'INVALID_REQUEST'));
+  await assert.rejects(client.compile(titledTemplate(input)), error => assertCode(error, 'INVALID_REQUEST'));
   assert.equal(accessed, false);
   assert.equal(workers, 0);
   await client.dispose();
@@ -341,9 +358,8 @@ function automaticWorker(delays: Record<string, number> = {}) {
       queueMicrotask(() => ready(worker));
       return;
     }
-    // A defined template's request carries its data in documents, the template's own input first.
-    const documents = (message.request as { documents?: Record<string, { title: string }> }).documents;
-    const title = documents ? Object.values(documents)[0].title : message.request.input.title;
+    // The request carries its data in documents by path, the template's own data first.
+    const title = Object.values(message.request.documents)[0].title;
     setTimeout(() => {
       if (title === 'Error') {
         worker.emit('message', {
@@ -365,7 +381,7 @@ test('streams batch outcomes in completion order and reports progress', async ()
     () => automaticWorker({ First: 15, Second: 1, Third: 1 }),
     { workerCount: 2 },
   ));
-  const jobs = ['First', 'Second', 'Third', 'Error'].map(title => ({ id: title, request: request(title) }));
+  const jobs = ['First', 'Second', 'Third', 'Error'].map(title => ({ id: title, document: request(title) }));
   const outcomes: PdfBatchOutcome<string>[] = [];
   for await (const outcome of compileBatch(client, jobs, {
     onProgress: value => progress.push(value),
@@ -390,7 +406,7 @@ test('collects batch outcomes in input order', async () => {
     () => automaticWorker({ First: 10, Second: 1 }),
     { workerCount: 2 },
   ));
-  const outcomes = await collectBatch(client, ['First', 'Second'].map(title => ({ id: title, request: request(title) })));
+  const outcomes = await collectBatch(client, ['First', 'Second'].map(title => ({ id: title, document: request(title) })));
   assert.deepEqual(outcomes.map(outcome => outcome.id), ['First', 'Second']);
   assert.ok(outcomes.every(outcome => outcome.status === 'success'));
   await client.dispose();
@@ -404,8 +420,8 @@ test('stopping batch iteration interrupts remaining Effect work', async () => {
     return worker;
   }, { workerCount: 2 }));
   const iterator = compileBatch(client, [
-    { id: 'first', request: request('First') },
-    { id: 'second', request: request('Second') },
+    { id: 'first', document: request('First') },
+    { id: 'second', document: request('Second') },
   ])[Symbol.asyncIterator]();
   const firstOutcome = iterator.next();
 
@@ -434,8 +450,8 @@ test('batch cancellation cancels only its jobs on a shared client', async () => 
 
   const controller = new AbortController();
   const stream = compileBatch(client, [
-    { id: 'batch-1', request: request('Batch 1') },
-    { id: 'batch-2', request: request('Batch 2') },
+    { id: 'batch-1', document: request('Batch 1') },
+    { id: 'batch-2', document: request('Batch 2') },
   ], { signal: controller.signal });
   const collecting = (async () => {
     const values: PdfBatchOutcome<string>[] = [];
@@ -455,8 +471,6 @@ test('batch cancellation cancels only its jobs on a shared client', async () => 
   await client.dispose();
 });
 
-const assetRequest = (title: string, assets: Record<string, Uint8Array>): AssetRequest => ({ ...request(title), assets });
-
 function compileMessages(worker: FakeWorker) {
   return worker.messages.filter(message => message.type === 'compile');
 }
@@ -468,13 +482,14 @@ test('transfers the snapshot buffers, leaves the caller buffers intact, and the 
   const small = new Uint8Array([9, 8, 7]);
   const expected = [Uint8Array.from(big), Uint8Array.from(small)];
   const shared = new Uint8Array([1, 2, 3, 4, 5, 6]);
-  const callerRequest = assetRequest('Assets', {
+  const callerAssets = {
     'big.bin': big,
     'small.bin': small,
     'head.bin': shared.subarray(0, 3), // two views of one buffer: one entry in the transfer list
     'tail.bin': shared.subarray(3),
-  });
-  const pending = client.compile(callerRequest);
+  };
+  const document = request('Assets');
+  const pending = client.compile(document, { assets: callerAssets });
   ready(worker);
 
   const [message] = compileMessages(worker);
@@ -489,13 +504,13 @@ test('transfers the snapshot buffers, leaves the caller buffers intact, and the 
   assert.deepEqual([...message.request.assets['head.bin']], [1, 2, 3]);
   assert.deepEqual([...message.request.assets['tail.bin']], [4, 5, 6]);
 
-  // The snapshot the client posted is detached; the caller's request never was involved.
+  // The snapshot the client posted is detached; the caller's assets never were involved.
   for (const bytes of Object.values(posted.request.assets)) {
     assert.equal(bytes.buffer.byteLength, 0);
     assert.equal(bytes.byteLength, 0);
   }
-  assert.notEqual(posted.request, callerRequest);
-  assert.equal(callerRequest.assets['big.bin'], big);
+  assert.notEqual(posted.request.assets, callerAssets);
+  assert.equal(callerAssets['big.bin'], big);
   assert.equal(big.byteLength, 1 << 20);
   assert.deepEqual(big, expected[0]);
   assert.deepEqual(small, expected[1]);
@@ -503,8 +518,8 @@ test('transfers the snapshot buffers, leaves the caller buffers intact, and the 
 
   success(worker, message.id, 'Assets');
   await pending;
-  // The caller can submit the same buffers again.
-  const again = client.compile(callerRequest);
+  // The caller can submit the same document and buffers again.
+  const again = client.compile(document, { assets: callerAssets });
   const next = compileMessages(worker).at(-1)!;
   assert.deepEqual(next.request.assets['big.bin'], expected[0]);
   success(worker, next.id, 'Assets');
@@ -519,7 +534,7 @@ test('a SharedArrayBuffer asset is not transferred and still arrives intact', as
   const view = new Uint8Array(sharedBuffer);
   view.set([5, 6, 7, 8]);
   const ordinary = new Uint8Array([1, 2, 3]);
-  const pending = client.compile(assetRequest('Shared', { 'shared.bin': view, 'ordinary.bin': ordinary }));
+  const pending = client.compile(request('Shared'), { assets: { 'shared.bin': view, 'ordinary.bin': ordinary } });
   ready(worker);
 
   const [message] = compileMessages(worker);
@@ -540,8 +555,9 @@ test('transferableBuffers lists distinct transferable buffers only', () => {
   const detachedView = new Uint8Array(detached);
   detached.transfer();
   const buffers = transferableBuffers({
-    template: 'x',
-    input: null,
+    entrypoint: 'main.typ',
+    files: { 'main.typ': 'x' },
+    documents: {},
     assets: {
       a: new Uint8Array(buffer, 0, 4),
       b: new Uint8Array(buffer, 4, 4),
@@ -554,14 +570,14 @@ test('transferableBuffers lists distinct transferable buffers only', () => {
     },
   });
   assert.deepEqual(buffers, [buffer]);
-  assert.deepEqual(transferableBuffers({ template: 'x', input: null }), []);
+  assert.deepEqual(transferableBuffers({ entrypoint: 'main.typ', files: { 'main.typ': 'x' }, documents: {} }), []);
 });
 
 test('a malformed asset value does not break posting; the worker side rejects it', async () => {
   const worker = new FakeWorker();
   const client = createWorkerClient(options(() => worker));
   // @ts-expect-error a malformed asset value must still reach the worker, which rejects it
-  const pending = client.compile(assetRequest('Odd', { 'odd.bin': null }));
+  const pending = client.compile(request('Odd'), { assets: { 'odd.bin': null } });
   ready(worker);
   const [message] = compileMessages(worker);
   assert.equal(message.request.assets['odd.bin'], null);
@@ -580,17 +596,17 @@ test('a request is posted once: cancelled, timed-out and crashed jobs are reject
   }, { timeoutMs: 20 }));
   const bytes = () => ({ 'a.bin': new Uint8Array(1024).fill(3) });
   const controller = new AbortController();
-  const cancelled = client.compile(assetRequest('Cancel', bytes()), { signal: controller.signal });
+  const cancelled = client.compile(request('Cancel'), { assets: bytes(), signal: controller.signal });
   ready(workers[0]);
   controller.abort();
   await assert.rejects(cancelled, error => assertCode(error, 'ABORTED'));
 
-  const timedOut = client.compile(assetRequest('Timeout', bytes()));
+  const timedOut = client.compile(request('Timeout'), { assets: bytes() });
   assert.equal(workers.length, 2);
   ready(workers[1]);
   await assert.rejects(timedOut, error => assertCode(error, 'TIMEOUT'));
 
-  const crashed = client.compile(assetRequest('Crash', bytes()), { timeoutMs: 5_000 });
+  const crashed = client.compile(request('Crash'), { assets: bytes(), timeoutMs: 5_000 });
   assert.equal(workers.length, 3);
   ready(workers[2]);
   workers[2].emit('error', { message: 'worker crashed' });
@@ -599,40 +615,49 @@ test('a request is posted once: cancelled, timed-out and crashed jobs are reject
   await new Promise(resolve => setTimeout(resolve, 30));
   const posts = workers.flatMap(worker => compileMessages(worker));
   assert.equal(posts.length, 3);
-  assert.deepEqual(posts.map(message => message.request.input.title).sort(), ['Cancel', 'Crash', 'Timeout']);
+  assert.deepEqual(posts.map(titleOf).sort(), ['Cancel', 'Crash', 'Timeout']);
   assert.equal(new Set(posts.map(message => message.id)).size, 3);
   await client.dispose();
 });
 
 test('assets are copied once on the client, for compile and for each batch job', async () => {
-  const requestClones: unknown[] = [];
+  // The assets of each resolved request the client cloned (a worker message has no `documents` of its own).
+  const clonedAssets: unknown[] = [];
   const original = globalThis.structuredClone;
   const spy = (value: unknown, ...rest: [StructuredSerializeOptions?]) => {
-    if ((value as { template?: unknown } | null | undefined)?.template !== undefined) requestClones.push(value); // a request, not a worker message
+    const resolved = value as { documents?: unknown; assets?: unknown } | null | undefined;
+    if (resolved?.documents !== undefined) clonedAssets.push(resolved.assets);
     return original(value, ...rest);
+  };
+  const assertSame = (actual: unknown[], expected: unknown[], message?: string) => {
+    assert.equal(actual.length, expected.length, message);
+    actual.forEach((value, index) => assert.equal(value, expected[index], message));
   };
   globalThis.structuredClone = spy as typeof structuredClone;
   try {
     const worker = automaticWorker();
     const client = createWorkerClient(options(() => worker));
-    const make = (title: string) => assetRequest(title, { 'a.bin': new Uint8Array(64).fill(7) });
+    const make = (title: string) => ({ document: request(title), assets: { 'a.bin': new Uint8Array(64).fill(7) } });
 
     const single = make('Single');
-    await client.compile(single);
-    assert.deepEqual(requestClones, [single]);
+    await client.compile(single.document, { assets: single.assets });
+    assertSame(clonedAssets, [single.assets]);
 
-    // The same request object submitted twice is snapshotted each time, and stays usable.
-    requestClones.length = 0;
-    await Promise.all([client.compile(single), client.compile(single)]);
-    assert.deepEqual(requestClones, [single, single]);
+    // The same document and assets submitted twice are snapshotted each time, and stay usable.
+    clonedAssets.length = 0;
+    await Promise.all([
+      client.compile(single.document, { assets: single.assets }),
+      client.compile(single.document, { assets: single.assets }),
+    ]);
+    assertSame(clonedAssets, [single.assets, single.assets]);
     assert.deepEqual([...single.assets['a.bin']], new Array(64).fill(7));
 
-    requestClones.length = 0;
-    const jobs = ['One', 'Two', 'Three'].map(title => ({ id: title, request: make(title) }));
+    clonedAssets.length = 0;
+    const jobs = ['One', 'Two', 'Three'].map(title => ({ id: title, ...make(title) }));
     const outcomes = await collectBatch(client, jobs);
     assert.ok(outcomes.every(outcome => outcome.status === 'success'));
-    assert.deepEqual(requestClones, jobs.map(job => job.request), 'one clone per job, taken from the caller request');
-    for (const job of jobs) assert.deepEqual([...job.request.assets['a.bin']], new Array(64).fill(7));
+    assertSame(clonedAssets, jobs.map(job => job.assets), 'one clone per job, taken from the caller assets');
+    for (const job of jobs) assert.deepEqual([...job.assets['a.bin']], new Array(64).fill(7));
     const batchPosts = compileMessages(worker).slice(-3);
     for (const message of batchPosts) assert.deepEqual([...message.request.assets['a.bin']], new Array(64).fill(7));
     await client.dispose();
@@ -740,25 +765,27 @@ function titled(async = false): StandardSchemaV1<{ title: string }> {
 
 const header = definePartial({
   files: { 'common/header.typ': '#let header = none' },
-  input: defineInput(titled(), 'common/header.schema.json'),
+  schema: titled(),
+  schemaPath: 'common/header.schema.json',
 });
 const defined = (async = false) => defineTemplate({
   entrypoint: 'report/main.typ',
   files: { 'report/main.typ': '#import "../common/header.typ": header' },
-  input: defineInput(titled(async), 'report/input.schema.json'),
+  schema: titled(async),
+  schemaPath: 'report/input.schema.json',
   partials: { header },
 });
 
 test('a defined template crosses the boundary as its files and the data at each schema path', async () => {
   const worker = new FakeWorker();
   const client = createWorkerClient(options(() => worker));
-  const pending = client.compile({ template: defined(), input: { title: 'Report' }, partials: { header: { title: 'Header' } } });
+  const pending = client.compile(defined()({ title: 'Report' }, { header: { title: 'Header' } }));
   ready(worker);
   const message = worker.messages.at(-1)!;
   assert.equal(message.type, 'compile');
   assert.deepEqual(message.request, {
-    template: { entrypoint: 'report/main.typ', files: { 'report/main.typ': '#import "../common/header.typ": header', 'common/header.typ': '#let header = none' } },
-    input: null,
+    entrypoint: 'report/main.typ',
+    files: { 'report/main.typ': '#import "../common/header.typ": header', 'common/header.typ': '#let header = none' },
     documents: { 'report/input.schema.json': { title: 'Report' }, 'common/header.schema.json': { title: 'Header' } },
   });
   success(worker, message.id, 'Report');
@@ -770,10 +797,12 @@ test('data that fails its schema is rejected with INVALID_INPUT on the calling t
   let workers = 0;
   const client = createWorkerClient(options(() => { workers += 1; return new FakeWorker(); }));
   await assert.rejects(
-    client.compile({ template: defined(), input: { title: 'Report' }, partials: { header: { title: '' } } }),
+    client.compile(defined()({ title: 'Report' }, { header: { title: '' } })),
     error => assertCode(error, 'INVALID_INPUT') && /The data of partial "header" does not match its schema/.test((error as Error).message),
   );
-  await assert.rejects(client.compile({ template: defined(), input: { title: 'Report' } } as never), error => assertCode(error, 'INVALID_REQUEST'));
+  // The header's data is missing: the types reject this call, and so does the client at run time.
+  await assert.rejects(client.compile((defined() as AnyTemplate)({ title: 'Report' })), error => assertCode(error, 'INVALID_REQUEST'));
+  await assert.rejects(client.compile({ title: 'Not a document' } as never), error => assertCode(error, 'INVALID_REQUEST'));
   assert.equal(workers, 0);
   await client.dispose();
 });
@@ -784,11 +813,11 @@ test('a schema that validates asynchronously is awaited before the job is posted
   });
   const client = createWorkerClient(options(() => worker));
   await assert.rejects(
-    client.compile({ template: defined(true), input: { title: '' }, partials: { header: { title: 'Header' } } }),
+    client.compile(defined(true)({ title: '' }, { header: { title: 'Header' } })),
     error => assertCode(error, 'INVALID_INPUT'),
   );
   assert.equal(worker.messages.filter(message => message.type === 'compile').length, 0);
-  const pending = client.compile({ template: defined(true), input: { title: 'Report' }, partials: { header: { title: 'Header' } } });
+  const pending = client.compile(defined(true)({ title: 'Report' }, { header: { title: 'Header' } }));
   await waitFor(() => worker.messages.some(message => message.type === 'compile'));
   success(worker, worker.messages.at(-1)!.id, 'Report');
   assert.equal((await pending).metadata.title, 'Report');
@@ -799,11 +828,23 @@ test('in a batch, a job whose data fails its schema is that job\'s error and the
   const client = createWorkerClient(options(() => automaticWorker(), { workerCount: 2 }));
   const job = (id: string, title: string, async = false) => ({
     id,
-    request: { template: defined(async), input: { title }, partials: { header: { title: 'Header' } } },
+    document: defined(async)({ title }, { header: { title: 'Header' } }),
   });
   const outcomes = await collectBatch(client, [job('ok', 'First'), job('sync', ''), job('async', '', true), job('later', 'Second', true)]);
   assert.deepEqual(outcomes.map(outcome => outcome.status), ['success', 'error', 'error', 'success']);
   for (const outcome of outcomes.filter(outcome => outcome.status === 'error')) assertCode(outcome.error, 'INVALID_INPUT');
+  await client.dispose();
+});
+
+test('validate: false posts data its schema would reject, from compile and from a batch job', async () => {
+  const client = createWorkerClient(options(() => automaticWorker(), { workerCount: 2 }));
+  assert.ok((await client.compile(defined()({ title: '' }, { header: { title: '' } }), { validate: false })).bytes.length > 0);
+  const outcomes = await collectBatch(client, [
+    { id: 'sync', document: defined()({ title: '' }, { header: { title: 'Header' } }), validate: false },
+    { id: 'async', document: defined(true)({ title: '' }, { header: { title: 'Header' } }), validate: false },
+    { id: 'checked', document: defined()({ title: '' }, { header: { title: 'Header' } }) },
+  ]);
+  assert.deepEqual(outcomes.map(outcome => outcome.status), ['success', 'success', 'error']);
   await client.dispose();
 });
 
@@ -869,13 +910,24 @@ test('the worker runtime compiles transferred assets, mounting them without a se
   dispatch({ protocol: 1, type: 'initialize', compiler: { wasm, fonts: [new Uint8Array(font)] } });
   await settled('ready', undefined);
 
-  const template = '#set text(font: "Libertinus Serif")\n#image("chart.svg", alt: "A bar")';
-  const send = (id: number, assets: Record<string, Uint8Array>) => dispatch({
-    protocol: 1, type: 'compile', id, request: { template, input: null, assets },
+  // A request as the client posts it: resolved on the page's thread, its data at the schema path.
+  const main = [
+    '#import "@local/typfolio:0.1.0": input',
+    '#let data = input(json.with("./input.schema.json"))',
+    '#set document(title: data.title)',
+    '#set text(font: "Libertinus Serif")',
+    '#image("chart.svg", alt: data.alt)',
+  ].join('\n');
+  const send = (id: number, assets: Assets) => dispatch({
+    protocol: 1,
+    type: 'compile',
+    id,
+    request: { entrypoint: 'main.typ', files: { 'main.typ': main }, documents: { 'input.schema.json': { title: 'Chart', alt: 'A bar' } }, assets },
   });
   send(1, { 'chart.svg': svg });
   const done = await settled('result', 1);
   assert.equal(new TextDecoder().decode(done.result.bytes.subarray(0, 5)), '%PDF-');
+  assert.equal(done.result.metadata.title, 'Chart');
   send(2, {});
   assert.equal((await settled('failure', 2)).error.code, 'COMPILATION');
 });

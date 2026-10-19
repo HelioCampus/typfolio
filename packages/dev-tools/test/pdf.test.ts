@@ -4,8 +4,8 @@ import { cp, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/pr
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { createCompiler, pdfStandards, TypstPdfError } from '@typfolio/core';
-import type { ErrorCode, PdfCompiler, PdfOptions, PdfRequest } from '@typfolio/core';
+import { createCompiler, defineTemplate, pdfStandards, TypstPdfError } from '@typfolio/core';
+import type { Assets, ErrorCode, PdfCompiler, PdfOptions } from '@typfolio/core';
 import * as main from '../dist/index.js';
 import * as pdfModule from '../dist/pdf.js';
 import { inspectPdf } from '../dist/pdf.js';
@@ -17,23 +17,27 @@ const file = (path: string) => readFile(new URL(path, root));
 const text = async (path: string) => (await file(path)).toString();
 const hasCode = (code: ErrorCode) => (error: unknown) => error instanceof TypstPdfError && error.code === code;
 const timestamp = 1700000000;
+// The fixtures read their data from /input.json, so that is where it is mounted.
+const fixture = async (directory: string, partial: string) => defineTemplate({
+  files: {
+    'main.typ': await text(`fixtures/${directory}/main.typ`),
+    [partial]: await text(`fixtures/${directory}/${partial}`),
+  },
+  schemaPath: 'input.json',
+});
 
 let compiler!: PdfCompiler;
-let request!: PdfRequest<{ title: string }>;
-const compile = async (overrides: Partial<PdfRequest<unknown>> = {}) => (await compiler.compile({ ...request, ...overrides })).bytes;
+let input!: { title: string };
+let basic!: Awaited<ReturnType<typeof fixture>>;
+let assets!: Assets;
+const compile = async (pdf: PdfOptions = { standards: ['ua-1'], creationTimestamp: timestamp }) => (await compiler.compile(basic(input), { assets, pdf })).bytes;
 before(async () => {
   const wasm = await file('packages/wasm/generated/compiler_bg.wasm');
   const fonts = await Promise.all(['Regular', 'Bold'].map(style => file(`fixtures/fonts/LibertinusSerif-${style}.otf`)));
   compiler = await createCompiler({ wasm, fonts });
-  request = {
-    template: { entrypoint: 'main.typ', files: {
-      'main.typ': await text('fixtures/basic/main.typ'),
-      'partials/layout.typ': await text('fixtures/basic/partials/layout.typ'),
-    } },
-    input: JSON.parse(await text('fixtures/basic/input.json')),
-    assets: { 'assets/chart.svg': await file('fixtures/basic/chart.svg') },
-    pdf: { standards: ['ua-1'], creationTimestamp: timestamp },
-  };
+  basic = await fixture('basic', 'partials/layout.typ');
+  input = JSON.parse(await text('fixtures/basic/input.json'));
+  assets = { 'assets/chart.svg': await file('fixtures/basic/chart.svg') };
 });
 after(() => compiler?.dispose());
 
@@ -49,9 +53,9 @@ test('reports the structure of a PDF/UA compile of the basic fixture', async () 
   assert.equal(report.standard.pdfUa, 1);
   assert.equal(report.standard.pdfA, undefined);
   assert.equal(report.language, 'en');
-  assert.equal(report.title, request.input.title);
+  assert.equal(report.title, input.title);
   assert.equal(report.creationDate?.getTime(), timestamp * 1000);
-  assert.deepEqual(report.headings, [{ level: 1, text: request.input.title }]);
+  assert.deepEqual(report.headings, [{ level: 1, text: input.title }]);
   assert.deepEqual(report.figures, [{ alt: 'A blue bar representing the completed outcome.' }]);
   assert.equal(report.tables, 1);
   assert.ok(report.fonts.length >= 1 && report.fonts.every(font => font.embedded && /LibertinusSerif/.test(font.name)), JSON.stringify(report.fonts));
@@ -64,7 +68,7 @@ test('reports the structure of a PDF/UA compile of the basic fixture', async () 
 });
 
 test('an untagged compile reports no tags, no structure tree and no PDF/UA declaration', async () => {
-  const report = await inspectPdf(await compile({ pdf: { tags: false, creationTimestamp: timestamp } }));
+  const report = await inspectPdf(await compile({ tags: false, creationTimestamp: timestamp }));
   assert.equal(report.tagged, false);
   assert.equal(report.structureTree, false);
   assert.equal(report.standard.pdfUa, undefined);
@@ -73,12 +77,12 @@ test('an untagged compile reports no tags, no structure tree and no PDF/UA decla
   assert.equal(report.tables, 0);
   assert.deepEqual(report.structureRoles, {});
   // The document-level facts are still there.
-  assert.equal(report.title, request.input.title);
+  assert.equal(report.title, input.title);
   assert.equal(report.language, 'en');
 });
 
 test('default options tag the PDF and have a structure tree but declare no PDF/UA', async () => {
-  const report = await inspectPdf(await compile({ pdf: { creationTimestamp: timestamp } }));
+  const report = await inspectPdf(await compile({ creationTimestamp: timestamp }));
   assert.equal(report.tagged, true);
   assert.equal(report.structureTree, true);
   assert.equal(report.standard.pdfUa, undefined);
@@ -86,19 +90,19 @@ test('default options tag the PDF and have a structure tree but declare no PDF/U
 });
 
 test('a PDF/A-2b compile declares part 2, conformance B', async () => {
-  const report = await inspectPdf(await compile({ pdf: { standards: ['a-2b'], creationTimestamp: timestamp } }));
+  const report = await inspectPdf(await compile({ standards: ['a-2b'], creationTimestamp: timestamp }));
   assert.deepEqual(report.standard.pdfA, { part: 2, conformance: 'B' });
   assert.equal(report.standard.pdfUa, undefined);
 });
 
 test('PDF/A-4 without a conformance level reports the part alone', async () => {
-  const report = await inspectPdf(await compile({ pdf: { standards: ['a-4'], creationTimestamp: timestamp } }));
+  const report = await inspectPdf(await compile({ standards: ['a-4'], creationTimestamp: timestamp }));
   assert.deepEqual(report.standard.pdfA, { part: 4 });
 });
 
 test('each advertised PDF standard is declared by the file it produces', async () => {
   for (const standard of pdfStandards) {
-    const bytes = await compile({ pdf: { standards: [standard], creationTimestamp: timestamp } });
+    const bytes = await compile({ standards: [standard], creationTimestamp: timestamp });
     const report = await inspectPdf(bytes);
     if (/^\d/.test(standard)) {
       // A version is not a field of the report; the file header carries it.
@@ -117,14 +121,8 @@ test('each advertised PDF standard is declared by the file it produces', async (
 
 test('reports the headings and PDF/UA declaration of the outcome-sets fixture', async () => {
   const input: { document: { title: string } } = JSON.parse(await text('fixtures/outcome-sets/input.json'));
-  const bytes = (await compiler.compile({
-    template: { entrypoint: 'main.typ', files: {
-      'main.typ': await text('fixtures/outcome-sets/main.typ'),
-      'partials/report.typ': await text('fixtures/outcome-sets/partials/report.typ'),
-    } },
-    input,
-    pdf: { standards: ['ua-1'], creationTimestamp: timestamp },
-  })).bytes;
+  const outcomeSets = await fixture('outcome-sets', 'partials/report.typ');
+  const bytes = (await compiler.compile(outcomeSets(input), { pdf: { standards: ['ua-1'], creationTimestamp: timestamp } })).bytes;
   const report = await inspectPdf(bytes);
   assert.equal(report.title, input.document.title);
   assert.equal(report.tagged, true);
@@ -135,7 +133,7 @@ test('reports the headings and PDF/UA declaration of the outcome-sets fixture', 
 });
 
 const levels = '#set text(font: "Libertinus Serif", lang: "en")\n#set document(title: "Levels")\n';
-const compileSource = async (source: string, pdf: PdfOptions = {}) => (await compiler.compile({ template: source, input: null, pdf })).bytes;
+const compileSource = async (source: string, pdf: PdfOptions = {}) => (await compiler.compile(defineTemplate({ files: { 'main.typ': source } })(), { pdf })).bytes;
 
 test('headings come back in document order with their levels and text', async () => {
   const report = await inspectPdf(await compileSource(levels + '= A\nText.\n== B\n=== C with *emphasis* and a long long long tail that wraps to a second line because it is longer than the line is wide'));

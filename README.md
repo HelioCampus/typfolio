@@ -11,19 +11,25 @@ We needed PDFs that screen readers can actually navigate. The JavaScript PDF lib
 Typfolio compiles real, typeset, tagged PDFs inside the user's browser: your template is a `.typ` file, your data is a typed JSON object, and the result is PDF bytes you can preview, download or upload. No PDF service, no headless Chrome, no second copy of your business logic on a server. The same packages run in Node for batch jobs and tests.
 
 ```ts
-import { createCompiler } from '@typfolio/core';
+import { createCompiler, defineTemplate } from '@typfolio/core';
+import { z } from 'zod'; // your schema library: any Standard Schema
+
+// main.typ: #import "@local/typfolio:0.1.0": input
+//           #let data = input(json.with("./report.schema.json"))
+//           #set document(title: data.title)
+//           = #data.title
+//           #data.summary
+const report = defineTemplate({
+  files: { 'main.typ': mainSource },
+  schema: z.object({ title: z.string(), summary: z.string() }),
+  schemaPath: 'report.schema.json',
+});
 
 const compiler = await createCompiler({ wasm: wasmUrl, fonts: [fontUrl] });
-const { bytes } = await compiler.compile({
-  template: `
-#let input = json("/input.json")
-#set document(title: input.title)
-= #input.title
-#input.summary
-`,
-  input: { title: 'Quarterly report', summary: 'Application data goes here.' },
-  pdf: { standards: ['ua-1'] },
-});
+const { bytes } = await compiler.compile(
+  report({ title: 'Quarterly report', summary: 'Application data goes here.' }),
+  { pdf: { standards: ['ua-1'] } },
+);
 ```
 
 ## What it offers
@@ -34,7 +40,7 @@ const { bytes } = await compiler.compile({
 
 **The data never leaves the page.** The browser already holds the records, the charts and the user's session. Compiling there means nothing is uploaded, nothing is queued, and the feature keeps working offline.
 
-**Templates are code with a typed contract.** `.typ` files live in your repo and are reviewed like code. `PdfRequest<Input>` types the data in TypeScript, the bundled `@local/typfolio` helper gives the editor field completion from your JSON Schema, and `@typfolio/dev-tools` compiles each template against minimal and full samples of that schema in CI, so a renamed field or an unguarded optional value fails the build, not the user.
+**Templates are code with a typed contract.** `.typ` files live in your repo and are reviewed like code. A template is a function typed by its schema, so `report(data)` with the wrong data is a type error, the bundled `@local/typfolio` helper gives the editor field completion from your JSON Schema, and `@typfolio/dev-tools` compiles each template against minimal and full samples of that schema in CI, so a renamed field or an unguarded optional value fails the build, not the user.
 
 **The UI stays responsive.** `@typfolio/workers` runs compilation in a bounded pool of web workers with queueing, timeouts and hard cancellation that terminates a running compile mid-way. Batches stream results as they finish, so generating hundreds of documents client-side is an ordinary loop.
 
@@ -46,14 +52,14 @@ const { bytes } = await compiler.compile({
 
 | Concern | What you get |
 |---|---|
-| Request model | `compile({ template, input, assets, pdf })`: template files, JSON input mounted at `/input.json`, binary assets, PDF options. Each job is isolated; nothing leaks between compiles |
-| Typed, checked input | `defineTemplate` types each input from its schema and checks the data with it before compiling: any Standard Schema (Zod, Valibot, ArkType), Typfolio has no validator of its own. A shared part with data of its own, such as a header, is a partial with its own schema |
-| Editor completion | Templates import `@local/typfolio` and read `input(json.with("./report.schema.json"))`: at runtime that is the request input, in the editor it is a sample built from your JSON Schema, so `#data.` completes |
+| Document model | `compile(report(data, { header: headerData }), { assets, pdf })`: a template called with its data and its partials' data, binary assets, PDF options. Each job is isolated; nothing leaks between compiles |
+| Typed, checked data | `defineTemplate` types its call from its schema and checks the data with it before compiling: any Standard Schema (Zod, Valibot, ArkType), Typfolio has no validator of its own. A shared part with data of its own, such as a header, is a partial with its own schema, named once in the template |
+| Editor completion | Templates import `@local/typfolio` and read `input(json.with("./report.schema.json"))`: at runtime that is the data, mounted at that path, in the editor it is a sample built from your JSON Schema there, so `#data.` completes |
 | Build-time checks | `@typfolio/dev-tools` compiles a template against a *minimal* and a *full* sample of its schema, catching unknown fields and unguarded optional data before runtime |
 | Explicit resources | Fonts and the WASM are loaded from where you say; there is no implicit font CDN, no network access during compilation and no remote package downloads |
 | Workers | Keeps the UI responsive: bounded pool of web workers, FIFO queue, per-job `AbortSignal`, timeouts, hard cancellation by terminating the worker mid-compile, worker replacement and streaming batches |
 | React | `usePdf`: a PDF kept up to date with its data, like a query, with charts drawn at the PDF's size, over either client |
-| Browser capture | Turn a live chart (SVG) or DOM region (PNG via html2canvas) into a request asset with mandatory alt text, so what the user sees on screen lands in the PDF; only possible because compilation happens in the page |
+| Browser capture | Turn a live chart (SVG) or DOM region (PNG via html2canvas) into an asset with mandatory alt text, so what the user sees on screen lands in the PDF; only possible because compilation happens in the page |
 | Reproducible build | The compiler is built from a pinned upstream revision with pinned Rust and wasm-bindgen, path-remapped, with a provenance file whose hashes the tests verify |
 
 ## How it works
@@ -61,29 +67,29 @@ const { bytes } = await compiler.compile({
 ```mermaid
 flowchart LR
   subgraph App["Your application"]
-    T[".typ template folder"] --> R
-    J["Typed JSON input"] --> R
+    T[".typ template folder + schemas"] --> R
+    J["Typed data"] --> R
     A["Assets: logos, captured charts"] --> R
-    R["PdfRequest"]
+    R["report(data, { header })"]
   end
   R --> C
   subgraph Core["@typfolio/core"]
-    C["Virtual file system<br/>/main.typ · /input.json · assets · @local/typfolio"] --> W["Typst compiler (WASM)"]
+    C["Virtual file system<br/>template files · data at its schema path · assets · @local/typfolio"] --> W["Typst compiler (WASM)"]
     W --> P["PDF bytes + diagnostics"]
   end
   subgraph Workers["@typfolio/workers (optional)"]
     Q["Queue · pool · cancel · batch"]
   end
-  R -. "same request" .-> Q --> C
+  R -. "same document" .-> Q --> C
 ```
 
-The compiler never touches the host file system or the network. Everything a compile can see is what the request mounted, plus the bundled `@local/typfolio` helper package.
+The compiler never touches the host file system or the network. Everything a compile can see is what the document and its options mounted, plus the bundled `@local/typfolio` helper package.
 
 ## Packages
 
 | Package | Purpose |
 |---|---|
-| [`@typfolio/core`](./packages/core/README.md) | Compilation of template files, JSON input and assets into PDF bytes and diagnostics. Subpaths: `/capture`, `/capture/svg`, `/capture/dom` (browser asset capture), kept out of the main entry |
+| [`@typfolio/core`](./packages/core/README.md) | Templates and their typed data compiled into PDF bytes and diagnostics. Subpaths: `/capture`, `/capture/svg`, `/capture/dom` (browser asset capture), kept out of the main entry |
 | [`@typfolio/dev-tools`](./packages/dev-tools/README.md) | Dev-time tools, installed as a devDependency and never needed at runtime: template checks against schema samples, and `inspectPdf` (optional `pdfjs-dist` peer) to report a compiled PDF's structure for tests |
 | [`@typfolio/workers`](./packages/workers/README.md) | Module-worker execution: pools, queues, cancellation, timeouts, batches |
 | [`@typfolio/react`](./packages/react/README.md) | `usePdf`, with charts drawn at the PDF's size, and the `CaptureRegion` marker component |
@@ -96,39 +102,46 @@ Core has no runtime dependency other than `@typfolio/wasm`. `html2canvas` (DOM c
 ```text
 src/report/
   main.typ              #import "@local/typfolio:0.1.0": input
-  partials/layout.typ   #let data = input(json.with("./report.schema.json"))
-  report.schema.json    the application's JSON Schema; never sent at runtime
+                        #let data = input(json.with("./report.schema.json"))
+  partials/layout.typ
+  report.schema.ts      the application's schema (Zod here)
+  report.schema.json    its JSON Schema, generated; editor only, never sent at runtime
+  template.ts           defineTemplate
 ```
 
 ```ts
-import { templateFromFiles, type PdfRequest } from '@typfolio/core';
-
-const template = templateFromFiles(
-  import.meta.glob('./report/**/*.typ', { query: '?raw', import: 'default', eager: true }),
-);
-const request: PdfRequest<ReportInput> = { template, input, pdf: { standards: ['ua-1'] } };
-```
-
-### Schema-driven completion and checks
-
-The schema is yours: write it by hand or generate it from the validation library you already use. With Zod 4, one line produces it:
-
-```ts
-// scripts/write-schema.ts (the application's script; Typfolio has no Zod dependency)
+// report.schema.ts: the application imports its schema library; Typfolio has none
 import { z } from 'zod';
-import { writeFile } from 'node:fs/promises';
 
-export const Report = z.object({
+export const reportSchema = z.object({
   title: z.string().min(1),
   owner: z.string().nullable(),
   students: z.array(z.object({ name: z.string(), score: z.number().int().min(0).max(100) })),
 });
-export type ReportInput = z.infer<typeof Report>;
 
-await writeFile('src/report/report.schema.json', JSON.stringify(z.toJSONSchema(Report), null, 2));
+// template.ts
+import { defineTemplate } from '@typfolio/core';
+import main from './main.typ?raw';
+import layout from './partials/layout.typ?raw';
+
+export const report = defineTemplate({
+  entrypoint: 'report/main.typ',
+  files: { 'report/main.typ': main, 'report/partials/layout.typ': layout },
+  schema: reportSchema,
+  schemaPath: 'report/report.schema.json',
+});
+
+// anywhere: typed by the schema, checked by it before compiling
+await client.compile(report({ title: 'Q3', owner: null, students: [] }), { pdf: { standards: ['ua-1'] } });
 ```
 
-The template reads its input through the bundled helper:
+A shared part with data of its own, such as a header, is a partial: `definePartial({ files, schema, schemaPath })`, listed once in the template (`partials: { header }`) and given its data by key, `report(data, { header: headerData })`.
+
+### Schema-driven completion and checks
+
+The JSON Schema file is generated from the same schema: `inputSchemaFiles(report)` from `@typfolio/dev-tools` returns every file (the template's and its partials'), by path, as JSON text, for a script to write and a test to compare.
+
+The template reads its data through the bundled helper:
 
 ```typ
 #import "@local/typfolio:0.1.0": input
@@ -145,7 +158,7 @@ The template reads its input through the bundled helper:
 )
 ```
 
-At runtime `input()` returns the request's JSON. In the editor nothing sets the runtime marker, so `input()` builds a sample from the schema and Tinymist completes from it: `#data.` offers `title`, `owner`, `students`; inside `data.students.map(s => ...)`, `s.` offers `name` and `score`. No sample file exists anywhere; the one editor setting is `"tinymist.typstExtraArgs": ["--package-path", "node_modules/@typfolio/core/typst-packages"]`.
+At runtime `input()` returns the data, mounted at that path. In the editor nothing sets the runtime marker, so `input()` builds a sample from the schema and Tinymist completes from it: `#data.` offers `title`, `owner`, `students`; inside `data.students.map(s => ...)`, `s.` offers `name` and `score`. No sample file exists anywhere; the one editor setting is `"tinymist.typstExtraArgs": ["--package-path", "node_modules/@typfolio/core/typst-packages"]`.
 
 The same schema checks the template in CI, with nothing written to disk:
 
@@ -153,10 +166,7 @@ The same schema checks the template in CI, with nothing written to disk:
 import { createTemplateChecker } from '@typfolio/dev-tools'; // installed as a devDependency
 
 const checker = await createTemplateChecker({ wasm, fonts });
-const report = await checker.check(
-  { files: { ...typFiles, 'report.schema.json': schemaText } },
-  { pdf: { standards: ['ua-1'] } },   // modes default to ['minimal', 'full']
-);
+const result = await checker.check(report, { pdf: { standards: ['ua-1'] } }); // modes default to ['minimal', 'full']
 // minimal: required fields only, owner = null, students = []  → catches unguarded optional data
 // full:    every field present, one student               → catches fields the schema no longer has
 ```
@@ -235,7 +245,7 @@ Typfolio asks the compiler for tagged PDF by default and for PDF/UA-1 or PDF/A w
 
 ## Documentation
 
-- [docs/template-authoring.md](./docs/template-authoring.md): template folders, `@local/typfolio`, templates with partials, editor completion, build-time checks, typed requests, the folder loader.
+- [docs/template-authoring.md](./docs/template-authoring.md): template folders, `@local/typfolio`, templates with partials, editor completion, build-time checks, typed calls, loading a folder.
 - [docs/errors.md](./docs/errors.md): error and diagnostic codes, and what to do about each.
 - [docs/compiler-build.md](./docs/compiler-build.md): the pinned compiler build, rebuild and test commands, compatibility and limits.
 - Package READMEs: [`core`](./packages/core/README.md), [`workers`](./packages/workers/README.md), [`react`](./packages/react/README.md), [`wasm`](./packages/wasm/README.md).

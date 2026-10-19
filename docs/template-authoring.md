@@ -1,21 +1,41 @@
 # Template authoring
 
-Typfolio compiles Typst templates with JSON input that exists only at runtime. This guide covers the template layout, how a template reads its input with editor completion, templates whose parts read data of their own, build-time template checks, typed requests, and the folder loader. Typfolio is not tied to a schema library: a template made with `defineTemplate` checks its data with any schema that implements [Standard Schema](https://standardschema.dev), and a plain template is not validated at all.
+Typfolio compiles Typst templates with JSON data that exists only at runtime. This guide covers the template layout, how a template reads its data with editor completion, templates whose parts read data of their own, build-time template checks, and typed calls. Typfolio is not tied to a schema library: a template checks its data with any schema that implements [Standard Schema](https://standardschema.dev) (Zod, Valibot, ArkType, …), which the application imports and passes in.
 
 ## Folder layout
 
-Keep the template as a folder of `.typ` files plus the JSON Schema of its input. There is no input file:
+Keep the template as a folder of `.typ` files plus the JSON Schema of its data, and a definition beside them. There is no data file:
 
 ```text
 src/report/
   main.typ               entrypoint
-  report.schema.json     JSON Schema of the input (editor only; never sent at runtime)
+  report.schema.json     JSON Schema of the data (editor only; never sent at runtime)
   partials/layout.typ    imported by main.typ
+  template.ts            defineTemplate: the files, the schema, and where the data is read
 ```
 
-Editor support exists for `.typ` files, not for Typst source inside JavaScript strings, which is why the template lives in files. The schema is the application's artifact. Write it by hand or generate it from a validation library (see below); Typfolio does not care where it comes from and adds no schema dependency.
+Editor support exists for `.typ` files, not for Typst source inside JavaScript strings, which is why the template lives in files. The schema is the application's artifact: write it in a validation library and generate the JSON file from it (see [The JSON Schema files](#the-json-schema-files)), or write the JSON by hand. Typfolio adds no schema dependency.
 
-## Reading the input
+```ts
+// src/report/template.ts
+import { defineTemplate } from '@typfolio/core';
+import { z } from 'zod';
+import main from './main.typ?raw';
+import layout from './partials/layout.typ?raw';
+
+export const reportSchema = z.object({ title: z.string().min(1), rows: z.array(z.object({ name: z.string(), score: z.number() })) });
+
+export const report = defineTemplate({
+  entrypoint: 'report/main.typ',
+  files: { 'report/main.typ': main, 'report/partials/layout.typ': layout },
+  schema: reportSchema,
+  schemaPath: 'report/report.schema.json', // where main.typ's json.with("./report.schema.json") points
+});
+
+await client.compile(report({ title: 'Q3', rows: [] }), { pdf: { standards: ['ua-1'] } });
+```
+
+## Reading the data
 
 ```typ
 #import "@local/typfolio:0.1.0": input
@@ -30,10 +50,10 @@ Editor support exists for `.typ` files, not for Typst source inside JavaScript s
 
 `@local/typfolio:0.1.0` is a small Typst package that ships inside `@typfolio/core` and is the only package templates can import. `input(schema)` behaves differently depending on who compiles:
 
-- Under Typfolio, core sets `sys.inputs.typfolio` and `input()` returns the request's `input`. The schema is never read, so it does not have to be in `template.files`. (For a template made with `defineTemplate`, `input()` reads the data mounted at the schema's path instead: see [Templates whose parts have data of their own](#templates-whose-parts-have-data-of-their-own).)
-- In an editor, nothing sets it, so `input()` builds a sample value from the schema. That sample is a real Typst value, so the editor completes `#data.` fields, nested fields, and loop variables over arrays.
+- Under Typfolio, core sets `sys.inputs.typfolio`, mounts the data the template was called with as JSON at its `schemaPath`, and `input()` reads it there. The schema is never sent, and `defineTemplate` rejects a schema file listed in `files`.
+- In an editor, nothing sets it, and the same path holds the JSON Schema file, so `input()` builds a sample value from it. That sample is a real Typst value, so the editor completes `#data.` fields, nested fields, and loop variables over arrays.
 
-Pass the schema as `json.with("<path>")`, not as a path string. The path is resolved relative to the file that contains `json.with`, which is why the function must be created in the template and not inside the package. `input(none)` returns the request input under Typfolio but is a hard error in the editor (with a message that says to pass `json.with(...)`), because there is nothing to build a sample from. `input` also accepts an already-loaded schema dictionary, for example `input(json("report.schema.json"))`.
+Pass the schema as `json.with("<path>")`, not as a path string or a loaded dictionary. The path is resolved relative to the file that contains `json.with`, which is why the function must be created in the template and not inside the package; under Typfolio that is what reads the data. `input(none)` and `input(dictionary)` are errors, with a message that says to pass `json.with(...)`.
 
 The sample builder lives in a second file of the package, `sample.typ`, which `input()` imports only in the editor branch. A compile under Typfolio never loads it, and core does not even mount it, so the runtime embeds only `input()`. The package's `lib.typ` does not re-export the builder: only the editor and `@typfolio/dev-tools` (see [Build-time checks](#build-time-checks)) use it.
 
@@ -43,16 +63,16 @@ The sample builder lives in a second file of the package, `sample.typ`, which `i
 - Typst refuses paths that leave the project root, and the editor uses the workspace folder as the project root. Keep the schema inside the workspace (usually next to the template). A path above it, such as `../../shared.schema.json`, fails in the editor.
 - Call `input(...)` from the entrypoint, or from a partial that creates its own `json.with(...)`, and pass `data` to partials as an argument. Do not rely on a partial reading the schema through a path written in another file. A file with data of its own, such as a shared header, reads it itself: see the next section.
 
-Existing templates that read `json("/input.json")` or `json("input.json")` keep working in Typfolio: core still mounts the request input at `/input.json`. They get no editor completion.
+An existing template that reads `json("/input.json")` works with `schemaPath: 'input.json'`, where the data is then mounted. It gets no editor completion.
 
 ## Templates whose parts have data of their own
 
-A report often has parts with data of their own: a shared header with the institution's name and logo, used by every report. `defineTemplate` and `definePartial` from `@typfolio/core` describe such a template once, with a schema for each input. Each Typst file reads its own data, and nothing names an input but the path of its schema file. The [vite-react example](../examples/vite-react/src/outcomes/) is a complete one.
+A report often has parts with data of their own: a shared header with the institution's name and logo, used by every report. `defineTemplate` and `definePartial` from `@typfolio/core` describe such a template once, with a schema for each piece of data. Each Typst file reads its own data, at the path of its schema file. The [vite-react example](../examples/vite-react/src/outcomes/) is a complete one.
 
 ```text
 src/
-  common/header.typ             reads its own input
-  common/header.schema.ts       its schema, and where it is read
+  common/header.typ             reads its own data
+  common/header.schema.ts       its schema
   common/header.schema.json     its JSON Schema (generated; editor only)
   common/header.ts              definePartial
   outcomes/main.typ             imports ../common/header.typ
@@ -86,21 +106,30 @@ src/
 ```
 
 ```ts
-// common/header.schema.ts
-import { defineInput } from '@typfolio/core';
+// common/header.schema.ts: the application imports its schema library, Typfolio does not
 import { z } from 'zod';
 
 export const headerSchema = z.object({
   institution: z.string().min(1),
   logo: z.string().meta({ contentMediaType: 'image/png' }),
 });
-export const headerInput = defineInput(headerSchema, 'common/header.schema.json');
 
 // common/header.ts
 import { definePartial } from '@typfolio/core';
+import { headerSchema } from './header.schema';
 import source from './header.typ?raw';
 
-export const header = definePartial({ files: { 'common/header.typ': source }, input: headerInput });
+export const header = definePartial({
+  files: { 'common/header.typ': source },
+  schema: headerSchema,
+  schemaPath: 'common/header.schema.json',
+});
+
+// outcomes/outcomes.schema.ts
+export const outcomesSchema = z.object({
+  title: z.string().min(1),
+  outcomes: z.array(z.object({ name: z.string(), met: z.number() })),
+});
 
 // outcomes/template.ts
 import { defineTemplate } from '@typfolio/core';
@@ -109,29 +138,31 @@ import source from './main.typ?raw';
 export const outcomes = defineTemplate({
   entrypoint: 'outcomes/main.typ',
   files: { 'outcomes/main.typ': source },
-  input: outcomesInput, // defineInput(outcomesSchema, 'outcomes/outcomes.schema.json')
+  schema: outcomesSchema,
+  schemaPath: 'outcomes/outcomes.schema.json',
   partials: { header },
 });
 
-// A request, typed by the template: `input` and `partials.header` are required.
-await client.compile({
-  template: outcomes,
-  input: { title: 'Outcome results', outcomes: [] },
-  partials: { header: { institution: 'Example University', logo: '/attachments/0.png' } },
-  assets: { 'attachments/0.png': logoBytes },
-});
+// The template called with its data and the header's, typed by both schemas.
+await client.compile(
+  outcomes(
+    { title: 'Outcome results', outcomes: [] },
+    { header: { institution: 'Example University', logo: '/attachments/0.png' } },
+  ),
+  { assets: { 'attachments/0.png': logoBytes } },
+);
 ```
 
 How it fits together:
 
-- `defineInput(schema, path)` pairs a schema with the path of its JSON Schema file, relative to the template root (the root of the virtual paths in `files`). The file at that path reads its data with `input(json.with("./header.schema.json"))`: in an editor, the file there is the JSON Schema and `input()` builds a sample from it; when Typfolio compiles, the data is mounted at that same path. The schema file is never sent, and `defineTemplate` rejects one listed in `files`.
-- The key in `partials` (`header`) names the partial's data in a request. Typst never sees it.
-- A partial is Typst code with runtime data of its own: its files, one input, and the partials it uses (`partials` again, nested as deep as needed). Shared code without data of its own (helpers, a badge) needs no partial: spread its files into the template's `files`, as in `files: { ...badgeFiles, 'outcomes/main.typ': source }`.
-- `defineTemplate` merges the files of the template and of every partial, and rejects the same path with different contents, two different partials under one key, and two inputs on one path.
-- Before compiling, each piece of data is checked against its schema, on the calling thread (the worker client too, which then sends only the data). Any schema that implements Standard Schema works: Zod, Valibot, ArkType and others. Data that does not match rejects with `INVALID_INPUT`, whose message names the input and lists the issues (`The data of partial "header" does not match its schema (common/header.schema.json):` then `- institution: …`); the issues are also on the error's `issues`. A schema that validates asynchronously is awaited. A missing `input` or partial's data, or data for a partial the template does not have, rejects with `INVALID_REQUEST`.
+- `schemaPath` is the path of the schema's JSON file, relative to the template root (the root of the virtual paths in `files`). The file reads its data there with `input(json.with("./header.schema.json"))`, relative to itself: in an editor, the file there is the JSON Schema and `input()` builds a sample from it; when Typfolio compiles, the data is mounted at that same path. `schema` without `schemaPath` is refused at definition time.
+- A template is a function: `outcomes(data, { header: headerData })`. The key in `partials` (`header`) names the partial's data in that call; Typst never sees it. Without partials it is `outcomes(data)`, without data `outcomes()`, and with partials but no data of its own `outcomes(undefined, { header })`.
+- A partial is Typst code with runtime data of its own: its files, its schema and path, and the partials it uses (`partials` again, nested as deep as needed; their data goes in the same second argument, by key). Shared code without data of its own (helpers, a badge) needs no partial: spread its files into the template's `files`, as in `files: { ...badgeFiles, 'outcomes/main.typ': source }`.
+- `defineTemplate` merges the files of the template and of every partial, and rejects the same path with different contents, two different partials under one key, and two pieces of data on one path.
+- Before compiling, each piece of data is checked against its schema, on the calling thread (the worker client too, which then sends only the data). Data that does not match rejects with `INVALID_INPUT`, whose message names whose data it is and lists the issues (`The data of partial "header" does not match its schema (common/header.schema.json):` then `- institution: …`); the issues are also on the error's `issues`. A schema that validates asynchronously is awaited. Missing data, or data for a partial the template does not have, rejects with `INVALID_REQUEST`. `compile(document, { validate: false })` skips the schemas.
+- Typst gets the data as it was passed, not the schema's parsed output: a schema's defaults and transforms do not reach the template, so read an optional field with `.at(key, default: …)`.
 - A template compiles from the files it declares and nothing else. A file it imports but does not declare fails with a diagnostic whose `code` is `file-not-found`, naming the file and linking to what to do ([docs/errors.md](./errors.md#file-not-found)): `File not found: /common/header.typ (read by /outcomes/main.typ). See …`. The header's code listed in `files` without its partial fails the same way, on `common/header.schema.json`, where no data is mounted.
 - A partial has one input per compile. A template that shows the header twice shows the same data in both places; whatever differs between the two uses goes in as Typst arguments (`report-header(subtitle: …)`).
-- A template made with `defineTemplate` does not read `/input.json`, and `input(none)` is an error in it. Plain templates (`template: { entrypoint, files }` or a string) work as before.
 
 ### Images the data points to
 
@@ -142,30 +173,34 @@ import { createAttachments } from '@typfolio/core';
 
 const files = createAttachments();
 const logo = files.add(logoBytes, 'png'); // '/attachments/0.png'; the same bytes again give the same path
-await client.compile({ template: outcomes, input, partials: { header: { institution, logo } }, assets: files.assets });
+await client.compile(outcomes(data, { header: { institution, logo } }), { assets: files.assets });
 ```
 
-The paths are absolute, so `image(header.logo)` reads the file from any template file. In React, the `data` function of `usePdf` gets `attach`, which does the same, and `render`, which draws a chart and returns its path (`/charts/0.svg`).
+The paths are absolute, so `image(header.logo)` reads the file from any template file. In React, `usePdf`'s document function gets `attach`, which does the same, and `render`, which draws a chart and returns its path (`/charts/0.svg`): `usePdf(({ render, attach }) => outcomes(…), { client, deps })`.
 
 Mark such a field with `contentMediaType` in its JSON Schema (Zod: `z.string().meta({ contentMediaType: 'image/png' })`). In an editor and in a check the sample is then a placeholder image instead of a string, so `image(header.logo)` compiles there too.
 
 ### The JSON Schema files
 
-The editor reads each input's JSON Schema from disk, so the files must exist and must follow the schemas. `inputSchemaFiles` from `@typfolio/dev-tools` gives every file, by path, as JSON text; it writes nothing. It takes templates, partials or the `defineInput(...)` results themselves, which a Node script can import even where the definitions import `.typ` files through the bundler:
+The editor reads each JSON Schema from disk, so the files must exist and must follow the schemas. `inputSchemaFiles` from `@typfolio/dev-tools` gives every file, by path, as JSON text; it writes nothing. It takes templates or partials (each template's own file and every partial's, once per path), or `{ schema, schemaPath }` pairs, which a Node script can import even where the definitions import `.typ` files through the bundler:
 
 ```ts
 // scripts/write-schemas.ts: node scripts/write-schemas.ts
 import { writeFile } from 'node:fs/promises';
 import { inputSchemaFiles } from '@typfolio/dev-tools';
-import { headerInput } from '../src/common/header.schema.ts';
-import { outcomesInput } from '../src/outcomes/outcomes.schema.ts';
+import { headerSchema } from '../src/common/header.schema.ts';
+import { outcomesSchema } from '../src/outcomes/outcomes.schema.ts';
 
-for (const [path, text] of Object.entries(inputSchemaFiles([headerInput, outcomesInput]))) {
+const files = inputSchemaFiles([
+  { schema: headerSchema, schemaPath: 'common/header.schema.json' },
+  { schema: outcomesSchema, schemaPath: 'outcomes/outcomes.schema.json' },
+]); // or inputSchemaFiles([outcomes]) where the definitions can be imported
+for (const [path, text] of Object.entries(files)) {
   await writeFile(new URL(`../src/${path}`, import.meta.url), text);
 }
 ```
 
-A test calls it the same way and compares the parsed files with the parsed results (a formatter may change the text), so a schema that changed without its file fails CI. Schemas that implement Standard JSON Schema (`~standard.jsonSchema`; Zod's do) need nothing more. For others, such as Zod Mini's, pass `toJSONSchema: schema => z.toJSONSchema(schema, { io: 'input' })`. Use the input side of the schema: Typfolio mounts the data as the request carries it, not the parsed output.
+A test calls it the same way and compares the parsed files with the parsed results (a formatter may change the text), so a schema that changed without its file fails CI. Schemas that implement Standard JSON Schema (`~standard.jsonSchema`; Zod's do) need nothing more. For others, such as Zod Mini's, pass `toJSONSchema: schema => z.toJSONSchema(schema, { io: 'input' })`. Use the input side of the schema: Typfolio mounts the data as it was passed, not the parsed output. Zod 4's output (nullable objects as `anyOf` with `null`, defaulted arrays, `$defs`) is handled by the sample builder; hand-written JSON Schema works equally well.
 
 ## Editor setting for Cursor and VS Code
 
@@ -218,7 +253,7 @@ The `minimal` sample is the opposite: the sparsest value the schema allows, the 
 - A `const`, or the first `enum` value, wins over the type.
 - `examples` and `default` are ignored. `$ref` (with the same recursion guard), `allOf`, inferred types, `anyOf`/`oneOf` (first branch) and type arrays (first type) behave as in `full`.
 
-The sample does not replace the real input: the runtime input is whatever the request carries, and the schema is not checked against it.
+The sample does not replace the real data: at runtime the data is whatever the template is called with, checked against its schema.
 
 ## Build-time checks
 
@@ -237,26 +272,27 @@ try {
 }
 ```
 
-`checkTemplate(template, { wasm, fonts, modes?, pdf? })` is the one-shot form that creates and disposes a checker.
+`checkTemplate(template, { wasm, fonts, modes?, pdf?, assets? })` is the one-shot form that creates and disposes a checker.
 
-`check` also takes a template made with `defineTemplate`. It then compiles the files the template declares and nothing else, with each input's JSON Schema at its path (made as `inputSchemaFiles` makes it; pass `toJSONSchema` where the schemas need it, or give a schema file in `assets` to use it as it is). A file the template imports without declaring it fails with the message described in [Templates whose parts have data of their own](#templates-whose-parts-have-data-of-their-own), which is the check that catches a forgotten partial before any data does.
+`check` takes a template made with `defineTemplate`. It compiles the files the template declares and nothing else, with each piece of data's JSON Schema at its `schemaPath`, made as `inputSchemaFiles` makes it (pass `toJSONSchema` where the schemas need it). A JSON Schema file given in `assets` at a data path is used as it is instead: that is how the files committed on disk are checked, and how data without a schema is. A file the template imports without declaring it fails with the message described in [Templates whose parts have data of their own](#templates-whose-parts-have-data-of-their-own), which is the check that catches a forgotten partial before any data does.
 
 What a check does:
 
 - It compiles in editor mode, once per mode: Typfolio's runtime marker is not set, `sys.inputs.typfolio-sample` is the mode, and the package's `typst.toml`, `lib.typ` and `sample.typ` are mounted. `input()` therefore reads the schema and builds the sample, exactly as an editor does.
-- **The schema must be in `template.files`**, as a string, at the path the template's `json.with(...)` names, relative to the file that writes it (`reports/outcome/schemas/x.json` for a template at `reports/outcome/main.typ` that says `json.with("./schemas/x.json")`). The helper does not look for schemas itself: your test reads the file, or serializes the schema it generated from Zod, and passes the text. A schema that is missing makes every mode fail to compile.
+- **Each `schemaPath` must be the path the Typst file's `json.with(...)` names**, relative to the template root (`reports/outcome/schemas/x.json` for a template at `reports/outcome/main.typ` that says `json.with("./schemas/x.json")`). A mismatch makes every mode fail with `file-not-found` on the path the file reads.
 - The default modes are `minimal` then `full`. `full` catches a template that no longer matches the schema (a renamed or removed field). `minimal` catches the templates that assume optional data: reading an optional field without `.at(key, default: ...)`, calling `.first()` on a list that can be empty, or treating a nullable value as present.
 - A compile error in one mode is reported in that mode's result (`ok: false`, `error`, `diagnostics`) and the other modes still run. A malformed template (`INVALID_REQUEST`) or an unsupported `pdf` option (`UNSUPPORTED_OPTION`) is thrown, as for `compile()`. `bytes` of a successful mode are in memory only.
 - Nothing is written to disk. The samples exist only inside the compile, and `@typfolio/dev-tools` imports no file-system module. Writing the PDFs somewhere is up to the caller.
 - A checker runs one check at a time, like a compiler.
 
-A complete `node:test` recipe, which reads the template folder and its schema from disk. It is TypeScript that Node runs by stripping the types (`node --test test/report.template.test.ts` on Node 22.18 or newer; no build step), and it type-checks under `strict`:
+A complete `node:test` recipe, which reads the template folder and its committed schema file from disk. It is TypeScript that Node runs by stripping the types (`node --test test/report.template.test.ts` on Node 22.18 or newer; no build step), and it type-checks under `strict`:
 
 ```ts
 // test/report.template.test.ts
 import assert from 'node:assert/strict';
 import { after, before, test } from 'node:test';
 import { readdir, readFile } from 'node:fs/promises';
+import { defineTemplate } from '@typfolio/core';
 import { createTemplateChecker } from '@typfolio/dev-tools';
 import type { TemplateChecker } from '@typfolio/dev-tools';
 
@@ -264,13 +300,14 @@ const folder = new URL('../src/report/', import.meta.url);
 const font = new Uint8Array(await readFile(new URL('../fonts/report.otf', import.meta.url)));
 const wasm = await readFile(new URL(import.meta.resolve('@typfolio/wasm/compiler.wasm')));
 
-// Every .typ file of the folder, plus the schema, keyed by their path relative to main.typ.
+// Every .typ file of the folder, keyed by its path under the template root.
 async function loadTemplate() {
   const files: Record<string, string> = {};
   for (const path of await readdir(folder, { recursive: true })) {
-    if (path.endsWith('.typ') || path === 'report.schema.json') files[path.split('\\').join('/')] = await readFile(new URL(path, folder), 'utf8');
+    if (path.endsWith('.typ')) files[`report/${path.split('\\').join('/')}`] = await readFile(new URL(path, folder), 'utf8');
   }
-  return { files };
+  // No schema here: the check reads the committed JSON Schema file, given in `assets` below.
+  return defineTemplate({ entrypoint: 'report/main.typ', files, schemaPath: 'report/report.schema.json' });
 }
 
 let checker: TemplateChecker;
@@ -278,17 +315,21 @@ before(async () => { checker = await createTemplateChecker({ wasm, fonts: [font]
 after(() => checker.dispose());
 
 test('the report template compiles as PDF/UA against minimal and full samples of its schema', async () => {
-  const report = await checker.check(await loadTemplate(), { pdf: { standards: ['ua-1'] } });
+  const schema = await readFile(new URL('report.schema.json', folder));
+  const report = await checker.check(await loadTemplate(), {
+    pdf: { standards: ['ua-1'] },
+    assets: { 'report/report.schema.json': schema },
+  });
   for (const result of report.results) assert.ok(result.ok, `${result.mode} sample: ${result.error?.message}`);
 });
 ```
 
-A schema generated from Zod can be passed directly instead of being read from disk: `files['report.schema.json'] = JSON.stringify(z.toJSONSchema(Report))`. Vitest or any other runner works the same way.
+Where the test can import the application's definition (`report` from `src/report/template.ts`), pass it instead: `checker.check(report)` then makes the JSON Schema from its schema. Vitest or any other runner works the same way.
 
 Limits of a check, stated plainly:
 
 - It checks the shape of the template against the shape of the schema. It does not validate runtime data, and the samples are not validated against the schema; data the schema allows but the samples do not exercise (a non-first `anyOf` branch, a string `pattern`, a long list, an unusual `enum` value) can still break a template.
-- PDF standards apply to every mode, so `minimal` can reveal PDF/UA problems. A string the template turns into a heading or the document title is `""` in the `minimal` sample, and PDF/UA reports that ("heading title is empty"). If the schema promises the string is non-empty, say so with `minLength: 1` (Zod: `z.string().min(1)`): `minimal` then produces `"a"` and the check is meaningful. If the string may legitimately be empty, the failure is real: the template would emit an invalid document for that input, and it has to guard against it.
+- PDF standards apply to every mode, so `minimal` can reveal PDF/UA problems. A string the template turns into a heading or the document title is `""` in the `minimal` sample, and PDF/UA reports that ("heading title is empty"). If the schema promises the string is non-empty, say so with `minLength: 1` (Zod: `z.string().min(1)`): `minimal` then produces `"a"` and the check is meaningful. If the string may legitimately be empty, the failure is real: the template would emit an invalid document for that data, and it has to guard against it.
 - It makes no accessibility claim. `pdf: { standards: ['ua-1'] }` only asks the compiler for PDF/UA output, and a compile that succeeds is not a conformance verdict (see `docs/compiler-build.md`). Accessible authoring and human review stay necessary.
 - The sample is only as good as the schema. A schema that does not describe what the application actually sends is checked faithfully and proves nothing.
 
@@ -318,55 +359,32 @@ What the report cannot tell you, because of how pdf.js exposes the structure tre
 - `headings[].text` is recovered from the page's marked content; it is the empty string for a heading whose text pdf.js cannot attribute to it.
 - `fonts` lists the fonts that page content selects, not every font resource in the file.
 
-## Producing the schema from Zod (one option)
+## Typed calls
 
-For a template made with `defineTemplate`, use `inputSchemaFiles` (see [The JSON Schema files](#the-json-schema-files)). For a plain template:
+A template's call is typed by its schemas (each schema's input type, through `~standard.types`): `outcomes(data, { header })` must pass data of the template's shape and one key per partial, nested partials included. A missing key, an unknown key or data of the wrong shape is a type error, in `compile`, the worker client and `usePdf` alike, because they all take the document the call returns. A template without a schema takes `unknown` data, unchecked.
 
-```ts
-import { z } from 'zod';
-import { writeFileSync } from 'node:fs';
+A function that takes any template, such as an export hook of the application's own, types it as `TemplateDefinition<T, { header: HeaderSettings }>` and calls it with `T` and the header's data, without a cast. `AnyTemplate` is any template at all.
 
-const Report = z.object({ title: z.string().min(1), rows: z.array(z.object({ name: z.string(), score: z.number() })).default([]) });
-writeFileSync('src/report/report.schema.json', JSON.stringify(z.toJSONSchema(Report), null, 2));
-```
+The call checks the application's own types against the schema's, which TypeScript does strictly:
 
-Zod 4's `z.toJSONSchema()` output (nullable objects as `anyOf` with `null`, defaulted arrays, `$defs`) is handled by the sample builder. Regenerate the file when the Zod schema changes. Hand-written JSON Schema works equally well; `examples/vite-react/src/report/report.schema.json` is one.
+- An `interface` is not assignable to a loose object schema's type (Zod's `z.looseObject`, which carries `[key: string]: unknown`): declare such data with `type` instead, which is.
+- A `readonly` array is not assignable to the schema's `T[]`: copy it (`[...rows]`) or declare it mutable.
 
-## Typed requests
+The typing is type-only: at runtime the schemas check the data, and the JSON compatibility of the value (finite numbers, plain objects, no cycles) is checked when it is mounted.
 
-A template made with `defineTemplate` types its requests: `TemplateRequest<typeof outcomes>` is `{ template, input, partials, assets?, pdf? }` with `input` and each partial's data typed by their schemas, and `compile` (core, worker and React) checks a request against it. The rest of this section is about plain templates.
+## Loading a folder
 
-`PdfRequest` takes the type of its input, so TypeScript checks the runtime input against the application's own type:
+A bundler glob gives a template's files in one call. The `import.meta.glob` call must stay literal so the bundler can analyse it; drop the leading `./` from its keys, which `defineTemplate` would refuse:
 
 ```ts
-import type { PdfRequest } from '@typfolio/core';
+const globbed = import.meta.glob<string>('./report/**/*.typ', { query: '?raw', import: 'default', eager: true });
+const files = Object.fromEntries(Object.entries(globbed).map(([path, source]) => [path.slice(2), source]));
 
-interface ReportInput { title: string; owner: string | null; rows: { name: string; score: number }[] }
-
-const request: PdfRequest<ReportInput> = { template, input: { title: 'Q3', owner: null, rows: [] } };
-await client.compile(request); // core, worker and React `compile` all accept it without a cast
+export const report = defineTemplate({ entrypoint: 'report/main.typ', files, schema: reportSchema, schemaPath: 'report/report.schema.json' });
 ```
 
-The parameter is unconstrained, so an `interface` works (it is not assignable to `JsonValue`). The typing is type-only: JSON compatibility of the value (finite numbers, plain objects, no cycles) is still enforced at runtime, and nothing checks that the value matches `ReportInput` beyond the compiler. A plain `PdfRequest` means `PdfRequest<JsonValue>` as before. Code that accepts any request should use `PdfRequest<unknown>`. Keeping `ReportInput`, the schema file, and the template in step is the application's responsibility.
-
-## Loading the folder
-
-`templateFromFiles` turns the result of a bundler glob into a template. The `import.meta.glob` call must stay literal in application code so the bundler can analyse it; the helper takes its result and has no bundler or file-system dependency.
-
-```ts
-import { templateFromFiles } from '@typfolio/core';
-
-const template = templateFromFiles(
-  import.meta.glob<string>('./report/**/*.typ', { query: '?raw', import: 'default', eager: true }),
-);
-```
-
-The glob matches `*.typ` only, so `report.schema.json` is never sent at runtime. Keys become virtual paths relative to the template folder: a leading `./` or `/` is removed, then either `options.base` or, when not given, the longest directory prefix shared by all keys. `./report/main.typ` and `./report/partials/layout.typ` become `main.typ` and `partials/layout.typ`; a single `./report/main.typ` becomes `main.typ`. `options.entrypoint` is passed through when given; otherwise core's `main.typ` default applies.
-
-The loader rejects with `INVALID_REQUEST` an empty record, a key outside an explicit `base`, two keys that normalise to the same path, and a non-string value. A non-string value usually means the glob lacks `{ query: '?raw', import: 'default', eager: true }`: a lazy glob yields functions, and a glob without `import: 'default'` yields module objects. Path rules, the reserved paths (`/input.json` and everything under `/@typfolio/`) and a missing entrypoint are checked later by the compiler as for any request.
+The glob matches `*.typ` only, so `report.schema.json` is never sent at runtime. A lazy glob yields functions and one without `import: 'default'` yields module objects; `defineTemplate` rejects both.
 
 ## Validation
 
-A template made with `defineTemplate` is validated with the schemas the application gave it, before anything is compiled (see [Templates whose parts have data of their own](#templates-whose-parts-have-data-of-their-own)). Typfolio only calls each schema's `~standard.validate`; which library, and how strict (a loose object that lets the backend add fields, say), is the application's choice.
-
-A plain template is not validated. The compiler checks only that `input` can be serialised as JSON, and the schema file is used only to build the editor sample. Validate API responses with whatever the application already uses (Zod or another tool) before building the request, or with `usePdf`'s `validate` in React.
+A template's data, and each partial's, is validated with the schemas the application gave them, before anything is compiled (see [Templates whose parts have data of their own](#templates-whose-parts-have-data-of-their-own)). Typfolio only calls each schema's `~standard.validate`; which library, and how strict (a loose object that lets the backend add fields, say), is the application's choice. Data without a schema is not validated: the compiler checks only that it can be serialised as JSON. `validate: false` (on `compile`, the worker client, a batch job and `usePdf`) skips the schemas and keeps the types.

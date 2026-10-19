@@ -7,7 +7,7 @@ import { Shell } from '../Shell.tsx';
 import { StaticPreview } from '../live/StaticPreview.tsx';
 import type { Captured } from '../live/session.ts';
 import { LivePanel, LiveSwitch, type LiveStatus } from '../live/LivePanel.tsx';
-import { COLORS, asciiTemplate, framesToInput, makeAsciiRequest, type AsciiFrameInput } from '../ascii/capture.ts';
+import { COLORS, asciiTemplate, framesToInput, type AsciiFrameInput } from '../ascii/capture.ts';
 import {
   ART_PADDING,
   LINE_HEIGHT,
@@ -90,13 +90,15 @@ function AsciiWorkbench({ engine, fonts, client }: AsciiWorkbenchProps) {
   const [live, setLive] = useState(false);
   const [liveStatus, setLiveStatus] = useState<LiveStatus>('starting');
 
-  // The frames captured last: usePdf compiles them, and again on the next capture.
+  // The frames captured last: usePdf compiles them, and again on the next capture. Each capture is
+  // a new object, and the document is built again whenever `deps` change, so the same frame captured
+  // again compiles again too.
   const [capturedInput, setCapturedInput] = useState<AsciiFrameInput>();
   const startedAtRef = useRef(0);
-  const pdf = usePdf({
+  // Disabled until the first capture: nothing is checked or compiled before there is a frame.
+  const pdf = usePdf(() => asciiTemplate(capturedInput as AsciiFrameInput), {
     client,
-    template: asciiTemplate,
-    data: { input: capturedInput },
+    deps: [capturedInput],
     enabled: capturedInput !== undefined,
     onSuccess: () => setCaptureMs(performance.now() - startedAtRef.current),
   });
@@ -172,10 +174,8 @@ function AsciiWorkbench({ engine, fonts, client }: AsciiWorkbenchProps) {
     setPageCount(frames.length);
     startedAtRef.current = performance.now();
     setCaptureMs(undefined);
-    // The same frames again are the same data, so compile them again explicitly.
-    if (JSON.stringify(input) === JSON.stringify(capturedInput)) pdf.rebuild();
-    else setCapturedInput(input);
-  }, [engine, capturedInput, pdf.rebuild]);
+    setCapturedInput(input);
+  }, [engine]);
 
   // Live PDF mode: capture is demand-driven by the shared pipeline (src/live).
   const acquireFrame = useCallback(
@@ -198,8 +198,8 @@ function AsciiWorkbench({ engine, fonts, client }: AsciiWorkbenchProps) {
     },
     [engine],
   );
-  const buildLiveRequest = useCallback(
-    (frame: Frame, burn: number) => makeAsciiRequest(framesToInput([frame], engine.spaceWidth, baselineRef.current, burn)),
+  const buildLiveDocument = useCallback(
+    (frame: Frame, burn: number) => asciiTemplate(framesToInput([frame], engine.spaceWidth, baselineRef.current, burn)),
     [engine],
   );
   // The pointer over the live PDF canvas acts as a particle attractor in the simulation.
@@ -307,7 +307,7 @@ function AsciiWorkbench({ engine, fonts, client }: AsciiWorkbenchProps) {
           <LivePanel
             acquireFrame={acquireFrame}
             aspect={STAGE_W / STAGE_H}
-            buildRequest={buildLiveRequest}
+            buildDocument={buildLiveDocument}
             fonts={fonts}
             documentName="ascii-art.pdf"
             downloadName="typfolio-ascii-frame.pdf"

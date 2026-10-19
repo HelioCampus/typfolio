@@ -87,7 +87,7 @@ for (const [name, extra] of [['wasm', ['NOTICE', 'THIRD_PARTY_NOTICES.md', 'THIR
 await writeFile(join(dir, 'smoke.mjs'), `
 import { readFile } from 'node:fs/promises';
 import assert from 'node:assert/strict';
-import { createAttachments, createCompiler, defineInput, definePartial, defineTemplate, templateFromFiles } from '@typfolio/core';
+import { createAttachments, createCompiler, createLazyCompiler, definePartial, defineTemplate } from '@typfolio/core';
 import { createWorkerClient } from '@typfolio/workers';
 import * as react from '@typfolio/react';
 import { usePdf } from '@typfolio/react';
@@ -105,7 +105,10 @@ assert.equal(typeof createWorkerClient, 'function');
 assert.equal(typeof usePdf, 'function');
 // usePdf is the React API: its compile lifecycle and chart drawing are internal.
 assert.deepEqual(Object.keys(react), ['usePdf']);
-assert.equal('isTemplateDefinition' in coreMain, false);
+// Templates are defined (no plain templates, defineInput or templateFromFiles), and nothing internal leaks.
+assert.deepEqual(Object.keys(coreMain).sort(), [
+  'TypstPdfError', 'capabilities', 'createAttachments', 'createCompiler', 'createLazyCompiler', 'definePartial', 'defineTemplate', 'pdfStandards',
+]);
 assert.equal(typeof serializeSvg, 'function');
 assert.equal(typeof CaptureRegion, 'function');
 assert.equal(typeof captureAssets, 'function');
@@ -120,23 +123,22 @@ await assert.rejects(import('@typfolio/core/dev-tools'), { code: 'ERR_PACKAGE_PA
 for (const name of Object.keys(devTools)) assert.equal(name in coreMain, false, name + ' leaked into the main entry');
 assert.equal(typeof createTemplateChecker, 'function');
 assert.equal(typeof checkTemplate, 'function');
-assert.equal(typeof templateFromFiles, 'function');
 await assert.rejects(import('@typfolio/react/capture/svg'), { code: 'ERR_PACKAGE_PATH_NOT_EXPORTED' });
 await assert.rejects(import('@typfolio/react/capture/dom'), { code: 'ERR_PACKAGE_PATH_NOT_EXPORTED' });
 assert.equal(typeof svgCapture, 'function');
 assert.equal(typeof domPngCapture, 'function');
 const root = process.argv[2];
-// One WASM source value per JS realm: the compiler and the template checker share it.
+// One WASM source value per JS realm: the compilers and the template checker share it.
 const wasm = await readFile(new URL(import.meta.resolve('@typfolio/wasm/compiler.wasm')));
-const compiler = await createCompiler({
-  wasm,
-  fonts: [await readFile(root + '/fixtures/fonts/LibertinusSerif-Regular.otf')],
+const font = await readFile(root + '/fixtures/fonts/LibertinusSerif-Regular.otf');
+// A template whose Typst reads its data with json("/input.json"): schemaPath mounts each call's data there.
+const titled = defineTemplate({
+  files: { 'main.typ': '#let input = json("/input.json")\\n#set text(font: "Libertinus Serif", lang: "en")\\n#set document(title: input.title)\\n#input.title' },
+  schemaPath: 'input.json',
 });
+const compiler = await createCompiler({ wasm, fonts: [font] });
 try {
-  const result = await compiler.compile({
-    template: '#let input = json("/input.json")\\n#set text(font: "Libertinus Serif", lang: "en")\\n#set document(title: input.title)\\n#input.title',
-    input: { title: 'Installed package works' }, pdf: { standards: ['ua-1'] },
-  });
+  const result = await compiler.compile(titled({ title: 'Installed package works' }), { pdf: { standards: ['ua-1'] } });
   assert.equal(result.metadata.title, 'Installed package works');
   assert.ok(result.bytes.length > 1000);
   console.log('Packed core imports and compiles PDF/UA successfully.');
@@ -147,62 +149,85 @@ try {
   assert.equal(inspection.language, 'en');
   assert.deepEqual(inspection.headings, []);
   console.log('Packed @typfolio/dev-tools/pdf inspects that PDF: tagged, PDF/UA declared.');
+  // compile takes a document; a template without data is called without any.
+  const fixed = defineTemplate({ files: { 'main.typ': '#set document(title: "Fixed")\\nFixed' } });
+  assert.equal((await compiler.compile(fixed())).metadata.title, 'Fixed');
+  await assert.rejects(compiler.compile(fixed({ title: 'Data' })), { code: 'INVALID_REQUEST' });
+  await assert.rejects(compiler.compile(titled()), { code: 'INVALID_REQUEST' });
+  await assert.rejects(compiler.compile({ template: 'Hello', input: null }), { code: 'INVALID_REQUEST' });
   assert.deepEqual(compiler.capabilities.typstPackages, ['@local/typfolio:0.1.0']);
-  const packaged = await compiler.compile({
-    template: '#import "@local/typfolio:0.1.0": input\\n#let data = input(json.with("./report.schema.json"))\\n#set document(title: data.title)\\n#data.title',
-    input: { title: 'Packed Typst package works' },
+  const packaged = defineTemplate({
+    files: { 'main.typ': '#import "@local/typfolio:0.1.0": input\\n#let data = input(json.with("./report.schema.json"))\\n#set document(title: data.title)\\n#data.title' },
+    schemaPath: 'report.schema.json',
   });
-  assert.equal(packaged.metadata.title, 'Packed Typst package works');
+  assert.equal((await compiler.compile(packaged({ title: 'Packed Typst package works' }))).metadata.title, 'Packed Typst package works');
   console.log('Packed core compiles a template that imports @local/typfolio:0.1.0.');
   // A Standard Schema without a schema library.
   const schema = check => ({ '~standard': { version: 1, vendor: 'smoke', validate: value => (check(value) ? { value } : { issues: [{ message: 'invalid' }] }) } });
   const header = definePartial({
     files: { 'common/header.typ': '#import "@local/typfolio:0.1.0": input\\n#let header = input(json.with("./header.schema.json"))' },
-    input: defineInput(schema(value => typeof value.name === 'string'), 'common/header.schema.json'),
+    schema: schema(value => typeof value.name === 'string'),
+    schemaPath: 'common/header.schema.json',
   });
   const report = defineTemplate({
     entrypoint: 'report/main.typ',
     files: { 'report/main.typ': '#import "@local/typfolio:0.1.0": input\\n#import "../common/header.typ": header\\n#let data = input(json.with("./input.schema.json"))\\n#set document(title: data.title + " / " + header.name)\\n#image(data.logo, width: 1cm, alt: "Logo")' },
-    input: defineInput(schema(value => typeof value.title === 'string'), 'report/input.schema.json'),
+    schema: schema(value => typeof value.title === 'string'),
+    schemaPath: 'report/input.schema.json',
     partials: { header },
   });
   const attachments = createAttachments();
   const logo = attachments.add(new TextEncoder().encode('<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"><rect width="10" height="10"/></svg>'), 'svg');
-  const defined = await compiler.compile({ template: report, input: { title: 'Defined', logo }, partials: { header: { name: 'Header' } }, assets: attachments.assets });
+  const defined = await compiler.compile(report({ title: 'Defined', logo }, { header: { name: 'Header' } }), { assets: attachments.assets });
   assert.equal(defined.metadata.title, 'Defined / Header');
-  await assert.rejects(compiler.compile({ template: report, input: { title: 1, logo }, partials: { header: { name: 'H' } } }), { code: 'INVALID_INPUT' });
+  await assert.rejects(compiler.compile(report({ title: 1, logo }, { header: { name: 'H' } })), { code: 'INVALID_INPUT' });
+  await assert.rejects(compiler.compile(report({ title: 'T', logo }, { header: { name: 1 } })), { code: 'INVALID_INPUT' });
+  await assert.rejects(compiler.compile(report({ title: 'T', logo })), { code: 'INVALID_REQUEST' });
+  await assert.rejects(compiler.compile(report({ title: 'T', logo }, { header: { name: 'H' }, footer: {} })), { code: 'INVALID_REQUEST' });
+  // validate: false skips the schemas: the same data then fails in Typst.
+  await assert.rejects(compiler.compile(report({ title: 1, logo }, { header: { name: 'H' } }), { assets: attachments.assets, validate: false }), { code: 'COMPILATION' });
   console.log('Packed core compiles a defined template with a partial and an attachment, and rejects data that fails its schema.');
 } finally { await compiler.dispose(); }
-const checker = await createTemplateChecker({
-  wasm,
-  fonts: [await readFile(root + '/fixtures/fonts/LibertinusSerif-Regular.otf')],
-});
+const lazy = createLazyCompiler({ wasm, fonts: [font] });
 try {
-  const schema = JSON.stringify({ type: 'object', properties: { title: { type: 'string' }, subtitle: { type: 'string' } }, required: ['title'] });
-  const files = body => ({ 'main.typ': '#import "@local/typfolio:0.1.0": input\\n#let data = input(json.with("./report.schema.json"))\\n#set document(title: "Check")\\n' + body, 'report.schema.json': schema });
-  const good = await checker.check({ files: files('#data.title') }, { pdf: { standards: ['ua-1'] } });
+  assert.equal((await lazy.compile(titled({ title: 'Lazy compiler works' }))).metadata.title, 'Lazy compiler works');
+  console.log('Packed core compiles with a lazy compiler.');
+} finally { await lazy.dispose(); }
+const checker = await createTemplateChecker({ wasm, fonts: [font] });
+try {
+  // A Standard Schema that implements Standard JSON Schema: the checker makes the sample's JSON Schema from it.
+  const jsonSchema = { type: 'object', properties: { title: { type: 'string' }, subtitle: { type: 'string' } }, required: ['title'] };
+  const reportSchema = { '~standard': { version: 1, vendor: 'smoke', validate: value => ({ value }), jsonSchema: { input: () => jsonSchema, output: () => jsonSchema } } };
+  const source = body => ({ 'main.typ': '#import "@local/typfolio:0.1.0": input\\n#let data = input(json.with("./report.schema.json"))\\n#set document(title: "Check")\\n' + body });
+  const checked = body => defineTemplate({ files: source(body), schema: reportSchema, schemaPath: 'report.schema.json' });
+  assert.deepEqual(JSON.parse(inputSchemaFiles(checked(''))['report.schema.json']), jsonSchema);
+  const good = await checker.check(checked('#data.title'), { pdf: { standards: ['ua-1'] } });
   assert.equal(good.ok, true);
   assert.deepEqual(good.results.map(result => result.mode), ['minimal', 'full']);
   assert.ok(good.results.every(result => result.bytes.length > 1000));
-  const bad = await checker.check({ files: files('#data.subtitle') });
+  const bad = await checker.check(checked('#data.subtitle'));
   assert.equal(bad.ok, false);
   assert.deepEqual(bad.results.map(result => [result.mode, result.ok]), [['minimal', false], ['full', true]]);
   assert.match(bad.results[0].error.message, /subtitle/);
+  // Without a schema, the JSON Schema file is given in assets at the data path.
+  const given = defineTemplate({ files: source('#data.title'), schemaPath: 'report.schema.json' });
+  const fromFile = await checker.check(given, { assets: { 'report.schema.json': new TextEncoder().encode(JSON.stringify(jsonSchema)) } });
+  assert.equal(fromFile.ok, true);
   console.log('Packed @typfolio/dev-tools checks a template against a schema in both sample modes.');
 } finally { await checker.dispose(); }
 `);
 await writeFile(join(dir, 'consumer.ts'), `
-import { createCompiler, createLazyCompiler, templateFromFiles, type CompilerOptions, type FontSource, type JsonValue, type LazyCompiler, type PdfRequest, type PdfTemplate, type PdfClient, type PdfResult } from '@typfolio/core';
-import { createAttachments, defineInput, definePartial, defineTemplate, type AnyPdfRequest, type StandardSchemaV1, type TemplateRequest } from '@typfolio/core';
-import { collectBatch, compileBatch, createWorkerClient, type PdfWorkerClient } from '@typfolio/workers';
+import { createCompiler, createLazyCompiler, type Assets, type CompileOptions, type CompilerOptions, type FontSource, type LazyCompiler, type PdfClient, type PdfDocument } from '@typfolio/core';
+import { createAttachments, definePartial, defineTemplate, type AnyTemplate, type PartialDefinition, type StandardSchemaV1, type TemplateDefinition } from '@typfolio/core';
+import { collectBatch, compileBatch, createWorkerClient, type PdfBatchJob, type PdfWorkerClient, type WorkerCompileOptions } from '@typfolio/workers';
 import {
   usePdf,
-  type AnyPdfTemplate,
+  type AttachFile,
   type PdfBuildTools,
-  type PdfData,
-  type PdfDocument,
+  type PdfSource,
   type PdfStatus,
   type UsePdfOptions,
+  type UsePdfResult,
   type RenderAsset,
   type RenderAssetsOptions,
 } from '@typfolio/react';
@@ -222,6 +247,7 @@ import {
   createTemplateChecker,
   inputSchemaFiles,
   type SampleMode,
+  type SchemaFile,
   type TemplateCheckOptions,
   type TemplateCheckReport,
   type TemplateCheckResult,
@@ -241,16 +267,73 @@ void urlCompiler;
 // @ts-expect-error a number is not a font
 const badFont: CompilerOptions = { wasm, fonts: [42] };
 void badFont;
-const request: PdfRequest = { template: { entrypoint: 'main.typ', files: { 'main.typ': 'Hello' } }, input: null };
-const stringTemplate: PdfTemplate = 'Hello';
-const defaultEntrypointTemplate: PdfTemplate = { files: { 'main.typ': 'Hello' } };
-const stringRequest: PdfRequest = { template: stringTemplate, input: null };
-const defaultEntrypointRequest: PdfRequest = { template: defaultEntrypointTemplate, input: null };
-// @ts-expect-error an object template needs files
-const missingFiles: PdfTemplate = { entrypoint: 'main.typ' };
-stringRequest.template satisfies PdfTemplate;
-defaultEntrypointRequest.template satisfies PdfTemplate;
-const result: Uint8Array = (await compiler.compile(request)).bytes;
+// Templates: a call binds the data, typed by the schemas, and returns the document to compile.
+declare const titleSchema: StandardSchemaV1<{ title: string }>;
+declare const headerSchema: StandardSchemaV1<{ name: string }>;
+declare const logoSchema: StandardSchemaV1<{ src: string }>;
+// A schema whose input differs from its output: a call takes what the schema accepts.
+declare const countSchema: StandardSchemaV1<{ count: string }, { count: number }>;
+const header = definePartial({ files: { 'common/header.typ': '' }, schema: headerSchema, schemaPath: 'common/header.schema.json' });
+header satisfies PartialDefinition<{ name: string }>;
+const report = defineTemplate({ files: { 'main.typ': '' }, schema: titleSchema, schemaPath: 'input.schema.json', partials: { header } });
+const titled = defineTemplate({ files: { 'main.typ': '' }, schema: titleSchema, schemaPath: 'input.schema.json' });
+const counted = defineTemplate({ files: { 'main.typ': '' }, schema: countSchema, schemaPath: 'input.schema.json' });
+// No schema: the data is not checked, and typed unknown.
+const untyped = defineTemplate({ files: { 'main.typ': '' }, schemaPath: 'input.json' });
+// No schemaPath: no data.
+const fixed = defineTemplate({ files: { 'main.typ': 'Hello' } });
+const headerOnly = defineTemplate({ files: { 'main.typ': '' }, partials: { header } });
+// A partial's own partials are filled by key in the template call too.
+const logo = definePartial({ files: { 'common/logo.typ': '' }, schema: logoSchema, schemaPath: 'common/logo.schema.json' });
+const brandedHeader = definePartial({ files: { 'common/branded.typ': '' }, schema: headerSchema, schemaPath: 'common/branded.schema.json', partials: { logo } });
+const branded = defineTemplate({ files: { 'main.typ': '' }, schema: titleSchema, schemaPath: 'input.schema.json', partials: { header: brandedHeader } });
+const reportDocument: PdfDocument = report({ title: 'T' }, { header: { name: 'H' } });
+titled({ title: 'T' }) satisfies PdfDocument;
+counted({ count: '3' }) satisfies PdfDocument;
+untyped({ anything: [1, 'two'] }) satisfies PdfDocument;
+fixed() satisfies PdfDocument;
+headerOnly(undefined, { header: { name: 'H' } }) satisfies PdfDocument;
+branded({ title: 'T' }, { header: { name: 'H' }, logo: { src: '/logo.png' } }) satisfies PdfDocument;
+// @ts-expect-error a partial's key is missing
+report({ title: 'T' }, {});
+// @ts-expect-error the partials' data is required
+report({ title: 'T' });
+// @ts-expect-error an unknown partial key
+report({ title: 'T' }, { header: { name: 'H' }, footer: { name: 'F' } });
+// @ts-expect-error the data is typed by its schema
+report({ title: 1 }, { header: { name: 'H' } });
+// @ts-expect-error a partial's data is typed by its schema
+report({ title: 'T' }, { header: { name: 1 } });
+// @ts-expect-error an unknown key in the data
+titled({ title: 'T', subtitle: 'S' });
+// @ts-expect-error a template with data needs it
+titled();
+// @ts-expect-error a call takes the schema's input, not its output
+counted({ count: 3 });
+// @ts-expect-error a template without data takes none
+fixed({ title: 'T' });
+// @ts-expect-error a nested partial's data is required too
+branded({ title: 'T' }, { header: { name: 'H' } });
+// Templates are values of these types; a wrapper can take any template whose partials it fills.
+const anyTemplate: AnyTemplate = report;
+const typedDefinition: TemplateDefinition<{ title: string }> = titled;
+function withHeader<T>(template: TemplateDefinition<T, { header: { name: string } }>, data: T): PdfDocument {
+  return template(data, { header: { name: 'Shared' } });
+}
+withHeader(report, { title: 'T' });
+// @ts-expect-error the wrapper's data is the template's
+withHeader(report, { title: 1 });
+void [anyTemplate, typedDefinition];
+// compile takes a document and its options.
+const compileOptions: CompileOptions = { assets: { 'logo.png': new Uint8Array([1]) }, pdf: { standards: ['ua-1'] }, signal: new AbortController().signal, validate: false };
+const result: Uint8Array = (await compiler.compile(reportDocument, compileOptions)).bytes;
+await compiler.compile(fixed());
+// @ts-expect-error compile takes a document: call the template with its data
+await compiler.compile(report);
+// @ts-expect-error the 0.2 request shape is gone
+await compiler.compile({ template: 'Hello', input: null });
+// @ts-expect-error the data goes in the template call, not in the options
+await compiler.compile(titled({ title: 'T' }), { input: { title: 'T' } });
 const workerClient: PdfWorkerClient = createWorkerClient({
   compiler: { wasm, fonts: [font] },
   workerCount: 2,
@@ -261,15 +344,19 @@ const urlWorkerClient: PdfWorkerClient = createWorkerClient({
   workerFactory: () => worker,
 });
 void urlWorkerClient;
-const jobs = [{ id: 'one', request }];
+const workerOptions: WorkerCompileOptions = { ...compileOptions, timeoutMs: 1000 };
+(await workerClient.compile(report({ title: 'T' }, { header: { name: 'H' } }), workerOptions)).bytes satisfies Uint8Array;
+const jobs: PdfBatchJob<string>[] = [
+  { id: 'one', document: reportDocument },
+  { id: 'two', document: titled({ title: 'T' }), assets: { 'logo.png': new Uint8Array([1]) }, pdf: { standards: ['ua-1'] }, timeoutMs: 1000, validate: false },
+];
 for await (const outcome of compileBatch(workerClient, jobs)) {
   if (outcome.status === 'success') outcome.result.bytes satisfies Uint8Array;
 }
 const collected = await collectBatch(workerClient, jobs);
 collected[0]?.id satisfies string;
-// usePdf takes the client: a core compiler, or a worker client.
-const workerPdfOptions: UsePdfOptions<'Hello'> = { client: workerClient, template: 'Hello', data: { input: null } };
-void workerPdfOptions;
+// @ts-expect-error a batch job carries a document
+await collectBatch(workerClient, [{ id: 'old', request: { template: 'Hello', input: null } }]);
 const adapters: Record<string, CaptureAdapter> = {
   svg: svgCapture(),
   png: domPngCapture({ pixelRatio: 2 }),
@@ -277,8 +364,8 @@ const adapters: Record<string, CaptureAdapter> = {
 const captureOptions: CaptureAssetsOptions = { adapters, require: ['chart'] };
 declare const captureRoot: ParentNode;
 const captured: CapturedAssets = await captureAssets(captureRoot, captureOptions);
-captured.assets satisfies PdfRequest['assets'];
-captured.references satisfies JsonValue;
+captured.assets satisfies Assets;
+await compiler.compile(untyped({ figures: captured.references }), { assets: captured.assets });
 const marker: CaptureMarker = { id: 'chart', kind: 'svg', altText: 'Chart summary.' };
 const decorativeMarker: CaptureMarker = { id: 'divider', kind: 'png', decorative: true };
 captureProps(marker) satisfies Readonly<Record<string, string>>;
@@ -294,28 +381,44 @@ CaptureRegion(decorativeRegionProps);
 // @ts-expect-error a region needs alt text or decorative
 CaptureRegion({ captureId: 'chart', kind: 'svg' });
 void [missingAlt, bothAlt];
-// Typed input: an interface (not assignable to JsonValue) is accepted without casts everywhere a request is accepted.
+// Typed data: an interface (not assignable to a JSON type) is accepted without casts.
 interface ReportInput { title: string; rows: { name: string; score: number | null }[] }
-const typedRequest: PdfRequest<ReportInput> = { template: 'Hello', input: { title: 'T', rows: [{ name: 'a', score: null }] } };
-typedRequest.input.rows[0]?.name satisfies string | undefined;
-await compiler.compile(typedRequest);
-await workerClient.compile(typedRequest);
-await collectBatch(workerClient, [{ id: 'typed', request: typedRequest }]);
-// @ts-expect-error input does not match ReportInput
-const wrongInput: PdfRequest<ReportInput> = { template: 'Hello', input: { title: 1, rows: [] } };
-void wrongInput;
-// Dev-time template checks.
+declare const rowsSchema: StandardSchemaV1<ReportInput>;
+const rowsTemplate = defineTemplate({ files: { 'main.typ': '' }, schema: rowsSchema, schemaPath: 'input.schema.json' });
+const rowsInput: ReportInput = { title: 'T', rows: [{ name: 'a', score: null }] };
+await compiler.compile(rowsTemplate(rowsInput));
+await workerClient.compile(rowsTemplate(rowsInput));
+await collectBatch(workerClient, [{ id: 'typed', document: rowsTemplate(rowsInput) }]);
+// @ts-expect-error the data does not match ReportInput
+rowsTemplate({ title: 1, rows: [] });
+// Dev-time template checks: of a defined template.
 const checker: TemplateChecker = await createTemplateChecker({ wasm, fonts: [font] });
-const checkOptions: TemplateCheckOptions = { modes: ['minimal', 'full'], pdf: { standards: ['ua-1'] }, assets: { 'settings.json': new Uint8Array([123, 125]) } };
-const report: TemplateCheckReport = await checker.check({ entrypoint: 'main.typ', files: { 'main.typ': 'Hello' } }, checkOptions);
-report.ok satisfies boolean;
-const checkResult: TemplateCheckResult | undefined = report.results[0];
+const checkOptions: TemplateCheckOptions = {
+  modes: ['minimal', 'full'],
+  pdf: { standards: ['ua-1'] },
+  assets: { 'settings.json': new Uint8Array([123, 125]) },
+  toJSONSchema: () => ({}),
+};
+const checkReport: TemplateCheckReport = await checker.check(report, checkOptions);
+checkReport.ok satisfies boolean;
+const checkResult: TemplateCheckResult | undefined = checkReport.results[0];
 checkResult?.mode satisfies SampleMode;
 checkResult?.bytes satisfies Uint8Array | undefined;
 checkResult?.error?.code satisfies string | undefined;
 checkResult?.diagnostics.length satisfies number | undefined;
-(await checkTemplate('Hello', { wasm, fonts: [font], modes: ['full'] })).ok satisfies boolean;
+(await checkTemplate(titled, { wasm, fonts: [font], modes: ['full'] })).ok satisfies boolean;
+// @ts-expect-error check takes a defined template, not Typst source
+await checker.check('Hello');
+// @ts-expect-error check takes the template, not a document
+await checker.check(titled({ title: 'T' }));
 await checker.dispose();
+// @ts-expect-error an unknown sample mode
+const badMode: TemplateCheckOptions = { modes: ['sparse'] };
+void badMode;
+const schemaFile: SchemaFile = { schema: titleSchema, schemaPath: 'report/input.schema.json' };
+inputSchemaFiles([report, header, schemaFile], { toJSONSchema: () => ({}) }) satisfies Record<string, string>;
+inputSchemaFiles(titled) satisfies Record<string, string>;
+createAttachments().add(new Uint8Array([1]), 'png') satisfies string;
 // Dev-time PDF inspection.
 const inspection: PdfInspection = await inspectPdf(result);
 inspection.pages satisfies number;
@@ -332,75 +435,64 @@ inspection.figures satisfies PdfFigure[];
 inspection.tables satisfies number;
 inspection.fonts satisfies PdfFont[];
 inspection.structureRoles satisfies Record<string, number>;
-// @ts-expect-error an unknown sample mode
-const badMode: TemplateCheckOptions = { modes: ['sparse'] };
-void badMode;
-// A plain PdfRequest keeps working, and a loaded template folder is a PdfTemplate.
-const folderTemplate: PdfTemplate = templateFromFiles({ './report/main.typ': 'Hello' }, { entrypoint: 'main.typ' });
-await compiler.compile({ template: folderTemplate, input: {} });
 const lazy: LazyCompiler = createLazyCompiler({ wasm, fonts: [font] });
 lazy satisfies PdfClient;
-await lazy.compile(typedRequest);
+await lazy.compile(rowsTemplate(rowsInput), { pdf: { standards: ['ua-1'] } });
 await lazy.dispose();
-// A PDF kept up to date with its inputs, and its charts.
+// usePdf: a document, or a function that builds one (drawing charts and attaching files), and a client:
+// a core compiler or a worker client.
 const chartOptions: RenderAssetsOptions = {
   fontFamily: 'Libertinus Serif',
   fonts: [{ family: 'Libertinus Serif', source: '/fonts/LibertinusSerif-Regular.otf', descriptors: { weight: '400' } }],
   beforeSerialize: svg => svg.querySelector('.tooltip')?.remove(),
   directory: 'figures',
 };
-const pdfOptions: UsePdfOptions<typeof folderTemplate> = {
-  client: lazy,
-  template: folderTemplate,
-  data: ({ render, attach }) => ({ input: { title: 'T', chart: render(null as never), logo: attach(new Uint8Array([1]), 'png') } }),
-  deps: ['T'],
-  assets: { 'logo.png': new Uint8Array([1]) },
-  pdf: { standards: ['ua-1'] },
-  charts: chartOptions,
-  enabled: true,
-  onSuccess: value => value.bytes satisfies Uint8Array,
-  onError: error => error satisfies unknown,
-};
-const plainPdfOptions: UsePdfOptions<'Hello'> = { client: compiler, template: 'Hello', data: { input: { title: 'T' } } };
-declare const pdfDocument: PdfDocument;
-pdfDocument.status satisfies PdfStatus;
-pdfDocument.result?.bytes satisfies Uint8Array | undefined;
-pdfDocument.url satisfies string | undefined;
-pdfDocument.download('report');
-pdfDocument.rebuild();
-pdfDocument.cancel();
-pdfDocument.AssetRenderer satisfies import('react').ComponentType;
-usePdf satisfies <T extends AnyPdfTemplate>(options: UsePdfOptions<T>) => PdfDocument;
-// A template whose parts have data of their own: requests and usePdf's data are typed by its schemas.
-declare const titleSchema: StandardSchemaV1<{ title: string }>;
-declare const headerSchema: StandardSchemaV1<{ name: string }>;
-const typedHeader = definePartial({ files: { 'common/header.typ': '' }, input: defineInput(headerSchema, 'common/header.schema.json') });
-const typedTemplate = defineTemplate({ files: { 'main.typ': '' }, input: defineInput(titleSchema, 'input.schema.json'), partials: { header: typedHeader } });
-const typedTemplateRequest: TemplateRequest<typeof typedTemplate> = { template: typedTemplate, input: { title: 'T' }, partials: { header: { name: 'H' } } };
-await compiler.compile(typedTemplateRequest);
-await workerClient.compile({ template: typedTemplate, input: { title: 'T' }, partials: { header: { name: 'H' } } });
-// @ts-expect-error the header's data is required
-await compiler.compile({ template: typedTemplate, input: { title: 'T' } });
-// @ts-expect-error the input is typed by its schema
-await compiler.compile({ template: typedTemplate, input: { title: 1 }, partials: { header: { name: 'H' } } });
-const anyRequest: AnyPdfRequest = typedTemplateRequest;
-await compiler.compile(anyRequest);
-const definedPdfOptions: UsePdfOptions<typeof typedTemplate> = {
-  client: compiler,
-  template: typedTemplate,
-  data: ({ attach }: PdfBuildTools) => ({ input: { title: 'T' }, partials: { header: { name: attach(new Uint8Array([1]), 'png') } } }),
-};
-const definedData: PdfData<typeof typedTemplate> = { input: { title: 'T' }, partials: { header: { name: 'H' } } };
-// @ts-expect-error data is typed by the template
-const wrongData: PdfData<typeof typedTemplate> = { input: { title: 'T' } };
-inputSchemaFiles([typedTemplate, typedHeader.input], { toJSONSchema: () => ({}) }) satisfies Record<string, string>;
-createAttachments().add(new Uint8Array([1]), 'png') satisfies string;
-void [definedPdfOptions, definedData, wrongData];
+function useReport(title: string): UsePdfResult {
+  return usePdf(report({ title }, { header: { name: 'H' } }), { client: workerClient });
+}
+function useChartedReport(title: string): UsePdfResult {
+  return usePdf(({ render, attach }) => report({ title: render(null as never) }, { header: { name: attach(new Uint8Array([1]), 'png') } }), {
+    client: lazy,
+    deps: [title],
+    assets: { 'logo.png': new Uint8Array([1]) },
+    pdf: { standards: ['ua-1'] },
+    charts: chartOptions,
+    enabled: true,
+    validate: false,
+    onSuccess: value => value.bytes satisfies Uint8Array,
+    onError: error => error satisfies unknown,
+    onSettled: (value, error) => [value?.bytes satisfies Uint8Array | undefined, error satisfies unknown],
+  });
+}
+function useMistakes(): void {
+  // @ts-expect-error usePdf takes a document: call the template with its data
+  usePdf(report, { client: compiler });
+  // @ts-expect-error a function builds a document, not bare data
+  usePdf(() => ({ title: 'T' }), { client: compiler });
+  // @ts-expect-error a function's document is typed by the schemas too
+  usePdf(({ attach }) => titled({ title: attach }), { client: compiler });
+  // @ts-expect-error the client is required
+  usePdf(titled({ title: 'T' }), {});
+}
+const source: PdfSource = titled({ title: 'T' });
+const sourceFunction: PdfSource = ({ attach }: PdfBuildTools) => titled({ title: attach(new Uint8Array([1]), 'png') });
+const attachFile: AttachFile = (_bytes, extension) => '/attachments/0.' + extension;
+const usePdfOptions: UsePdfOptions = { client: compiler, pdf: { standards: ['ua-1'] } };
+declare const pdfResult: UsePdfResult;
+pdfResult.status satisfies PdfStatus;
+pdfResult.result?.bytes satisfies Uint8Array | undefined;
+pdfResult.url satisfies string | undefined;
+pdfResult.isLoading satisfies boolean;
+pdfResult.download('report');
+pdfResult.rebuild();
+pdfResult.cancel();
+pdfResult.AssetRenderer satisfies import('react').ComponentType;
+usePdf satisfies (source: PdfSource, options: UsePdfOptions) => UsePdfResult;
 const renderChart: RenderAsset = () => '/charts/0.svg';
 serializeSvg satisfies (svg: SVGSVGElement, options?: SvgSerializeOptions) => Uint8Array;
 // @ts-expect-error removeSelectors was replaced by beforeSerialize
 svgCapture({ removeSelectors: ['.tooltip'] });
-void [pdfOptions, plainPdfOptions, renderChart];
+void [useReport, useChartedReport, useMistakes, source, sourceFunction, attachFile, usePdfOptions, renderChart];
 `);
 run(process.execPath, ['smoke.mjs', root]);
 const tsc = join(root, 'node_modules/typescript/bin/tsc');

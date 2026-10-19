@@ -1,8 +1,10 @@
-import { defineInput } from '@typfolio/core';
 import { z } from 'zod';
 import { imagePath } from '../common/schema.ts';
 
-/** The runtime input of ./main.typ. */
+/**
+ * The data of ./main.typ. This module imports no Typst file, so a script or a test can load it to
+ * write or compare `outcomes.schema.json` (`inputSchemaFiles` in @typfolio/dev-tools).
+ */
 export const outcomesSchema = z.object({
   title: z.string().min(1).meta({ examples: ['Outcome results'] }),
   generatedAt: z.string().meta({ examples: ['18 October 2026'] }),
@@ -15,6 +17,3 @@ export const outcomesSchema = z.object({
 });
 
 export type OutcomesInput = z.input<typeof outcomesSchema>;
-
-/** Where main.typ reads it: the schema file in an editor, the data when the app compiles. */
-export const outcomesInput = defineInput(outcomesSchema, 'outcomes/outcomes.schema.json');

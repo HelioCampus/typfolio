@@ -1,6 +1,6 @@
 {
   "name": "@typfolio/core",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Framework-independent Typst PDF compiler for the browser and Node, running on WebAssembly",
   "type": "module",
   "license": "Apache-2.0",

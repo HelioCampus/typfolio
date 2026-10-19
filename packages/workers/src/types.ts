@@ -1,9 +1,11 @@
 import type {
-  AnyPdfRequest,
-  CheckedRequest,
+  Assets,
+  CompileOptions,
   Diagnostic,
   ErrorCode,
   PdfClient,
+  PdfDocument,
+  PdfOptions,
   PdfResult,
 } from '@typfolio/core';
 
@@ -27,16 +29,15 @@ export interface SerializedCompilerOptions {
   readonly fonts: readonly (Uint8Array | string)[];
 }
 
-export interface WorkerCompileOptions {
-  readonly signal?: AbortSignal;
+export interface WorkerCompileOptions extends CompileOptions {
   /** Includes time spent waiting in the queue. */
   readonly timeoutMs?: number;
 }
 
 export interface PdfWorkerClient extends PdfClient {
   readonly workerCount: number;
-  /** A plain request, or one for a defined template: its inputs are checked against their schemas on this thread. */
-  compile<R extends AnyPdfRequest>(request: R & CheckedRequest<R>, options?: WorkerCompileOptions): Promise<PdfResult>;
+  /** Compiles a document in a worker. Its data is checked against the schemas on this thread; only data crosses. */
+  compile(document: PdfDocument, options?: WorkerCompileOptions): Promise<PdfResult>;
   /** Rejects queued/active jobs and terminates all owned workers. Idempotent. */
   dispose(): Promise<void>;
 }
@@ -57,7 +58,12 @@ export interface CreateWorkerClientOptions {
 
 export interface PdfBatchJob<Id> {
   readonly id: Id;
-  readonly request: AnyPdfRequest;
+  /** A template called with its data: `report(data, { header })`. */
+  readonly document: PdfDocument;
+  readonly assets?: Assets;
+  readonly pdf?: PdfOptions;
+  /** As `compile`'s `validate`. */
+  readonly validate?: boolean;
   readonly timeoutMs?: number;
 }
 

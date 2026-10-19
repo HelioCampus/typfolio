@@ -1,4 +1,4 @@
-import type { PdfRequest } from '@typfolio/core';
+import { defineTemplate, type TemplateDefinition } from '@typfolio/core';
 import {
   ART_PADDING,
   COLS,
@@ -92,8 +92,8 @@ export function framesToInput(
  * Kerning and ligatures are disabled to match the live panel, where every
  * cell advance is the sum of independently measured glyph widths.
  */
-export const asciiTemplate = String.raw`
-#let input = json("/input.json")
+const asciiSource = String.raw`
+#let input = json("/frames.json")
 #let ink = rgb(input.ink)
 
 #set page(width: input.pageW * 1pt, height: input.pageH * 1pt, margin: 0pt, fill: rgb(input.background))
@@ -136,9 +136,13 @@ export const asciiTemplate = String.raw`
 }
 `;
 
-export function makeAsciiRequest(input: AsciiFrameInput): PdfRequest<AsciiFrameInput> {
-  return {
-    template: asciiTemplate,
-    input,
-  };
-}
+/**
+ * The ASCII template: `asciiTemplate(framesToInput(...))` is the document to compile. It has no
+ * schema, so `AsciiFrameInput` types the call and nothing checks the data. The source is a string,
+ * not an editor-authored file, so it reads its data with plain `json()` at the path `schemaPath`
+ * mounts it, and needs no JSON Schema file for an editor sample.
+ */
+export const asciiTemplate: TemplateDefinition<AsciiFrameInput> = defineTemplate({
+  files: { 'main.typ': asciiSource },
+  schemaPath: 'frames.json',
+});

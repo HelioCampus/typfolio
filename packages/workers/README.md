@@ -14,7 +14,8 @@ const client = createWorkerClient({
 });
 
 try {
-  const result = await client.compile(request, { signal });
+  // report: a defineTemplate(...) from @typfolio/core, called with its data.
+  const result = await client.compile(report(data, { header }), { assets, pdf, signal, timeoutMs: 10_000 });
   // result.bytes is transferred from the worker without copying it again.
 } finally {
   await client.dispose();
@@ -26,6 +27,7 @@ Stream a large batch in completion order without retaining every PDF:
 ```ts
 import { compileBatch } from '@typfolio/workers';
 
+const jobs = students.map(student => ({ id: student.id, document: report(student.data, { header }), assets }));
 for await (const outcome of compileBatch(client, jobs, { signal })) {
   if (outcome.status === 'success') {
     await upload(outcome.id, outcome.result.bytes);
@@ -39,7 +41,8 @@ The built-in factory creates a module worker from the packaged runtime. `workerF
 
 ## Semantics
 
-- Calls are snapshotted synchronously and compiled FIFO, with one active compile per worker.
+- Calls are snapshotted synchronously and compiled FIFO, with one active compile per worker. The data is checked against its schemas on the calling thread, before anything is posted (schemas are functions and cannot cross the boundary); `validate: false` skips them.
+- In a batch, data that fails its schema is that job's error (`INVALID_INPUT`) and the rest still compile; a malformed document (missing partial data, say) throws from `compileBatch` before any job starts.
 - Cancelling a waiting job removes only that job. Cancelling or timing out the active synchronous WASM call terminates its worker; the next queued job receives a fresh worker/compiler.
 - A Typst compilation error rejects that job but keeps the worker healthy. A malformed message or worker crash rejects the active job and replaces the worker lazily.
 - `queueLimit` counts waiting jobs, not the active compile. Timeouts include queue time.

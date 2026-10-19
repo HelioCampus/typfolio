@@ -3,7 +3,7 @@ import { after, before, test } from 'node:test';
 import { readdir, readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import init, { TypstCompilerBuilder } from '@typfolio/wasm';
-import { capabilities, createCompiler, TypstPdfError } from '../dist/index.js';
+import { capabilities, createCompiler, defineTemplate, TypstPdfError } from '../dist/index.js';
 import type { ErrorCode, PdfCompiler, PdfResult } from '../dist/index.js';
 import { typfolioPackage } from '../dist/typst-package.generated.js';
 import { sampleFile, sampleSource } from '../../dev-tools/dist/sample-source.generated.js'; // built before the tests run (`npm test` builds first)
@@ -17,6 +17,8 @@ const helper = '#import "@local/typfolio:0.1.0": input\n';
 // Prints the value as JSON in the document title so tests can assert on the whole structure.
 const dump = (expression: string) => `#set document(title: json.encode(${expression}, pretty: false))\n`;
 const sampleOf = (result: PdfResult): Record<string, unknown> => JSON.parse(result.metadata.title!);
+// A template without data, from its files (or the source of its main.typ).
+const bare = (files: string | Record<string, string>) => defineTemplate({ files: typeof files === 'string' ? { 'main.typ': files } : files })();
 
 interface RawResult {
   ok: boolean;
@@ -116,27 +118,37 @@ after(() => compiler?.dispose());
 
 const reportTemplate = (path: string) => `${helper}#let data = input(json.with("${path}"))\n#set document(title: data.title)\n= #data.title\n`;
 
-test('the runtime branch returns request.input and needs no schema file in the request', async () => {
-  const result = await compiler.compile({ template: reportTemplate('./report.schema.json'), input: { title: 'From the request' } });
-  assert.equal(result.metadata.title, 'From the request');
+test('the runtime branch returns the data mounted at the schema path, and needs no schema file', async () => {
+  const report = defineTemplate({ files: { 'main.typ': reportTemplate('./report.schema.json') }, schemaPath: 'report.schema.json' });
+  const result = await compiler.compile(report({ title: 'From the call' }));
+  assert.equal(result.metadata.title, 'From the call');
   assert.deepEqual(result.diagnostics, []);
-  // Passing no schema is fine at runtime: the sample is only needed in the editor.
-  const none = await compiler.compile({ template: `${helper}#set document(title: input(none).title)`, input: { title: 'No schema' } });
-  assert.equal(none.metadata.title, 'No schema');
 });
 
-test('the runtime branch works from a nested entrypoint and ignores a schema that is present', async () => {
+test('at runtime input() needs json.with: none or a loaded dictionary panics', async () => {
+  for (const argument of ['none', '(type: "object")']) {
+    const template = defineTemplate({ files: { 'main.typ': `${helper}#set document(title: input(${argument}).title)` }, schemaPath: 'input.json' });
+    await assert.rejects(compiler.compile(template({ title: 'x' })), (error: TypstPdfError) => {
+      assert.ok(hasCode('COMPILATION')(error), error.message);
+      assert.match(error.message, /input\(\) needs json\.with\(/);
+      return true;
+    });
+  }
+});
+
+test('the runtime branch works from a nested entrypoint; a schema file cannot be listed where the data is read', async () => {
   const entrypoint = 'reports/outcome/main.typ';
-  const nested = await compiler.compile({
-    template: { entrypoint, files: { [entrypoint]: reportTemplate('./schemas/report.schema.json') } },
-    input: { title: 'Nested runtime' },
+  const nested = defineTemplate({
+    entrypoint,
+    files: { [entrypoint]: reportTemplate('./schemas/report.schema.json') },
+    schemaPath: 'reports/outcome/schemas/report.schema.json',
   });
-  assert.equal(nested.metadata.title, 'Nested runtime');
-  const withSchema = await compiler.compile({
-    template: { files: { 'main.typ': reportTemplate('./report.schema.json'), 'report.schema.json': JSON.stringify({ type: 'object', properties: { title: { type: 'string' } } }) } },
-    input: { title: 'Real input wins' },
-  });
-  assert.equal(withSchema.metadata.title, 'Real input wins');
+  assert.equal((await compiler.compile(nested({ title: 'Nested runtime' }))).metadata.title, 'Nested runtime');
+  // The schema file is for the editor; at runtime its path holds the data.
+  assert.throws(() => defineTemplate({
+    files: { 'main.typ': reportTemplate('./report.schema.json'), 'report.schema.json': JSON.stringify({ type: 'object', properties: { title: { type: 'string' } } }) },
+    schemaPath: 'report.schema.json',
+  }), /report\.schema\.json is where data is read; do not list it in files/);
 });
 
 test('the vite-react example template compiles at runtime and in the editor branch', async () => {
@@ -147,7 +159,8 @@ test('the vite-react example template compiles at runtime and in the editor bran
   const input = Object.fromEntries(Object.keys(JSON.parse(files['report.schema.json']).properties).map(key => [key, `value of ${key}`]));
   // The schema is not sent at runtime (the app's glob only matches *.typ).
   const { 'report.schema.json': _schema, ...runtimeFiles } = files;
-  const result = await compiler.compile({ template: { files: runtimeFiles }, input });
+  const report = defineTemplate({ files: runtimeFiles, schemaPath: 'report.schema.json' });
+  const result = await compiler.compile(report(input));
   assert.equal(result.metadata.title, 'value of title');
   assert.deepEqual(result.diagnostics, []);
   const editor = raw.compile(Object.fromEntries(Object.entries(files).map(([name, source]) => [`/${name}`, source])));
@@ -155,11 +168,12 @@ test('the vite-react example template compiles at runtime and in the editor bran
   assert.equal(editor.title, 'Sample text');
 });
 
-test('/input.json at the project root still works beside the package', async () => {
-  const result = await compiler.compile({
-    template: `${helper}#let a = input(none)\n#let b = json("/input.json")\n#set document(title: a.title + "|" + b.title)`,
-    input: { title: 'both' },
+test('data at schemaPath input.json is read by json("/input.json") and by input(json.with(...)) alike', async () => {
+  const template = defineTemplate({
+    files: { 'main.typ': `${helper}#let a = input(json.with("/input.json"))\n#let b = json("/input.json")\n#set document(title: a.title + "|" + b.title)` },
+    schemaPath: 'input.json',
   });
+  const result = await compiler.compile(template({ title: 'both' }));
   assert.equal(result.metadata.title, 'both|both');
 });
 
@@ -203,14 +217,11 @@ test('input(none) panics with a message that names json.with in the editor branc
 
 // sample.typ is not part of the package a runtime compile sees, so these tests mount its source as a template file.
 async function sample(schema: unknown, mode = 'full', name = 'schema.json') {
-  const result = await compiler.compile({
-    template: { files: {
-      'main.typ': `#import "sample.typ": sample-from-schema\n#let schema = json("${name}")\n${dump(`sample-from-schema(schema, mode: "${mode}")`)}`,
-      'sample.typ': sampleSource,
-      [name]: typeof schema === 'string' ? schema : JSON.stringify(schema),
-    } },
-    input: null,
-  });
+  const result = await compiler.compile(bare({
+    'main.typ': `#import "sample.typ": sample-from-schema\n#let schema = json("${name}")\n${dump(`sample-from-schema(schema, mode: "${mode}")`)}`,
+    'sample.typ': sampleSource,
+    [name]: typeof schema === 'string' ? schema : JSON.stringify(schema),
+  }));
   return sampleOf(result);
 }
 
@@ -292,7 +303,7 @@ test('sample-from-schema: a schema that refers to itself with "#" is expanded on
 
 test('imports other than the bundled package fail with COMPILATION naming the supported one', async () => {
   for (const spec of ['@local/typfolio:0.2.0', '@local/other:0.1.0', '@preview/cetz:0.3.0']) {
-    await assert.rejects(compiler.compile({ template: `#import "${spec}": x`, input: null }), (error: TypstPdfError) => {
+    await assert.rejects(compiler.compile(bare(`#import "${spec}": x`)), (error: TypstPdfError) => {
       assert.ok(hasCode('COMPILATION')(error));
       assert.match(error.message, /Only @local\/typfolio:0\.1\.0 is available; remote Typst packages are not supported/);
       assert.ok(error.message.includes(`requested ${spec}`), error.message);
@@ -301,18 +312,20 @@ test('imports other than the bundled package fail with COMPILATION naming the su
   }
 });
 
-test('template files and assets under the reserved package directory are rejected', async () => {
+test('template files, assets and data paths under the reserved package directory are rejected', async () => {
+  const reserved = (error: TypstPdfError) => {
+    assert.ok(hasCode('INVALID_REQUEST')(error), error.message);
+    assert.match(error.message, /@typfolio.* reserved|reserved.*@typfolio/);
+    return true;
+  };
   const bundled = '/@typfolio/packages/local/typfolio/0.1.0/lib.typ';
   for (const name of ['@typfolio/packages/local/typfolio/0.1.0/lib.typ', bundled, '@typfolio/other.typ', '@typfolio/packages/local/typfolio/0.1.0/input.json', '@typfolio']) {
-    await assert.rejects(compiler.compile({ template: { files: { 'main.typ': 'x', [name]: 'y' } }, input: null }), (error: TypstPdfError) => {
-      assert.ok(hasCode('INVALID_REQUEST')(error), error.message);
-      assert.match(error.message, /@typfolio.* reserved|reserved.*@typfolio/);
-      return true;
-    });
-    await assert.rejects(compiler.compile({ template: 'x', input: null, assets: { [name]: new Uint8Array([1]) } }), hasCode('INVALID_REQUEST'));
+    await assert.rejects(compiler.compile(bare({ 'main.typ': 'x', [name]: 'y' })), reserved);
+    await assert.rejects(compiler.compile(bare('x'), { assets: { [name]: new Uint8Array([1]) } }), reserved);
+    await assert.rejects(compiler.compile(defineTemplate({ files: { 'main.typ': 'x' }, schemaPath: name })({})), reserved);
   }
   // A look-alike name outside the reserved directory stays allowed.
-  await compiler.compile({ template: { files: { 'main.typ': 'x', '@typfolio-notes/readme.typ': 'y' } }, input: null });
+  await compiler.compile(bare({ 'main.typ': 'x', '@typfolio-notes/readme.typ': 'y' }));
 });
 
 test('capabilities advertise the bundled package and still no remote packages', () => {

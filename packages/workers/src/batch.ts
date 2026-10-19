@@ -1,4 +1,4 @@
-import type { PdfResult } from '@typfolio/core';
+import type { PdfDocument, PdfResult } from '@typfolio/core';
 import * as Effect from 'effect/Effect';
 import * as Stream from 'effect/Stream';
 import { snapshotRequest } from './snapshot.js';
@@ -22,7 +22,7 @@ interface CapturedJob<Id> {
 
 function capture<Id>(job: PdfBatchJob<Id>, index: number): CapturedJob<Id> {
   try {
-    return { id: job.id, index, request: snapshotRequest(job.request), timeoutMs: job.timeoutMs };
+    return { id: job.id, index, request: snapshotRequest(job.document, job), timeoutMs: job.timeoutMs };
   } catch (error) {
     if (error instanceof TypfolioWorkerError && error.code === 'INVALID_INPUT') return { id: job.id, index, rejected: error };
     throw error;
@@ -56,7 +56,8 @@ const run = Effect.fnUntraced(function*<Id>(
       batchSignal?.addEventListener('abort', abortFromBatch, { once: true });
       if (effectSignal.aborted) abortFromEffect();
       if (batchSignal?.aborted) abortFromBatch();
-      return client.compile(request, {
+      // A snapshot, not a document: the client compiles it as it is, without resolving or copying it again.
+      return client.compile(request as unknown as PdfDocument, {
         signal: controller.signal,
         timeoutMs: job.timeoutMs,
       }).finally(() => {

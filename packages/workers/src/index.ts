@@ -1,4 +1,5 @@
-import type { AnyPdfRequest, DocumentsRequest, PdfRequest, PdfResult } from '@typfolio/core';
+import type { PdfDocument, PdfResult } from '@typfolio/core';
+import type { ResolvedRequest } from '@typfolio/core/internal';
 import * as Effect from 'effect/Effect';
 import * as Layer from 'effect/Layer';
 import * as ManagedRuntime from 'effect/ManagedRuntime';
@@ -33,7 +34,7 @@ export { collectBatch, compileBatch } from './batch.js';
 
 interface Job {
   readonly id: number;
-  readonly request: PdfRequest<unknown>;
+  readonly request: ResolvedRequest;
   readonly resume: (effect: Effect.Effect<PdfResult, TypfolioWorkerError>) => void;
   settled: boolean;
 }
@@ -253,7 +254,7 @@ export function createWorkerClient(options: CreateWorkerClientOptions): PdfWorke
   }
 
   const compileJob = Effect.fnUntraced(function*(
-    request: PdfRequest<unknown>,
+    request: ResolvedRequest,
   ): Effect.fn.Return<PdfResult, TypfolioWorkerError> {
     return yield* Effect.callback<PdfResult, TypfolioWorkerError>(resume => {
       if (poolDisposed) {
@@ -309,16 +310,16 @@ export function createWorkerClient(options: CreateWorkerClientOptions): PdfWorke
 
   return {
     workerCount,
-    compile(request: AnyPdfRequest, compileOptions: WorkerCompileOptions = {}): Promise<PdfResult> {
+    compile(document: PdfDocument, compileOptions: WorkerCompileOptions = {}): Promise<PdfResult> {
       if (clientDisposed) return Promise.reject(new TypfolioWorkerError('DISPOSED', 'The worker client is disposed'));
       if (compileOptions.signal?.aborted) {
         return Promise.reject(new TypfolioWorkerError('ABORTED', 'Compilation was cancelled', [], { cause: compileOptions.signal.reason }));
       }
-      let captured: PdfRequest<unknown> | DocumentsRequest;
+      let captured: ResolvedRequest;
       let duration: number | undefined;
       try {
         // A snapshot (from compileBatch) is already client-owned; copying it again would copy every asset twice.
-        captured = isSnapshot(request) ? request : snapshotRequest(request);
+        captured = isSnapshot(document) ? document as unknown as ResolvedRequest : snapshotRequest(document, compileOptions);
         duration = timeout(compileOptions.timeoutMs, 'compile timeoutMs') ?? defaultTimeout;
       } catch (error) {
         return Promise.reject(error);

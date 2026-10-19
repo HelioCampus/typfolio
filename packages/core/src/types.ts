@@ -1,7 +1,6 @@
-import type { AnyPdfRequest, CheckedRequest } from './definition.js';
+import type { PdfDocument } from './definition.js';
 import { bundledPackageSpec } from './typst-package.js';
 
-export type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue };
 export type WasmSource = RequestInfo | URL | Response | BufferSource | WebAssembly.Module;
 /** Font bytes, or a URL (or string, resolved against the page URL when one exists) that `createCompiler` fetches. */
 export type FontSource = Uint8Array | string | URL;
@@ -17,24 +16,19 @@ export interface PdfOptions {
   creationTimestamp?: number;
 }
 
-/**
- * A string is a single-file template: it is mounted as `/main.typ` and used as the entrypoint, so
- * compile diagnostics report the path `/main.typ`. In the object form, `entrypoint` defaults to
- * `main.typ`; `files` must then contain it.
- */
-export type PdfTemplate = string | { entrypoint?: string; files: Readonly<Record<string, string>> };
+/** Files a template reads besides its data, such as a logo or a chart, by virtual path: `{ 'logo.png': bytes }`. */
+export type Assets = Readonly<Record<string, Uint8Array>>;
 
-/**
- * `Input` types `input` for the caller and is intentionally unconstrained: a TypeScript `interface` is
- * not assignable to the `JsonValue` index-signature type, so a constraint would reject ordinary
- * application types. This is type-only; `prepareRequest` still enforces JSON compatibility at runtime.
- * Positions that accept a request take `PdfRequest<unknown>` so any typed request is accepted.
- */
-export interface PdfRequest<Input = JsonValue> {
-  template: PdfTemplate;
-  input: Input;
-  assets?: Readonly<Record<string, Uint8Array>>;
+/** How to compile a document, and the files it reads besides its data. */
+export interface CompileOptions {
+  assets?: Assets;
   pdf?: PdfOptions;
+  signal?: AbortSignal;
+  /**
+   * `false` skips checking the data against its schemas: the types still apply, and data of the wrong
+   * shape then fails in Typst instead of with `INVALID_INPUT`. Defaults to `true`.
+   */
+  validate?: boolean;
 }
 
 /** A failure Typfolio recognises; `docs/errors.md` explains each and what to do. */
@@ -65,8 +59,8 @@ export interface PdfResult {
 }
 
 export interface PdfClient {
-  /** A plain request, or one for a template made with `defineTemplate`, type-checked against its `TemplateRequest`. */
-  compile<R extends AnyPdfRequest>(request: R & CheckedRequest<R>, options?: { signal?: AbortSignal }): Promise<PdfResult>;
+  /** Compiles a document, a template called with its data: `compile(report(data, { header }), { pdf })`. */
+  compile(document: PdfDocument, options?: CompileOptions): Promise<PdfResult>;
 }
 
 export interface PdfCompiler extends PdfClient {
@@ -89,7 +83,7 @@ export const capabilities = Object.freeze({
   hardCancellation: false,
 } as const);
 
-/** `INVALID_INPUT`: a defined template's input, or a partial's data, does not match its schema. */
+/** `INVALID_INPUT`: a template's data, or a partial's data, does not match its schema. */
 export type ErrorCode = 'INITIALIZATION' | 'INVALID_REQUEST' | 'INVALID_INPUT' | 'UNSUPPORTED_OPTION' | 'BUSY' | 'DISPOSED' | 'ABORTED' | 'COMPILATION' | 'ENGINE';
 
 export class TypstPdfError extends Error {

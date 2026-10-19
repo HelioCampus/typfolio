@@ -4,7 +4,7 @@ These examples verify deployment behavior; they are not additional Typfolio pack
 
 The Vite application uses `@typfolio/workers` and imports the package WASM with an explicit URL query, so Vite emits the module worker, compiler, and font as separate assets. The Vite library accepts hosted asset URLs at runtime and uses a small build plugin to copy the compiler to `typfolio/compiler_bg.wasm`.
 
-The React example is a Vite React TypeScript application using the official React plugin, React Router, TSX components, and a typed Vite configuration. Run it with `npm run dev:react`. Its `/` route injects a direct core client, while `/workers` injects the optional worker client into the same React components. The pages are lazy chunks, so the direct route does not load worker orchestration or Effect. The `/charts` route draws its charts once more for the PDF with `useRenderedAssets`, at the template's image size and in the PDF's font, while the page shows them at whatever size it has.
+The React example is a Vite React TypeScript application using the official React plugin, React Router, TSX components, and a typed Vite configuration. Run it with `npm run dev:react`. Its `/` route injects a direct core client, while `/workers` injects the optional worker client into the same React components. The pages are lazy chunks, so the direct route does not load worker orchestration or Effect. The `/charts` route draws its charts once more for the PDF with `usePdf`'s `render`, at the template's image size and in the PDF's font, while the page shows them at whatever size it has.
 
 After generating the pinned WASM, run:
 

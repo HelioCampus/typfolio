@@ -1,4 +1,4 @@
-import { TypstPdfError, type PdfOptions, type PdfRequest } from './types.js';
+import { TypstPdfError, type Assets, type PdfOptions } from './types.js';
 
 /**
  * The Standard Schema interface (https://standardschema.dev), declared here so core depends on no
@@ -25,33 +25,19 @@ export interface StandardSchemaIssue {
 /** What a schema accepts: the data a caller passes. */
 export type InferSchemaInput<S> = S extends StandardSchemaV1<infer Input, unknown> ? Input : unknown;
 
+// The data a definition takes: its schema's input, or anything without a schema.
+type DataOf<S> = [S] extends [StandardSchemaV1] ? InferSchemaInput<S> : unknown;
+
 /**
- * A runtime input of a template or a partial: the data, and where its JSON Schema file sits in the
- * template's file tree. The Typst file reads it with `input(json.with("./<file>.schema.json"))`: in
- * an editor that file is the schema (for a sample), and when Typfolio compiles, the data is mounted
- * at the same path. The path is the input's identity: nothing else names it.
+ * Typst code with runtime data of its own, such as a header shared by several templates: its files, the
+ * schema of its data, the path its Typst file reads that data from, and the partials it uses in turn.
  */
-export interface TemplateInput<T = unknown> {
-  /** Virtual path of the schema file, relative to the template root, e.g. `common/header.schema.json`. */
-  readonly path: string;
-  /** Validates the data before compiling, and types it. Optional. */
-  readonly schema?: StandardSchemaV1<T, unknown>;
-  /** Type-only. */
-  readonly '~type'?: T;
-}
-
-/** Pairs a schema with the virtual path of its JSON Schema file. */
-export function defineInput<S extends StandardSchemaV1>(schema: S, path: string): TemplateInput<InferSchemaInput<S>> {
-  if (!isStandardSchema(schema)) throw new TypeError('defineInput: schema must implement Standard Schema (~standard)');
-  return Object.freeze({ path: relativePath(path), schema: schema as StandardSchemaV1<InferSchemaInput<S>, unknown> });
-}
-
-/** Typst code that takes runtime data of its own: its files, its input, and the partials it uses. */
-export interface PartialDefinition<T = unknown, P extends PartialsMap = PartialsMap> {
+export interface PartialDefinition<Data = unknown, Partials extends PartialsMap = PartialsMap> {
   readonly kind: 'typfolio-partial';
   readonly files: Readonly<Record<string, string>>;
-  readonly input: TemplateInput<T>;
-  readonly partials: P;
+  readonly schema?: StandardSchemaV1<Data, unknown>;
+  readonly schemaPath: string;
+  readonly partials: Partials;
 }
 
 // `any` here only so a map of partials with different data types is still a PartialsMap.
@@ -60,61 +46,110 @@ export type PartialsMap = Readonly<Record<string, PartialDefinition<any, any>>>;
 
 type UnionToIntersection<U> = (U extends unknown ? (arg: U) => void : never) extends (arg: infer I) => void ? I : never;
 
-/** The data a map of partials needs, nested partials included, by key. */
-export type PartialsData<P extends PartialsMap> = { [K in keyof P]: P[K] extends PartialDefinition<infer T, PartialsMap> ? T : never } &
+/** The data a map of partials takes, by key, nested partials included (flat: keys are unique per template). */
+export type PartialsData<P extends PartialsMap> = { [K in keyof P]: P[K] extends PartialDefinition<infer D, PartialsMap> ? D : never } &
   UnionToIntersection<{ [K in keyof P]: P[K] extends PartialDefinition<unknown, infer N> ? PartialsData<N> : never }[keyof P]>;
 
-export function definePartial<T, P extends PartialsMap = Record<never, never>>(definition: {
+export function definePartial<S extends StandardSchemaV1 | undefined = undefined, P extends PartialsMap = Record<never, never>>(definition: {
   readonly files: Readonly<Record<string, string>>;
-  readonly input: TemplateInput<T>;
+  /** Checks and types the partial's data. Optional: without it the data is `unknown` and not checked. */
+  readonly schema?: S;
+  /** Where the partial's Typst file reads its data, relative to the template root: `common/header.schema.json`. */
+  readonly schemaPath: string;
   readonly partials?: P;
-}): PartialDefinition<T, P> {
-  const { files, input, partials = {} as P } = definition ?? ({} as never);
-  if (!input || typeof input.path !== 'string') throw new TypeError('definePartial: input must come from defineInput(schema, path)');
-  return Object.freeze({ kind: 'typfolio-partial', files: Object.freeze({ ...files }), input, partials: Object.freeze({ ...partials }) as P });
+}): PartialDefinition<DataOf<S>, P> {
+  const { files = {}, schema, schemaPath, partials = {} as P } = definition ?? ({} as never);
+  checkSchema(schema, 'definePartial');
+  if (typeof schemaPath !== 'string') throw new TypeError('definePartial: schemaPath is required: the path its Typst file reads its data from');
+  return Object.freeze({
+    kind: 'typfolio-partial',
+    files: Object.freeze({ ...files }),
+    ...(schema === undefined ? {} : { schema }),
+    schemaPath: relativePath(schemaPath),
+    partials: Object.freeze({ ...partials }) as P,
+  }) as PartialDefinition<DataOf<S>, P>;
 }
 
-/** One runtime input of a compiled template: `key` is `null` for the template's own input. */
+/** One runtime input of a template: `key` is `null` for the template's own data, else the partial's key. */
 export interface TemplateInputSlot {
   readonly key: string | null;
   readonly path: string;
   readonly schema?: StandardSchemaV1;
 }
 
-/**
- * A template: its Typst files (its own and every partial's), its entrypoint, and its runtime inputs.
- * `Input` and `Partials` type a request for it.
- */
-export interface TemplateDefinition<Input = undefined, Partials = Record<never, never>> {
-  readonly kind: 'typfolio-template';
-  readonly entrypoint: string;
-  readonly files: Readonly<Record<string, string>>;
-  readonly inputs: readonly TemplateInputSlot[];
-  /** Type-only. */
-  readonly '~types'?: { readonly input: Input; readonly partials: Partials };
+/** A template with its data bound: what `compile` takes. Made by calling a template, `report(data, { header })`. */
+export interface PdfDocument {
+  readonly kind: 'typfolio-document';
+  readonly template: AnyTemplate;
+  readonly data: unknown;
+  readonly partials: Readonly<Record<string, unknown>>;
 }
 
-export function defineTemplate<I = undefined, P extends PartialsMap = Record<never, never>>(definition: {
+type IsAny<T> = 0 extends 1 & T ? true : false;
+
+/** The arguments of a template call: its own data, then the data of its partials by key (when it has any). */
+// The partials are checked first: with known partials and generic data (a wrapper's `TemplateDefinition<T, P>`),
+// the arguments resolve to `[data: T, partials: P]` instead of waiting on `T`.
+export type TemplateArguments<Data, Partials> =
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  IsAny<Partials> extends true ? [data?: any, partials?: any]
+  : [keyof Partials] extends [never]
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    ? (IsAny<Data> extends true ? [data?: any] : [Data] extends [undefined] ? [data?: undefined] : [data: Data])
+    : [data: Data, partials: Partials];
+
+/**
+ * A template: call it with its data, and its partials' data by key, to get the document to compile:
+ * `compile(report(data, { header: headerData }))`. The call is typed by the schemas.
+ */
+export interface TemplateDefinition<Data = unknown, Partials = Record<never, never>> {
+  (...args: TemplateArguments<Data, Partials>): PdfDocument;
+  readonly kind: 'typfolio-template';
+  readonly entrypoint: string;
+  /** Every Typst file: the template's own and each partial's, nested ones included. */
+  readonly files: Readonly<Record<string, string>>;
+  /** Every runtime input: the template's own (`key: null`, when it has one) and each partial's. */
+  readonly inputs: readonly TemplateInputSlot[];
+}
+
+/** Any template, whatever its data. */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export type AnyTemplate = TemplateDefinition<any, any>;
+
+export function defineTemplate<
+  S extends StandardSchemaV1 | undefined = undefined,
+  Path extends string | undefined = undefined,
+  P extends PartialsMap = Record<never, never>,
+>(definition: {
   /** Defaults to `main.typ`. */
   readonly entrypoint?: string;
+  /** The template's own Typst files. Shared files without data of their own go here too. */
   readonly files: Readonly<Record<string, string>>;
-  readonly input?: TemplateInput<I>;
+  /** Checks and types the template's data. Optional: without it the data is `unknown` and not checked. */
+  readonly schema?: S;
+  /** Where the entrypoint reads its data: `report/input.schema.json`. Omit it for a template without data. */
+  readonly schemaPath?: Path;
+  /** The partials the template uses, by the key their data takes in a call. */
   readonly partials?: P;
-}): TemplateDefinition<I, PartialsData<P>> {
-  const { entrypoint = 'main.typ', files, input, partials = {} as P } = definition ?? ({} as never);
+  // A schema needs the path its data is read at.
+} & ([S] extends [StandardSchemaV1] ? { readonly schemaPath: string } : unknown)): TemplateDefinition<Path extends string ? DataOf<S> : undefined, PartialsData<P>> {
+  const { entrypoint = 'main.typ', files = {}, schema, schemaPath, partials = {} as P } = definition ?? ({} as never);
+  checkSchema(schema, 'defineTemplate');
+  if (schema !== undefined && schemaPath === undefined) {
+    throw new TypeError('defineTemplate: a schema needs schemaPath, the path the entrypoint reads the data from');
+  }
   const merged: Record<string, string> = { ...files };
   const slots: TemplateInputSlot[] = [];
   const paths = new Map<string, string>();
   const claim = (path: string, owner: string) => {
     const previous = paths.get(path);
-    if (previous !== undefined) throw new TypeError(`defineTemplate: ${owner} and ${previous} both read their input from ${path}`);
+    if (previous !== undefined) throw new TypeError(`defineTemplate: ${owner} and ${previous} both read their data from ${path}`);
     paths.set(path, owner);
   };
-  if (input !== undefined) {
-    if (typeof input.path !== 'string') throw new TypeError('defineTemplate: input must come from defineInput(schema, path)');
-    const path = relativePath(input.path);
+  if (schemaPath !== undefined) {
+    const path = relativePath(schemaPath);
     claim(path, 'the template');
-    slots.push({ key: null, path, ...(input.schema ? { schema: input.schema } : {}) });
+    slots.push({ key: null, path, ...(schema ? { schema } : {}) });
   }
   // Partials, nested ones included, each once: the same definition under one key may be reached twice.
   const byKey = new Map<string, PartialDefinition>();
@@ -125,9 +160,8 @@ export function defineTemplate<I = undefined, P extends PartialsMap = Record<nev
       if (known === partial) continue;
       if (known !== undefined) throw new TypeError(`defineTemplate: two different partials are both named "${key}"`);
       byKey.set(key, partial);
-      const path = relativePath(partial.input.path);
-      claim(path, `partial "${key}"`);
-      slots.push({ key, path, ...(partial.input.schema ? { schema: partial.input.schema } : {}) });
+      claim(partial.schemaPath, `partial "${key}"`);
+      slots.push({ key, path: partial.schemaPath, ...(partial.schema ? { schema: partial.schema } : {}) });
       for (const [path, source] of Object.entries(partial.files)) {
         if (path in merged && merged[path] !== source) throw new TypeError(`defineTemplate: ${path} is given twice with different contents (partial "${key}")`);
         merged[path] = source;
@@ -138,59 +172,30 @@ export function defineTemplate<I = undefined, P extends PartialsMap = Record<nev
   visit(partials, '');
   for (const path of paths.keys()) {
     if (Object.keys(merged).some(file => relativePath(file) === path)) {
-      throw new TypeError(`defineTemplate: ${path} is an input path; do not list the schema file in files (it is not shipped, the data is mounted there)`);
+      throw new TypeError(`defineTemplate: ${path} is where data is read; do not list it in files (the schema file is not shipped, the data is mounted there)`);
     }
   }
-  return Object.freeze({
-    kind: 'typfolio-template',
-    entrypoint,
-    files: Object.freeze(merged),
-    inputs: Object.freeze(slots),
-  }) as TemplateDefinition<I, PartialsData<P>>;
+  const template = ((data?: unknown, partialData?: Readonly<Record<string, unknown>>): PdfDocument =>
+    Object.freeze({ kind: 'typfolio-document', template: template as AnyTemplate, data, partials: partialData ?? {} })) as TemplateDefinition;
+  Object.assign(template, { kind: 'typfolio-template', entrypoint, files: Object.freeze(merged), inputs: Object.freeze(slots) });
+  return Object.freeze(template) as unknown as TemplateDefinition<Path extends string ? DataOf<S> : undefined, PartialsData<P>>;
 }
 
-export function isTemplateDefinition(value: unknown): value is TemplateDefinition<unknown, unknown> {
-  return typeof value === 'object' && value !== null && (value as { kind?: unknown }).kind === 'typfolio-template';
+export function isTemplateDefinition(value: unknown): value is AnyTemplate {
+  return typeof value === 'function' && (value as { kind?: unknown }).kind === 'typfolio-template';
 }
 
-/** A request for a defined template, typed by it: its input and its partials' data. */
-export type TemplateRequest<T> = T extends TemplateDefinition<infer I, infer P>
-  ? { template: T; assets?: Readonly<Record<string, Uint8Array>>; pdf?: PdfOptions }
-    & ([I] extends [undefined] ? { input?: undefined } : unknown extends I ? { input?: unknown } : { input: I })
-    & ([keyof P] extends [never] ? { partials?: Record<never, never> } : { partials: P })
-  : never;
-
-/**
- * What `compile` checks a request against: one for a template made with `defineTemplate` must be its
- * `TemplateRequest`; any other request is accepted as it is.
- */
-export type CheckedRequest<R> = R extends { template: infer T }
-  ? T extends TemplateDefinition<unknown, unknown> ? TemplateRequest<T> : unknown
-  : unknown;
-
-/** Any request a client accepts: a plain one, one for a defined template, or the low-level form. */
-export type AnyPdfRequest =
-  | PdfRequest<unknown>
-  | DocumentsRequest
-  | {
-    template: TemplateDefinition<unknown, unknown>;
-    input?: unknown;
-    partials?: Readonly<Record<string, unknown>>;
-    assets?: Readonly<Record<string, Uint8Array>>;
-    pdf?: PdfOptions;
-  };
-
-/** The low-level form of a request: documents mounted at their schema paths. */
-export interface DocumentsRequest {
-  template: { entrypoint: string; files: Readonly<Record<string, string>> };
-  input: null;
+/** What a client compiles, after resolving a document: files, and data by the path it is mounted at. */
+export interface ResolvedRequest {
+  entrypoint: string;
+  files: Readonly<Record<string, string>>;
   documents: Readonly<Record<string, unknown>>;
-  assets?: Readonly<Record<string, Uint8Array>>;
+  assets?: Assets;
   pdf?: PdfOptions;
 }
 
 function invalidInput(slot: TemplateInputSlot, issues: readonly StandardSchemaIssue[]): TypstPdfError {
-  const owner = slot.key === null ? 'The template input' : `The data of partial "${slot.key}"`;
+  const owner = slot.key === null ? 'The template data' : `The data of partial "${slot.key}"`;
   const lines = issues.slice(0, 10).map(issue => {
     const path = (issue.path ?? []).map(part => (typeof part === 'object' ? part.key : part)).map(String).join('.');
     return `- ${path ? `${path}: ` : ''}${issue.message}`;
@@ -203,30 +208,39 @@ function invalidInput(slot: TemplateInputSlot, issues: readonly StandardSchemaIs
 }
 
 /**
- * Turns a request for a defined template into its low-level form, checking each document against its
- * schema. A schema that validates synchronously throws here, before anything is captured; one that
- * returns a promise is checked by the returned `validated`, which the caller awaits before compiling.
- * A plain request passes through.
+ * A document's template files, its data by mount path, and the compile options: what a client compiles.
+ * Each piece of data is checked against its schema, unless `validate` is false. One that validates
+ * synchronously throws here; one that returns a promise is checked by `validated`, which the caller awaits
+ * before compiling.
  */
-export function resolveRequest(request: AnyPdfRequest): { request: PdfRequest<unknown> | DocumentsRequest; validated?: Promise<void> } {
-  if (!request || !isTemplateDefinition(request.template)) return { request: request as PdfRequest<unknown> };
-  const { template, partials = {} } = request as Extract<AnyPdfRequest, { partials?: unknown }> & { template: TemplateDefinition<unknown, unknown> };
+export function resolveDocument(document: PdfDocument, options: { assets?: Assets; pdf?: PdfOptions; validate?: boolean } = {}): { request: ResolvedRequest; validated?: Promise<void> } {
+  if (!document || (document as { kind?: unknown }).kind !== 'typfolio-document' || !isTemplateDefinition(document.template)) {
+    throw new TypstPdfError('INVALID_REQUEST', 'compile takes a document: call the template with its data, as in compile(report(data, { header: headerData }))');
+  }
+  const { template, data } = document;
+  if (options.validate !== undefined && typeof options.validate !== 'boolean') throw new TypstPdfError('INVALID_REQUEST', 'validate must be true or false');
+  const partials = document.partials ?? {};
+  if (typeof partials !== 'object' || Array.isArray(partials)) throw new TypstPdfError('INVALID_REQUEST', 'The partials\' data must be an object, by partial key');
   for (const key of Object.keys(partials)) {
     if (!template.inputs.some(slot => slot.key === key)) {
-      throw new TypstPdfError('INVALID_REQUEST', `partials.${key}: this template has no partial "${key}"; it has ${template.inputs.filter(slot => slot.key !== null).map(slot => `"${slot.key}"`).join(', ') || 'none'}`);
+      const known = template.inputs.filter(slot => slot.key !== null).map(slot => `"${slot.key}"`).join(', ') || 'none';
+      throw new TypstPdfError('INVALID_REQUEST', `This template has no partial "${key}"; it has ${known}`);
     }
+  }
+  if (data !== undefined && !template.inputs.some(slot => slot.key === null)) {
+    throw new TypstPdfError('INVALID_REQUEST', 'This template takes no data (it has no schemaPath): call it without any');
   }
   const documents: Record<string, unknown> = {};
   const pending: Promise<void>[] = [];
   for (const slot of template.inputs) {
-    const value = slot.key === null ? (request as { input?: unknown }).input : (partials as Record<string, unknown>)[slot.key];
+    const value = slot.key === null ? data : (partials as Record<string, unknown>)[slot.key];
     if (value === undefined) {
       throw new TypstPdfError('INVALID_REQUEST', slot.key === null
-        ? `The template reads its input from ${slot.path}, but the request has no input`
-        : `Partial "${slot.key}" reads its input from ${slot.path}, but the request has no partials.${slot.key}`);
+        ? `The template reads its data from ${slot.path}, but none was given: call it with its data`
+        : `Partial "${slot.key}" reads its data from ${slot.path}, but none was given for "${slot.key}"`);
     }
     documents[slot.path] = value;
-    if (slot.schema) {
+    if (slot.schema && options.validate !== false) {
       const result = slot.schema['~standard'].validate(value);
       if (result instanceof Promise) {
         pending.push(result.then(settled => { if (settled.issues) throw invalidInput(slot, settled.issues); }));
@@ -235,14 +249,14 @@ export function resolveRequest(request: AnyPdfRequest): { request: PdfRequest<un
       }
     }
   }
-  const resolved: DocumentsRequest = {
-    template: { entrypoint: template.entrypoint, files: template.files },
-    input: null,
+  const request: ResolvedRequest = {
+    entrypoint: template.entrypoint,
+    files: template.files,
     documents,
-    ...(request.assets === undefined ? {} : { assets: request.assets }),
-    ...(request.pdf === undefined ? {} : { pdf: request.pdf }),
+    ...(options.assets === undefined ? {} : { assets: options.assets }),
+    ...(options.pdf === undefined ? {} : { pdf: options.pdf }),
   };
-  return pending.length ? { request: resolved, validated: Promise.all(pending).then(() => undefined) } : { request: resolved };
+  return pending.length ? { request, validated: Promise.all(pending).then(() => undefined) } : { request };
 }
 
 /**
@@ -251,7 +265,7 @@ export function resolveRequest(request: AnyPdfRequest): { request: PdfRequest<un
  */
 export function createAttachments(directory = 'attachments'): {
   add(bytes: Uint8Array, extension: string): string;
-  readonly assets: Readonly<Record<string, Uint8Array>>;
+  readonly assets: Assets;
 } {
   if (!/^[A-Za-z0-9][A-Za-z0-9._/-]*$/.test(directory) || directory.endsWith('/') || directory.includes('..')) {
     throw new TypeError(`createAttachments: directory must be a relative path, got ${JSON.stringify(directory)}`);
@@ -276,8 +290,11 @@ export function createAttachments(directory = 'attachments'): {
   };
 }
 
-function isStandardSchema(value: unknown): value is StandardSchemaV1 {
-  return typeof value === 'object' && value !== null && typeof (value as StandardSchemaV1)['~standard']?.validate === 'function';
+function checkSchema(schema: unknown, at: string): void {
+  if (schema === undefined) return;
+  if (typeof schema !== 'object' || schema === null || typeof (schema as StandardSchemaV1)['~standard']?.validate !== 'function') {
+    throw new TypeError(`${at}: schema must implement Standard Schema (~standard)`);
+  }
 }
 
 // Paths are checked when compiling, where every file and input path is; here they are only compared.
