@@ -23,7 +23,7 @@
 import { createWorkerClient, type PdfWorkerClient } from '@typfolio/workers';
 import * as pdfjs from 'pdfjs-dist';
 import pdfjsWorkerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
-import type { PdfRequest } from '@typfolio/core';
+import type { PdfDocument } from '@typfolio/core';
 import { wasmUrl } from '../assets.ts';
 
 export interface LiveStats {
@@ -60,8 +60,8 @@ export interface LiveSessionOptions<T> {
   readonly poolSize: number;
   /** Iterations of a pure Typst script loop per frame: a synthetic compile load for benchmarking. */
   readonly burn: number;
-  /** Builds the compile request for a frame; `burn` is the synthetic load knob. */
-  readonly buildRequest: (frame: T, burn: number) => PdfRequest<unknown>;
+  /** Builds the document to compile for a frame; `burn` is the synthetic load knob. */
+  readonly buildDocument: (frame: T, burn: number) => PdfDocument;
   /** Resolves with the next frame to capture, or `undefined` once `signal` aborts. */
   readonly acquireFrame: (signal: AbortSignal) => Promise<Captured<T> | undefined>;
   readonly onStats: (stats: LiveStats) => void;
@@ -123,8 +123,8 @@ export async function createLiveSession<T>(options: LiveSessionOptions<T>): Prom
     // Workers start lazily: one concurrent warm-up compile per worker instantiates every WASM module.
     const warmFrame = await options.acquireFrame(abort.signal);
     if (warmFrame !== undefined) {
-      const warmRequest = () => options.buildRequest(warmFrame.frame, options.burn);
-      await Promise.all(Array.from({ length: options.poolSize }, () => client.compile(warmRequest())));
+      const warmDocument = () => options.buildDocument(warmFrame.frame, options.burn);
+      await Promise.all(Array.from({ length: options.poolSize }, () => client.compile(warmDocument())));
     }
   } catch (error) {
     pdfWorker.destroy();
@@ -268,13 +268,13 @@ export async function createLiveSession<T>(options: LiveSessionOptions<T>): Prom
       const seq = nextSeq++;
 
       const captureStartedAt = performance.now();
-      const request = options.buildRequest(captured.frame, options.burn);
+      const document = options.buildDocument(captured.frame, options.burn);
       push(layout, captured.layoutMs + (performance.now() - captureStartedAt));
 
       const compileStartedAt = performance.now();
       let bytes: Uint8Array;
       try {
-        bytes = (await client.compile(request, { signal: abort.signal })).bytes;
+        bytes = (await client.compile(document, { signal: abort.signal })).bytes;
       } catch (error) {
         if (!running) return;
         throw error;

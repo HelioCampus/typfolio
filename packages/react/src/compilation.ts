@@ -1,5 +1,13 @@
-import type { AnyPdfRequest, Diagnostic, PdfClient, PdfResult } from '@typfolio/core';
+import type { Assets, Diagnostic, PdfClient, PdfDocument, PdfOptions, PdfResult } from '@typfolio/core';
 import { useCallback, useEffect, useRef, useState } from 'react';
+
+/** A document and the options it is compiled with: one call of the client's `compile`. */
+export interface PdfJob {
+  readonly document: PdfDocument;
+  readonly assets?: Assets;
+  readonly pdf?: PdfOptions;
+  readonly validate?: boolean;
+}
 
 export type PdfCompilationStatus = 'idle' | 'compiling' | 'success' | 'error' | 'cancelled';
 
@@ -10,13 +18,13 @@ export interface PdfCompilationState {
 }
 
 export interface PdfCompilationCallbacks {
-  readonly onSuccess?: (result: PdfResult, request: AnyPdfRequest) => void;
-  readonly onError?: (error: unknown, request: AnyPdfRequest) => void;
-  readonly onCancel?: (error: Error, request: AnyPdfRequest) => void;
+  readonly onSuccess?: (result: PdfResult, request: PdfJob) => void;
+  readonly onError?: (error: unknown, request: PdfJob) => void;
+  readonly onCancel?: (error: Error, request: PdfJob) => void;
   readonly onSettled?: (
     result: PdfResult | undefined,
     error: unknown | undefined,
-    request: AnyPdfRequest,
+    request: PdfJob,
   ) => void;
 }
 
@@ -36,14 +44,14 @@ export interface PdfCompilation extends PdfCompilationState {
   readonly isSuccess: boolean;
   readonly isError: boolean;
   readonly isCancelled: boolean;
-  readonly compile: (request: AnyPdfRequest, options?: PdfCompilationOptions) => Promise<PdfResult>;
+  readonly compile: (request: PdfJob, options?: PdfCompilationOptions) => Promise<PdfResult>;
   readonly cancel: (reason?: unknown) => void;
   readonly reset: () => void;
 }
 
 interface ActiveCompilation {
   readonly controller: AbortController;
-  readonly request: AnyPdfRequest;
+  readonly request: PdfJob;
   readonly options: PdfCompilationOptions;
 }
 
@@ -78,7 +86,7 @@ function notifySuccess(
   hookCallbacks: PdfCompilationCallbacks,
   callCallbacks: PdfCompilationCallbacks,
   result: PdfResult,
-  request: AnyPdfRequest,
+  request: PdfJob,
 ): void {
   notify(hookCallbacks.onSuccess, result, request);
   notify(callCallbacks.onSuccess, result, request);
@@ -90,7 +98,7 @@ function notifyError(
   hookCallbacks: PdfCompilationCallbacks,
   callCallbacks: PdfCompilationCallbacks,
   error: unknown,
-  request: AnyPdfRequest,
+  request: PdfJob,
 ): void {
   notify(hookCallbacks.onError, error, request);
   notify(callCallbacks.onError, error, request);
@@ -102,7 +110,7 @@ function notifyCancellation(
   hookCallbacks: PdfCompilationCallbacks,
   callCallbacks: PdfCompilationCallbacks,
   error: Error,
-  request: AnyPdfRequest,
+  request: PdfJob,
 ): void {
   notify(hookCallbacks.onCancel, error, request);
   notify(callCallbacks.onCancel, error, request);
@@ -158,7 +166,7 @@ export function usePdfCompilation(options: UsePdfCompilationOptions): PdfCompila
   }, []);
 
   const compile = useCallback(async (
-    request: AnyPdfRequest,
+    request: PdfJob,
     options: PdfCompilationOptions = {},
   ): Promise<PdfResult> => {
     const previous = activeRef.current;
@@ -180,7 +188,8 @@ export function usePdfCompilation(options: UsePdfCompilationOptions): PdfCompila
     else externalSignal?.addEventListener('abort', relayAbort, { once: true });
 
     try {
-      const result = await clientRef.current.compile(request, { signal: controller.signal });
+      const { document, ...compileOptions } = request;
+      const result = await clientRef.current.compile(document, { ...compileOptions, signal: controller.signal });
       if (controller.signal.aborted) {
         throw cancellationError('PDF compilation was cancelled', controller.signal.reason);
       }

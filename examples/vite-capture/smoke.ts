@@ -1,12 +1,28 @@
 // Manual browser smoke test: runs both capture adapters for real (including the
 // html2canvas default rasterizer) and compiles the captured assets into a PDF.
-import { createCompiler } from '@typfolio/core';
+import { createCompiler, defineTemplate } from '@typfolio/core';
 import type { PdfResult } from '@typfolio/core';
 import { captureAssets, captureProps, type CaptureMarker } from '@typfolio/core/capture';
 import { svgCapture } from '@typfolio/core/capture/svg';
 import { domPngCapture } from '@typfolio/core/capture/dom';
 import wasmUrl from '@typfolio/wasm/compiler.wasm?url';
 import fontUrl from '../../fixtures/fonts/LibertinusSerif-Regular.otf?url';
+
+// The captured references are the template's data: `schemaPath` mounts it at /input.json, where the Typst reads it.
+const captureReport = defineTemplate({
+  files: {
+    'main.typ': `
+#let input = json("/input.json")
+#set text(font: "Libertinus Serif", lang: "en")
+#set document(title: "Capture smoke")
+= Capture smoke
+#for figure in input.figures.values() {
+  image(figure.path, alt: figure.altText, width: 60%)
+}
+`,
+  },
+  schemaPath: 'input.json',
+});
 
 const pixelRatio = 2;
 const output = document.querySelector<HTMLElement>('#result')!;
@@ -66,17 +82,7 @@ try {
   const compiler = await createCompiler({ wasm: wasmUrl, fonts: [font] });
   let pdf: PdfResult;
   try {
-    pdf = await compiler.compile({
-      template: `
-#let input = json("/input.json")
-#set text(font: "Libertinus Serif", lang: "en")
-#set document(title: "Capture smoke")
-= Capture smoke
-#for figure in input.figures.values() {
-  image(figure.path, alt: figure.altText, width: 60%)
-}
-`,
-      input: { figures: result.references },
+    pdf = await compiler.compile(captureReport({ figures: result.references }), {
       assets: result.assets,
       pdf: { standards: ['ua-1'] },
     });

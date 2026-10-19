@@ -4,7 +4,7 @@ A failed compile rejects with a `TypstPdfError` (`TypfolioWorkerError` from the 
 
 ```ts
 try {
-  await client.compile(request);
+  await client.compile(report(data, { header }));
 } catch (error) {
   const missing = error.diagnostics?.filter(d => d.code === 'missing-glyph').map(d => d.text) ?? [];
   if (missing.length) notify(`The PDF's fonts can't draw ${missing.join(' ')}`);
@@ -15,8 +15,8 @@ try {
 
 | `error.code` | When |
 |---|---|
-| `INVALID_INPUT` | Data does not match its schema (a template made with `defineTemplate`). The message names the input and lists the issues; `error.issues` has them all. |
-| `INVALID_REQUEST` | The request is malformed: a missing input or partial's data, an unknown partial, a bad path, data that is not JSON. |
+| `INVALID_INPUT` | Data does not match its schema. The message names whose data it is (the template's, or which partial's) and lists the issues; `error.issues` has them all. |
+| `INVALID_REQUEST` | The document or its options are malformed: the template itself instead of a document (call it with its data), missing data for the template or a partial, an unknown partial, a bad path, data that is not JSON. |
 | `UNSUPPORTED_OPTION` | An option this compiler does not support, such as two PDF standards at once. |
 | `COMPILATION` | Typst could not compile the template, or the PDF failed a standard's checks. See `diagnostics`. |
 | `INITIALIZATION` | The WASM module or a font could not be loaded. |
@@ -26,7 +26,7 @@ try {
 
 ### file-not-found
 
-A template reads a file the request does not carry: an `#import`, a `json(...)`, an `image(...)`. `diagnostic.file` is the missing file and `diagnostic.path` the file that reads it.
+A template reads a file the compile does not carry: an `#import`, a `json(...)`, an `image(...)`. `diagnostic.file` is the missing file and `diagnostic.path` the file that reads it.
 
 ```text
 File not found: /common/header.typ (read by /outcomes/main.typ). See …#file-not-found
@@ -35,9 +35,9 @@ File not found: /common/header.typ (read by /outcomes/main.typ). See …#file-no
 A template compiles from the files it declares and nothing else. What to do depends on the file:
 
 - **A Typst file** (`.typ`) with no data of its own: add it to the template's `files`.
-- **A Typst file that reads data of its own** (its own `input(json.with(...))`): make it a partial (`definePartial`) and add it to the template's `partials`; the request then carries its data in `partials.<key>`.
-- **A JSON file at a schema path** (`*.schema.json`): it is the input of a partial whose data the request does not carry. Add the partial to the template's `partials` and its data to the request's `partials`.
-- **Anything else** (an image, a JSON file of your own): add it to the request's `assets`, or attach it (`createAttachments()`, `usePdf`'s `attach`) and put the path in the data.
+- **A Typst file that reads data of its own** (its own `input(json.with(...))`): make it a partial (`definePartial`) and add it to the template's `partials`; the template then takes its data by key, `report(data, { header: headerData })`.
+- **A JSON file at a schema path** (`*.schema.json`): the data of a partial the template does not list, or a `schemaPath` that does not match the path the Typst file reads (it is relative to that file). Add the partial to the template's `partials`, or fix the path.
+- **Anything else** (an image, a JSON file of your own): add it to `compile`'s `assets`, or attach it (`createAttachments()`, `usePdf`'s `attach`) and put the path in the data.
 
 ### missing-glyph
 

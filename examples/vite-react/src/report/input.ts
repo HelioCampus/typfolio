@@ -1,4 +1,7 @@
-/** The runtime input of ./main.typ. Applications own this type; Typfolio does not validate against it. */
+/**
+ * The data of ./main.typ. Applications own this type: the report template has no schema, so it types
+ * the call but Typfolio does not check the data against it. Keep ./report.schema.json in step.
+ */
 export interface ReportInput {
   title: string;
   summary: string;

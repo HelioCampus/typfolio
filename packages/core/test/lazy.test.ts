@@ -1,15 +1,16 @@
 import assert from 'node:assert/strict';
 import { before, test } from 'node:test';
 import { readFile } from 'node:fs/promises';
-import { createLazyCompiler, TypstPdfError } from '../dist/index.js';
-import type { ErrorCode, PdfRequest } from '../dist/index.js';
+import { createLazyCompiler, defineTemplate, TypstPdfError } from '../dist/index.js';
+import type { ErrorCode } from '../dist/index.js';
 
 const root = new URL('../../../', import.meta.url);
 const hasCode = (code: ErrorCode) => (error: unknown) => error instanceof TypstPdfError && error.code === code;
-const request = (title: string): PdfRequest<{ title: string }> => ({
-  template: '#set text(font: "Libertinus Serif")\n#let data = json("/input.json")\n#set document(title: data.title)\n#data.title',
-  input: { title },
+const titled = defineTemplate({
+  files: { 'main.typ': '#import "@local/typfolio:0.1.0": input\n#set text(font: "Libertinus Serif")\n#let data = input(json.with("./title.schema.json"))\n#set document(title: data.title)\n#data.title' },
+  schemaPath: 'title.schema.json',
 });
+const request = (title: string) => titled({ title });
 
 let wasm!: Buffer;
 let font!: Buffer;

@@ -17,23 +17,24 @@ try {
 }
 ```
 
-`check` also takes `assets`, the files a template reads besides its input (shared settings, a logo), exactly as a request's `assets`: a template that reads `json("/export-settings.json")` can be checked with that file in place.
+`template` is a template made with `defineTemplate`. The check compiles only the files it declares, with each piece of data's JSON Schema at its `schemaPath`, made from its schema, so a file the template imports without declaring it fails, with what to do.
+
+`check` also takes `assets`, the files a template reads besides its data (a logo), exactly as `compile`'s `assets`. A JSON Schema file given there at a data path is used as it is instead of one made from the schema: this is how data without a schema, or a schema without Standard JSON Schema, is checked.
 
 `checkTemplate(template, { wasm, fonts, modes?, pdf?, assets? })` is the one-shot form that creates and disposes a checker.
 
-`check` also takes a template made with `defineTemplate`: it compiles only the files the template declares, with each input's JSON Schema at its path, so a file the template imports without declaring it fails, with what to do.
-
-`inputSchemaFiles(definitions, { toJSONSchema? })` returns the JSON Schema file of every input of these templates, partials or `defineInput(...)` results, by path, as JSON text. It writes nothing: a script writes the files where the editor reads them, and a test compares them, so a schema that changed without its file fails CI. Schemas that implement Standard JSON Schema (`~standard.jsonSchema`, as Zod's do) need no option; for Zod Mini, pass `toJSONSchema: schema => z.toJSONSchema(schema, { io: 'input' })`.
+`inputSchemaFiles(definitions, { toJSONSchema? })` returns the JSON Schema file of every piece of data these templates and partials read (nested partials included), or of `{ schema, schemaPath }` pairs, by path, as JSON text. It writes nothing: a script writes the files where the editor reads them, and a test compares them, so a schema that changed without its file fails CI. Schemas that implement Standard JSON Schema (`~standard.jsonSchema`, as Zod's do) need no option; for Zod Mini, pass `toJSONSchema: schema => z.toJSONSchema(schema, { io: 'input' })`.
 
 ```ts
 import { inputSchemaFiles } from '@typfolio/dev-tools';
 
-for (const [path, text] of Object.entries(inputSchemaFiles([headerInput, outcomesInput]))) {
+// Every template's own schema file and each of its partials', once per path.
+for (const [path, text] of Object.entries(inputSchemaFiles([outcomes, results]))) {
   assert.deepEqual(JSON.parse(await readFile(new URL(path, templatesRoot), 'utf8')), JSON.parse(text), `${path} is out of date`);
 }
 ```
 
-A check compiles the template once per sample mode (`minimal`, then `full`) the way an editor does, so `input()` builds a sample from the JSON Schema in `template.files`. A compile error is reported in that mode's result; a malformed template or option is thrown. Nothing is written to disk. See "Build-time checks" in [docs/template-authoring.md](../../docs/template-authoring.md) for the rules and a test recipe.
+A check compiles the template once per sample mode (`minimal`, then `full`) the way an editor does, so `input()` builds a sample from the JSON Schema at each data path. A compile error is reported in that mode's result; a malformed template or option is thrown. Nothing is written to disk. See "Build-time checks" in [docs/template-authoring.md](../../docs/template-authoring.md) for the rules and a test recipe.
 
 ## `inspectPdf`
 

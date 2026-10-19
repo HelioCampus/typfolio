@@ -1,4 +1,4 @@
-import type { JsonValue, PdfRequest } from '@typfolio/core';
+import { defineTemplate, type TemplateDefinition } from '@typfolio/core';
 import type { EditorialLayout, PositionedLine } from './engine.ts';
 
 /** Colours shared by the live stage (CSS) and the Typst template. */
@@ -57,7 +57,10 @@ function glowStops(): [number, number][] {
   });
 }
 
-export function layoutToInput(layout: EditorialLayout, baselines: Baselines, burn = 0): JsonValue {
+/** The data of the editorial template: the layout, positioned and serialisable as JSON. */
+export type EditorialInput = ReturnType<typeof layoutToInput>;
+
+export function layoutToInput(layout: EditorialLayout, baselines: Baselines, burn = 0) {
   const glow = glowStops();
   return {
     w: layout.stage.width,
@@ -107,8 +110,8 @@ export function layoutToInput(layout: EditorialLayout, baselines: Baselines, bur
  * its top at the baseline, so `y + baseline` (measured from the DOM) lands the
  * text exactly where the browser drew it.
  */
-export const editorialTemplate = String.raw`
-#let input = json("/input.json")
+const editorialSource = String.raw`
+#let input = json("/layout.json")
 #let c = input.colors
 
 #set page(
@@ -187,9 +190,13 @@ export const editorialTemplate = String.raw`
 }
 `;
 
-export function makeEditorialRequest(input: JsonValue): PdfRequest {
-  return {
-    template: editorialTemplate,
-    input,
-  };
-}
+/**
+ * The editorial template: `editorialTemplate(layoutToInput(...))` is the document to compile. It has
+ * no schema, so `EditorialInput` types the call and nothing checks the data. The source is a string,
+ * not an editor-authored file, so it reads its data with plain `json()` at the path `schemaPath`
+ * mounts it, and needs no JSON Schema file for an editor sample.
+ */
+export const editorialTemplate: TemplateDefinition<EditorialInput> = defineTemplate({
+  files: { 'main.typ': editorialSource },
+  schemaPath: 'layout.json',
+});

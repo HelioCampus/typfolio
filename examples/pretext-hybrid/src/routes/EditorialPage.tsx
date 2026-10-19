@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from 'react';
-import type { JsonValue, PdfClient } from '@typfolio/core';
+import type { PdfClient } from '@typfolio/core';
 import { usePdf } from '@typfolio/react';
 import { CompilerBoundary } from '../CompilerBoundary.tsx';
 import { FONT_FAMILY, type FontUrls } from '../assets.ts';
 import { StaticPreview } from '../live/StaticPreview.tsx';
 import { Shell } from '../Shell.tsx';
-import { STAGE_BACKGROUND, editorialTemplate, layoutToInput, makeEditorialRequest, type Baselines } from '../editorial/capture.ts';
+import { STAGE_BACKGROUND, editorialTemplate, layoutToInput, type Baselines, type EditorialInput } from '../editorial/capture.ts';
 import {
   STAGE_PRESETS,
   createEditorialEngine,
@@ -56,13 +56,15 @@ function Workbench({ fonts, client, preset, onPreset }: WorkbenchProps) {
   const [live, setLive] = useState(false);
   const [liveStatus, setLiveStatus] = useState<LiveStatus>('starting');
 
-  // The frame captured last: usePdf compiles it, and again on the next capture.
-  const [capturedInput, setCapturedInput] = useState<JsonValue>();
+  // The frame captured last: usePdf compiles it, and again on the next capture. Each capture is a
+  // new object, and the document is built again whenever `deps` change, so the same frame captured
+  // again compiles again too.
+  const [capturedInput, setCapturedInput] = useState<EditorialInput>();
   const startedAtRef = useRef(0);
-  const pdf = usePdf({
+  // Disabled until the first capture: nothing is checked or compiled before there is a layout.
+  const pdf = usePdf(() => editorialTemplate(capturedInput as EditorialInput), {
     client,
-    template: editorialTemplate,
-    data: { input: capturedInput },
+    deps: [capturedInput],
     enabled: capturedInput !== undefined,
     onSuccess: () => {
       const ms = performance.now() - startedAtRef.current;
@@ -151,10 +153,8 @@ function Workbench({ fonts, client, preset, onPreset }: WorkbenchProps) {
     const bytes = JSON.stringify(input).length;
     setCaptured({ bytes, layout });
     startedAtRef.current = performance.now();
-    // The same frame again is the same data, so compile it again explicitly.
-    if (JSON.stringify(input) === JSON.stringify(capturedInput)) pdf.rebuild();
-    else setCapturedInput(input);
-  }, [capturedInput, pdf.rebuild]);
+    setCapturedInput(input);
+  }, []);
 
   // Live PDF mode: the shared pipeline (src/live) asks for a frame whenever a pool slot is free.
   const acquireFrame = useCallback(
@@ -179,10 +179,10 @@ function Workbench({ fonts, client, preset, onPreset }: WorkbenchProps) {
     },
     [engine],
   );
-  const buildLiveRequest = useCallback((layout: EditorialLayout, burn: number) => {
+  const buildLiveDocument = useCallback((layout: EditorialLayout, burn: number) => {
     const view = viewRef.current;
     if (view === undefined) throw new Error('The live stage is not mounted');
-    return makeEditorialRequest(layoutToInput(layout, baselinesFor(view, layout), burn));
+    return editorialTemplate(layoutToInput(layout, baselinesFor(view, layout), burn));
   }, []);
   const onLiveActive = useCallback((state: { demand: boolean } | undefined) => {
     demandRef.current = state?.demand ?? false;
@@ -269,7 +269,7 @@ function Workbench({ fonts, client, preset, onPreset }: WorkbenchProps) {
           <LivePanel
             acquireFrame={acquireFrame}
             aspect={width / height}
-            buildRequest={buildLiveRequest}
+            buildDocument={buildLiveDocument}
             fonts={fonts}
             documentName="editorial.pdf"
             downloadName="typfolio-editorial-frame.pdf"

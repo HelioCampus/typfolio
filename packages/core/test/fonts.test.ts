@@ -3,15 +3,15 @@ import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { after, before, test } from 'node:test';
 import { readFile } from 'node:fs/promises';
-import { createCompiler, TypstPdfError } from '../dist/index.js';
-import type { CompilerOptions, ErrorCode, PdfCompiler, PdfRequest } from '../dist/index.js';
+import { createCompiler, defineTemplate, TypstPdfError } from '../dist/index.js';
+import type { CompileOptions, CompilerOptions, ErrorCode, PdfCompiler, PdfDocument } from '../dist/index.js';
 import { resolveFonts } from '../dist/internal.js';
 
 const root = new URL('../../../', import.meta.url);
 const file = (path: string) => readFile(new URL(path, root));
 const hasCode = (code: ErrorCode) => (error: unknown) => error instanceof TypstPdfError && error.code === code;
 const faces = (pdf: Uint8Array) => new Set(Buffer.from(pdf).toString('latin1').match(/LibertinusSerif-[A-Za-z]+/g));
-const boldTemplate = '#set text(font: "Libertinus Serif")\nPlain and *strong*';
+const boldTemplate = defineTemplate({ files: { 'main.typ': '#set text(font: "Libertinus Serif")\nPlain and *strong*' } });
 
 interface Route {
   status?: number;
@@ -24,7 +24,8 @@ let origin!: string;
 let wasm!: Buffer;
 let regular!: Buffer;
 let bold!: Buffer;
-let basic!: PdfRequest<{ title: string }>;
+// The basic fixture reads its data with json("/input.json"): schemaPath 'input.json' mounts it there.
+let basic!: { title: string; document: PdfDocument; options: CompileOptions };
 const hits = new Map<string | undefined, number>();
 // Responses to /slow-regular.otf are delayed, so the order in which downloads finish differs from the order of the fonts.
 const routes: Record<string, () => Route> = {
@@ -41,14 +42,21 @@ before(async () => {
     file('fixtures/fonts/LibertinusSerif-Regular.otf'),
     file('fixtures/fonts/LibertinusSerif-Bold.otf'),
   ]);
-  basic = {
-    template: { entrypoint: 'main.typ', files: {
+  const template = defineTemplate({
+    files: {
       'main.typ': (await file('fixtures/basic/main.typ')).toString(),
       'partials/layout.typ': (await file('fixtures/basic/partials/layout.typ')).toString(),
-    } },
-    input: JSON.parse((await file('fixtures/basic/input.json')).toString()),
-    assets: { 'assets/chart.svg': await file('fixtures/basic/chart.svg') },
-    pdf: { standards: ['ua-1'], tags: true, creationTimestamp: 1700000000 },
+    },
+    schemaPath: 'input.json',
+  });
+  const input = JSON.parse((await file('fixtures/basic/input.json')).toString());
+  basic = {
+    title: input.title,
+    document: template(input),
+    options: {
+      assets: { 'assets/chart.svg': await file('fixtures/basic/chart.svg') },
+      pdf: { standards: ['ua-1'], tags: true, creationTimestamp: 1700000000 },
+    },
   };
   server = createServer((request, response) => {
     hits.set(request.url, (hits.get(request.url) ?? 0) + 1);
@@ -68,26 +76,26 @@ async function withCompiler<Result>(options: Pick<CompilerOptions, 'fonts'>, run
 
 test('a URL font is fetched while the compiler is created and compiles the basic fixture', async () => {
   await withCompiler({ fonts: [new URL('/regular.otf', origin)] }, async compiler => {
-    const result = await compiler.compile(basic);
-    assert.equal(result.metadata.title, basic.input.title);
+    const result = await compiler.compile(basic.document, basic.options);
+    assert.equal(result.metadata.title, basic.title);
     assert.equal(Buffer.from(result.bytes.subarray(0, 5)).toString(), '%PDF-');
   });
 });
 
 test('an absolute string is fetched like a URL', async () => {
   await withCompiler({ fonts: [`${origin}/regular.otf`] }, async compiler => {
-    assert.ok(faces((await compiler.compile({ template: boldTemplate, input: null })).bytes).has('LibertinusSerif-Regular'));
+    assert.ok(faces((await compiler.compile(boldTemplate())).bytes).has('LibertinusSerif-Regular'));
   });
 });
 
 test('bytes and URL fonts mix, and the second font is the one the document uses', async () => {
   await withCompiler({ fonts: [regular, new URL('/bold.otf', origin)] }, async compiler => {
-    const used = faces((await compiler.compile({ template: boldTemplate, input: null })).bytes);
+    const used = faces((await compiler.compile(boldTemplate())).bytes);
     assert.ok(used.has('LibertinusSerif-Regular'), 'the bytes font');
     assert.ok(used.has('LibertinusSerif-Bold'), 'the URL font');
   });
   await withCompiler({ fonts: [new URL('/slow-regular.otf', origin), bold] }, async compiler => {
-    const used = faces((await compiler.compile({ template: boldTemplate, input: null })).bytes);
+    const used = faces((await compiler.compile(boldTemplate())).bytes);
     assert.ok(used.has('LibertinusSerif-Regular') && used.has('LibertinusSerif-Bold'));
   });
 });
@@ -113,8 +121,8 @@ test('a font fetched at creation is not fetched again by compile', async () => {
   const before = hits.get(path) ?? 0;
   await withCompiler({ fonts: [new URL(path, origin)] }, async compiler => {
     assert.equal(hits.get(path), before + 1);
-    await compiler.compile({ template: boldTemplate, input: null });
-    await compiler.compile(basic);
+    await compiler.compile(boldTemplate());
+    await compiler.compile(basic.document, basic.options);
     assert.equal(hits.get(path), before + 1);
   });
 });
@@ -176,7 +184,7 @@ test('URL fonts without fetch are an INITIALIZATION error; bytes keep working', 
       return true;
     });
     await withCompiler({ fonts: [regular] }, async compiler => {
-      assert.ok((await compiler.compile({ template: boldTemplate, input: null })).bytes.length);
+      assert.ok((await compiler.compile(boldTemplate())).bytes.length);
     });
   } finally { globalThis.fetch = original; }
 });

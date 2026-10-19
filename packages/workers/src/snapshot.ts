@@ -1,5 +1,5 @@
-import { TypstPdfError, type AnyPdfRequest, type DocumentsRequest, type PdfRequest } from '@typfolio/core';
-import { resolveRequest } from '@typfolio/core/internal';
+import { TypstPdfError, type Assets, type PdfDocument, type PdfOptions } from '@typfolio/core';
+import { resolveDocument, type ResolvedRequest } from '@typfolio/core/internal';
 import { TypfolioWorkerError } from './types.js';
 
 function inspectCloneable(value: unknown, ancestors: Set<object>, at: string): void {
@@ -47,17 +47,18 @@ export function isSnapshot(request: unknown): boolean {
 }
 
 /**
- * A copy of the request the client owns. A request for a defined template is first checked against its
- * schemas and turned into its low-level form (schemas are functions and cannot cross the boundary).
+ * A copy of the request the client owns: the document resolved to its files and its data by path (each piece
+ * checked against its schema unless `validate` is false: schemas are functions and cannot cross the boundary),
+ * with the assets and options.
  */
-export function snapshotRequest(request: AnyPdfRequest): PdfRequest<unknown> | DocumentsRequest {
-  let resolved: ReturnType<typeof resolveRequest>;
+export function snapshotRequest(document: PdfDocument, options: { assets?: Assets; pdf?: PdfOptions; validate?: boolean } = {}): ResolvedRequest {
+  let resolved: ReturnType<typeof resolveDocument>;
   try {
-    resolved = resolveRequest(request);
+    resolved = resolveDocument(document, { assets: options.assets, pdf: options.pdf, validate: options.validate });
   } catch (error) {
     throw asWorkerError(error);
   }
-  let snapshot: PdfRequest<unknown> | DocumentsRequest;
+  let snapshot: ResolvedRequest;
   try {
     inspectCloneable(resolved.request, new Set(), 'request');
     snapshot = structuredClone(resolved.request);
@@ -80,7 +81,7 @@ export function snapshotRequest(request: AnyPdfRequest): PdfRequest<unknown> | D
  * detached) are left out and travel by the ordinary clone. Only call this with a snapshot: transferring detaches
  * the buffers, which would break a caller's request.
  */
-export function transferableBuffers(snapshot: PdfRequest<unknown> | DocumentsRequest): ArrayBuffer[] {
+export function transferableBuffers(snapshot: ResolvedRequest): ArrayBuffer[] {
   const buffers = new Set<ArrayBuffer>();
   for (const bytes of Object.values(snapshot.assets ?? {})) {
     if (!ArrayBuffer.isView(bytes)) continue; // Not an asset; the worker's validation rejects it.

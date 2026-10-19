@@ -4,10 +4,10 @@ import { JSDOM } from 'jsdom';
 import { createElement } from 'react';
 import { renderToString } from 'react-dom/server';
 import { act, render } from '@testing-library/react';
-import type { AnyPdfRequest, PdfRequest, PdfResult } from '@typfolio/core';
+import { defineTemplate, type CompileOptions, type PdfDocument, type PdfResult } from '@typfolio/core';
 // usePdf's internals: the compile lifecycle and the object URL it shows.
 import { usePdfCompilation } from '../dist/compilation.js';
-import type { PdfCompilation, UsePdfCompilationOptions } from '../dist/compilation.js';
+import type { PdfCompilation, PdfJob, UsePdfCompilationOptions } from '../dist/compilation.js';
 import { usePdfObjectUrl } from '../dist/object-url.js';
 
 const dom = new JSDOM('<!doctype html><html><body></body></html>', { url: 'https://typfolio.test/' });
@@ -20,10 +20,12 @@ Object.defineProperty(globalThis, 'navigator', {
 globalThis.HTMLElement = dom.window.HTMLElement;
 globalThis.MutationObserver = dom.window.MutationObserver;
 
-const request = (title: string): PdfRequest<{ title: string }> => ({
-  template: { entrypoint: 'main.typ', files: { 'main.typ': '#input.title' } },
-  input: { title },
+const page = defineTemplate({
+  files: { 'main.typ': '#import "@local/typfolio:0.1.0": input\n#let data = input(json.with("./input.schema.json"))\n#data.title' },
+  schemaPath: 'input.schema.json',
 });
+
+const request = (title: string): PdfJob => ({ document: page({ title }) });
 
 const result = (title: string): PdfResult => ({
   bytes: new Uint8Array([37, 80, 68, 70]),
@@ -32,7 +34,8 @@ const result = (title: string): PdfResult => ({
 });
 
 interface FakeCall {
-  request: AnyPdfRequest;
+  document: PdfDocument;
+  options: CompileOptions;
   signal: AbortSignal | undefined;
   resolve: (value: PdfResult) => void;
   reject: (reason?: unknown) => void;
@@ -42,7 +45,7 @@ interface LifecycleEvent {
   type: string;
   value?: PdfResult;
   error?: unknown;
-  input?: AnyPdfRequest;
+  input?: PdfJob;
 }
 
 // What the hooks do with their `PdfClient`: it records every call and settles it when the test says so.
@@ -50,9 +53,9 @@ class FakeClient {
   calls: FakeCall[] = [];
   disposals = 0;
 
-  compile(value: AnyPdfRequest, options: { signal?: AbortSignal } = {}): Promise<PdfResult> {
+  compile(document: PdfDocument, options: CompileOptions = {}): Promise<PdfResult> {
     return new Promise((resolve, reject) => {
-      const call = { request: value, signal: options.signal, resolve, reject };
+      const call = { document, options, signal: options.signal, resolve, reject };
       this.calls.push(call);
       const abort = () => reject(options.signal?.reason ?? new Error('aborted'));
       if (options.signal?.aborted) abort();
@@ -82,10 +85,22 @@ test('manual compilation exposes state, diagnostics, and stable actions', async 
   assert.equal(current.isCompiling, false);
   assert.equal(current.isRecompiling, false);
 
+  const logo = new Uint8Array([1, 2, 3]);
+  const job: PdfJob = { ...request('Manual'), assets: { 'logo.png': logo }, pdf: { standards: ['ua-1'] }, validate: false };
   let pending!: Promise<PdfResult>;
   await act(async () => {
-    pending = current.compile(request('Manual'));
+    pending = current.compile(job);
   });
+  // The client gets the document, then the job's options with the hook's signal.
+  const call = client.calls[0];
+  assert.equal(call.document, job.document);
+  assert.equal(call.document.template, page);
+  assert.deepEqual(call.document.data, { title: 'Manual' });
+  assert.deepEqual(Object.keys(call.options).sort(), ['assets', 'pdf', 'signal', 'validate']);
+  assert.equal(call.options.assets?.['logo.png'], logo);
+  assert.deepEqual(call.options.pdf, { standards: ['ua-1'] });
+  assert.equal(call.options.validate, false);
+  assert.ok(call.options.signal instanceof AbortSignal);
   assert.equal(current.status, 'compiling');
   assert.equal(current.isIdle, false);
   assert.equal(current.isCompiling, true);

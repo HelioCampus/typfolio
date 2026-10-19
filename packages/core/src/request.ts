@@ -1,9 +1,8 @@
-import type { DocumentsRequest } from './definition.js';
-import { pdfStandards, TypstPdfError, type PdfRequest } from './types.js';
+import type { ResolvedRequest } from './definition.js';
+import { pdfStandards, TypstPdfError } from './types.js';
 import { isReservedPath, reservedDirectory } from './typst-package.js';
 
 const encoder = new TextEncoder();
-const defaultEntrypoint = 'main.typ';
 const invalid = (message: string): never => { throw new TypstPdfError('INVALID_REQUEST', message); };
 
 function record(value: unknown, at: string, expected = 'a plain object'): Record<string, unknown> {
@@ -58,21 +57,18 @@ export interface PrepareRequestOptions {
   readonly copyAssets?: boolean;
 }
 
-export function prepareRequest(request: PdfRequest<unknown> | DocumentsRequest, options: PrepareRequestOptions = {}) {
+/**
+ * The files of a resolved document as the compiler mounts them: the template's sources, the assets, and
+ * each piece of data as JSON at its path. Every path, file, asset and JSON value is checked here.
+ */
+export function prepareRequest(request: ResolvedRequest, options: PrepareRequestOptions = {}) {
   const copyAssets = options.copyAssets ?? true;
   const value = record(request, 'request');
-  keys(value, ['template', 'input', 'documents', 'assets', 'pdf'], 'request');
-  // A string template is shorthand for { files: { 'main.typ': template } } with the default entrypoint.
-  const template = typeof value.template === 'string'
-    ? { files: { [defaultEntrypoint]: value.template } } as Record<string, unknown>
-    : record(value.template, 'template', 'a string or a plain object');
-  keys(template, ['entrypoint', 'files'], 'template');
-  const entrypointDefaulted = template.entrypoint === undefined;
-  const entrypoint = virtualPath(entrypointDefaulted ? defaultEntrypoint : template.entrypoint);
+  keys(value, ['entrypoint', 'files', 'documents', 'assets', 'pdf'], 'request');
+  const entrypoint = virtualPath(value.entrypoint);
   const files = new Map<string, Uint8Array>();
   const put = (name: string, contents: Uint8Array) => {
     const path = virtualPath(name);
-    if (path === '/input.json' || path.startsWith('/input.json/')) invalid('/input.json is reserved for request.input');
     if (isReservedPath(path)) invalid(`${reservedDirectory}/ is reserved for core's Typst package: ${path}`);
     if (files.has(path)) invalid(`Duplicate virtual path: ${path}`);
     for (const existing of files.keys()) {
@@ -80,35 +76,27 @@ export function prepareRequest(request: PdfRequest<unknown> | DocumentsRequest, 
     }
     files.set(path, contents);
   };
-  for (const [name, source] of Object.entries(record(template.files, 'template.files'))) {
-    if (typeof source !== 'string') invalid(`Template ${name} must be a string`);
+  for (const [name, source] of Object.entries(record(value.files, 'template files'))) {
+    if (typeof source !== 'string') invalid(`Template file ${name} must be a string`);
     put(name, encoder.encode(source as string));
   }
-  if (!files.has(entrypoint)) {
-    invalid(entrypointDefaulted
-      ? `template.entrypoint was omitted and defaulted to ${defaultEntrypoint}, but template.files has no ${defaultEntrypoint}; add it or set template.entrypoint`
-      : `Entrypoint ${entrypoint} must be a template file`);
-  }
+  if (!files.has(entrypoint)) invalid(`The entrypoint ${entrypoint} must be one of the template's files`);
   if (value.assets !== undefined) {
     for (const [name, bytes] of Object.entries(record(value.assets, 'assets'))) {
       if (!(bytes instanceof Uint8Array)) invalid(`Asset ${name} must be a Uint8Array`);
       put(name, copyAssets ? new Uint8Array(bytes as Uint8Array) : bytes as Uint8Array);
     }
   }
-  // The JSON bytes of request data, or INVALID_REQUEST naming it.
-  const json = (data: unknown, at: string) => {
-    try { return encoder.encode(JSON.stringify(jsonData(data, new Set(), at))); }
+  // Each piece of data as JSON, at the path of its schema file, where `input(json.with(...))` reads it.
+  for (const [name, data] of Object.entries(record(value.documents ?? {}, 'documents'))) {
+    let bytes: Uint8Array;
+    try { bytes = encoder.encode(JSON.stringify(jsonData(data, new Set(), `data at ${name}`))); }
     catch (error) {
       if (error instanceof TypstPdfError) throw error;
-      throw new TypstPdfError('INVALID_REQUEST', `Could not serialize ${at} as JSON`, [], { cause: error });
+      throw new TypstPdfError('INVALID_REQUEST', `Could not serialize the data at ${name} as JSON`, [], { cause: error });
     }
-  };
-  // Documents: JSON data mounted at the paths of their schema files, read with `input(json.with(...))`.
-  const documents = value.documents !== undefined;
-  if (documents) {
-    for (const [name, data] of Object.entries(record(value.documents, 'documents'))) put(name, json(data, `document ${name}`));
+    put(name, bytes);
   }
-  files.set('/input.json', json(value.input, 'input'));
   const pdf = value.pdf === undefined ? {} : record(value.pdf, 'pdf');
   keys(pdf, ['standards', 'tags', 'creationTimestamp'], 'pdf');
   const standards = pdf.standards ?? [];
@@ -120,7 +108,7 @@ export function prepareRequest(request: PdfRequest<unknown> | DocumentsRequest, 
   if (pdf.tags === false && ['ua-1', 'a-1a', 'a-2a', 'a-3a'].includes(standards[0])) invalid(`${standards[0]} requires PDF tags`);
   if (pdf.creationTimestamp !== undefined && !Number.isSafeInteger(pdf.creationTimestamp)) invalid('creationTimestamp must be Unix seconds as a safe integer');
   return {
-    entrypoint, files, documents,
+    entrypoint, files,
     pdf: { pdf_standard: standards[0], pdf_tags: pdf.tags ?? true, creation_timestamp: pdf.creationTimestamp },
   };
 }

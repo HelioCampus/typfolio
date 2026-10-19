@@ -22,17 +22,10 @@ export function resolvePackage(spec: { namespace?: string; name?: string; versio
 
 const encoder = new TextEncoder();
 
-/** The package sources as mounts in the virtual directory (no request input). */
+/** The package sources as mounts in its virtual directory. */
 export function packageFileMounts(): [string, Uint8Array][] {
   return Object.entries(files).map(([file, source]): [string, Uint8Array] => [`${bundledPackageDirectory}/${file}`, encoder.encode(source)]);
 }
 
-/** Files to mount for one compile: the package sources, plus the request input at the package root. */
-export function packageMounts(input: Uint8Array): [string, Uint8Array][] {
-  return [...packageFileMounts(), [`${bundledPackageDirectory}/input.json`, input]];
-}
-
-/** `sys.inputs` entry that tells the helper it is running under Typfolio. */
+/** `sys.inputs` entry that tells the helper it is running under Typfolio: `input()` then reads the mounted data. */
 export const runtimeMarker: [string, string] = ['typfolio', version];
-/** Set when the request mounts documents: `input(json.with(path))` then reads the data mounted at `path`. */
-export const documentsMarker: [string, string] = ['typfolio-inputs', 'documents'];

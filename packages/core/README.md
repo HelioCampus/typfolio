@@ -3,24 +3,36 @@
 Framework-independent Typst PDF compilation whose only runtime dependency is `@typfolio/wasm`, the generated WASM and matching bindings (packaged separately).
 
 ```ts
-import { createCompiler } from '@typfolio/core';
+import { createCompiler, defineTemplate } from '@typfolio/core';
+import { z } from 'zod'; // or any Standard Schema library: Valibot, ArkType, …
+
+const reportSchema = z.object({ title: z.string(), message: z.string() });
+
+// main.typ reads its data where `schemaPath` puts it.
+const report = defineTemplate({
+  files: {
+    'main.typ': `
+#import "@local/typfolio:0.1.0": input
+#let data = input(json.with("./input.schema.json"))
+#set text(font: "Libertinus Serif", lang: "en")
+#set document(title: data.title)
+= #data.title
+#data.message
+`,
+  },
+  schema: reportSchema,
+  schemaPath: 'input.schema.json',
+});
 
 const wasm = new URL('/typst/compiler.wasm', location.href);
 const font = new URL('/fonts/report.otf', location.href);
 const compiler = await createCompiler({ wasm, fonts: [font] });
 
 try {
-  const result = await compiler.compile({
-    template: `
-#let input = json("/input.json")
-#set text(font: "Libertinus Serif", lang: "en")
-#set document(title: input.title)
-= #input.title
-#input.message
-`,
-    input: { title: 'Report', message: 'Application data goes here.' },
-    pdf: { standards: ['ua-1'], tags: true },
-  });
+  const result = await compiler.compile(
+    report({ title: 'Report', message: 'Application data goes here.' }),
+    { pdf: { standards: ['ua-1'], tags: true } },
+  );
   // result.bytes is a Uint8Array; the application owns previews/downloads.
 } finally {
   await compiler.dispose();
@@ -33,19 +45,18 @@ The font name in the template must match the supplied font. Fonts and WASM are l
 
 ## Contract
 
-- `template`: either a string or `{ entrypoint?, files }`. A string is a single-file template, mounted as `/main.typ` and used as the entrypoint; compile diagnostics for it report the path `/main.typ`. In the object form, `files` maps virtual paths to source strings (including nested `.typ` imports) and `entrypoint` defaults to `main.typ`, which must then be one of the files (otherwise the request is rejected with `INVALID_REQUEST`). Set `entrypoint` explicitly to use another file. The `PdfTemplate` type is exported.
-- `templateFromFiles(files, { base?, entrypoint? })`: turns a bundler glob result (for example Vite's `import.meta.glob('./report/**/*.typ', { query: '?raw', import: 'default', eager: true })`) into a template whose keys are virtual paths relative to the template folder. Pure and bundler-neutral; see `docs/template-authoring.md`.
-- `input`: JSON-compatible values. Core reserves `/input.json`; endpoint fetching and Zod/domain validation belong to the application. `PdfRequest<Input>` is generic (type-only, unconstrained, default `JsonValue`) so an application can type `input`; JSON compatibility is still checked at runtime. Templates can read the input as `json("input.json")` from the entrypoint, or with the bundled Typst package below.
-- Reserved virtual paths: `/input.json` (the request input) and everything under `/@typfolio/` (core's mounted Typst package). Template files and assets at those paths are rejected with `INVALID_REQUEST`.
-- `assets`: a record of virtual paths to `Uint8Array`, copied at submission (see `copyAssets` below).
-- `copyAssets` (a `createCompiler` option, default `true`): by default `compile` copies every asset when it captures the request, so mutating, reusing, or detaching a buffer after calling `compile` cannot change the result. `copyAssets: false` mounts the caller's `Uint8Array` views as they are and skips that copy, which matters for multi-megabyte assets. The contract then is: the caller must not mutate, detach, or reuse an asset's buffer until the promise returned by `compile` settles. Validation of paths, types, reserved paths and JSON input is identical either way. `@typfolio/workers` sets it inside its workers, where the request arrives as a private transferred copy; set it yourself only when you own the buffers for the duration of the call.
+- `defineTemplate({ entrypoint?, files, schema?, schemaPath?, partials? })` defines a template. `files` maps virtual paths to Typst source (nested imports included); `entrypoint` defaults to `main.typ` and must be one of the files (otherwise `INVALID_REQUEST`). `schema` is a [Standard Schema](https://standardschema.dev) (Zod, Valibot, ArkType, …) for the template's data, and `schemaPath` is where the entrypoint reads it: `input(json.with("./input.schema.json"))`, a path relative to the file that reads it. Omit both for a template without data. A template compiles only the files it declares (its own and its partials'); a file it imports without declaring it fails with a message that says what to do.
+- `definePartial({ files, schema?, schemaPath, partials? })` is Typst code with data of its own, such as a shared header that reads `input(json.with("./header.schema.json"))`. A template lists it once, by key: `partials: { header }`.
+- A template is a function. Called with its data, and its partials' data by key, it returns the document to compile: `report(data, { header: headerData })`. Without partials it is `report(data)`; without data, `report()`; with partials but no data of its own, `report(undefined, { header })`. The call is typed by the schemas: a missing or unknown partial key, or data of the wrong shape, is a type error. Nested partials' data goes in the same object, by their keys.
+- `compile(document, { assets?, pdf?, signal?, validate? })`: a Promise of the PDF bytes, its diagnostics and its title. Each piece of data is checked against its schema before compiling (`INVALID_INPUT`, with the issues and which partial; an asynchronous schema is awaited), then mounted as JSON at its `schemaPath`. Typst receives the data as passed, not the schema's parsed output, so schema defaults and transforms do not apply. `validate: false` skips the schemas (the types still apply); missing data is still an `INVALID_REQUEST`. A template that reads `json("/input.json")` works with `schemaPath: 'input.json'`.
+- `assets`: a record of virtual paths to `Uint8Array`, the files the template reads besides its data (a logo, charts), copied at submission (see `copyAssets` below).
+- Reserved virtual paths: everything under `/@typfolio/` (core's mounted Typst package). Template files, data paths and assets there are rejected with `INVALID_REQUEST`, as is any path two of them share.
+- `copyAssets` (a `createCompiler` option, default `true`): by default `compile` copies every asset when it captures the request, so mutating, reusing, or detaching a buffer after calling `compile` cannot change the result. `copyAssets: false` mounts the caller's `Uint8Array` views as they are and skips that copy, which matters for multi-megabyte assets. The contract then is: the caller must not mutate, detach, or reuse an asset's buffer until the promise returned by `compile` settles. Validation of paths, types, reserved paths and JSON data is identical either way. `@typfolio/workers` sets it inside its workers, where the request arrives as a private transferred copy; set it yourself only when you own the buffers for the duration of the call.
 - `pdf`: zero or one standard, tags, and creation timestamp in Unix seconds. Read `compiler.capabilities` for current support. Unsupported options are rejected.
-- `compile(request, { signal })`: Promise of PDF bytes, diagnostics, and title metadata.
-- A template made with `defineTemplate({ entrypoint?, files, input?, partials? })` takes `{ template, input, partials, assets?, pdf? }`, typed by its schemas (`TemplateRequest<typeof template>`). `defineInput(schema, path)` pairs a [Standard Schema](https://standardschema.dev) (Zod, Valibot, ArkType, …) with the path of its JSON Schema file; `definePartial({ files, input, partials? })` is Typst code with runtime data of its own. Each piece of data is checked against its schema before compiling (`INVALID_INPUT`, with the issues; an asynchronous schema is awaited) and mounted at its schema's path, where its file reads it with `input(json.with(...))`. Such a template compiles only the files it declares; a file it imports without declaring it fails with a message that says what to do. See `docs/template-authoring.md`.
-- `createAttachments()`: `add(bytes, extension)` returns a path such as `/attachments/0.png` to put in the data, and `assets` holds the files for the request. The same bytes added twice share one path.
+- `createAttachments()`: `add(bytes, extension)` returns a path such as `/attachments/0.png` to put in the data, and `assets` holds the files for `compile`'s `assets`. The same bytes added twice share one path.
 - `dispose()`: idempotent; stops new jobs and waits for accepted work.
 
-`createLazyCompiler(options)` takes the same options but is synchronous and returns a `PdfClient`: nothing is downloaded until its first `compile`, which loads the WASM and fonts once for every later call. A failed load is not kept, so the next call tries again, and calls run one at a time in order, so callers never see `BUSY`. Create it once at module level and pass it to `PdfProvider`, or as `usePdf`'s `client`:
+`createLazyCompiler(options)` takes the same options but is synchronous and returns a `PdfClient`: nothing is downloaded until its first `compile`, which loads the WASM and fonts once for every later call. A failed load is not kept, so the next call tries again, and calls run one at a time in order, so callers never see `BUSY`. Create it once at module level and pass it as `usePdf`'s `client`:
 
 ```ts
 import { createLazyCompiler } from '@typfolio/core';
@@ -62,14 +73,14 @@ Remote Typst packages (everything except the bundled one), page ranges, experime
 
 ## Bundled Typst package
 
-`@typfolio/core` ships one Typst package, `@local/typfolio:0.1.0`, as files in `typst-packages/local/typfolio/0.1.0/` (`typst.toml`, `lib.typ`, `sample.typ`). Each compile mounts `typst.toml` and `lib.typ` (not `sample.typ`) in the request's virtual file system, sets `sys.inputs.typfolio`, and also mounts the input at the package root (an absolute path inside a package resolves to the package root, not the project). Templates use it like this:
+`@typfolio/core` ships one Typst package, `@local/typfolio:0.1.0`, as files in `typst-packages/local/typfolio/0.1.0/` (`typst.toml`, `lib.typ`, `sample.typ`). Each compile mounts `typst.toml` and `lib.typ` (not `sample.typ`) in the request's virtual file system and sets `sys.inputs.typfolio`. Templates use it like this:
 
 ```typ
 #import "@local/typfolio:0.1.0": input
 #let data = input(json.with("./report.schema.json"))
 ```
 
-Under Typfolio `input()` returns `request.input` and never reads the schema; in a template made with `defineTemplate`, it returns the data mounted at the schema's path. In an editor (where nothing sets `sys.inputs`) it imports the sample builder from `sample.typ`, inside the function body, and builds a sample from the JSON Schema so completion works; `--input typfolio-sample=minimal` previews the sparse sample instead of the default `full` one. The runtime embeds only `lib.typ`. `compiler.capabilities.typstPackages` is `['@local/typfolio:0.1.0']`; any other `@namespace/name:version` import fails with a `COMPILATION` error that names the supported package. The directory layout is the one Tinymist expects for `--package-path`; see `docs/template-authoring.md` for the editor setting. The shipped `.typ`/`.toml` files are the source of truth: `tools/generate-typst-package.ts` (the first step of `npm run build`) generates `src/typst-package.generated.ts` (`typst.toml` and `lib.typ`, the runtime module) and `packages/dev-tools/src/sample-source.generated.ts` (`sample.typ`, imported only by `@typfolio/dev-tools`). Neither is edited by hand.
+Under Typfolio `input()` returns the data mounted at that path (the template's or a partial's, by its `schemaPath`) and never reads a schema. In an editor (where nothing sets `sys.inputs`) the same path holds the JSON Schema file: `input()` imports the sample builder from `sample.typ`, inside the function body, and builds a sample from it so completion works; `--input typfolio-sample=minimal` previews the sparse sample instead of the default `full` one. The runtime embeds only `lib.typ`. `compiler.capabilities.typstPackages` is `['@local/typfolio:0.1.0']`; any other `@namespace/name:version` import fails with a `COMPILATION` error that names the supported package. The directory layout is the one Tinymist expects for `--package-path`; see `docs/template-authoring.md` for the editor setting. The shipped `.typ`/`.toml` files are the source of truth: `tools/generate-typst-package.ts` (the first step of `npm run build`) generates `src/typst-package.generated.ts` (`typst.toml` and `lib.typ`, the runtime module) and `packages/dev-tools/src/sample-source.generated.ts` (`sample.typ`, imported only by `@typfolio/dev-tools`). Neither is edited by hand.
 
 ## Dev-time tools
 
@@ -106,11 +117,10 @@ const captured = await captureAssets(document.querySelector('#report'), {
   require: ['performance-chart'],
 });
 
-await compiler.compile({
-  ...request,
-  assets: { ...request.assets, ...captured.assets },
-  input: { report: reportInput, figures: captured.references },
-});
+await compiler.compile(
+  report({ report: reportData, figures: captured.references }),
+  { assets: captured.assets },
+);
 ```
 
 `captureAssets(root, { adapters, require?, signal? })` discovers every marked element under `root` (and `root` itself) in DOM order, then captures them one at a time. Everything is validated before any adapter runs:
@@ -122,7 +132,7 @@ await compiler.compile({
 - `NOT_FOUND` for each id in `require` that is not present.
 - Capture failures are wrapped as `CAPTURE_FAILED`, an adapter that returns no bytes as `EMPTY_ASSET`, and an aborted signal as `ABORTED`.
 
-Asset paths are derived as `captures/<id><first adapter extension>`. The result is `{ assets, references }`: `assets` is ready for `request.assets`, and `references` is keyed by id with `{ path, decorative: false, altText }` or `{ path, decorative: true }`, suitable for `request.input`. `captureProps` does not throw for empty alt text so a component can render before its data is ready; `captureAssets` rejects it.
+Asset paths are derived as `captures/<id><first adapter extension>`. The result is `{ assets, references }`: `assets` is ready for `compile`'s `assets`, and `references` is keyed by id with `{ path, decorative: false, altText }` or `{ path, decorative: true }`, suitable for a template's data. `captureProps` does not throw for empty alt text so a component can render before its data is ready; `captureAssets` rejects it.
 
 The template must apply the reference at the image use site, for example `#image(figure.path, alt: figure.altText)`. Alternative text should communicate the visual's conclusion, not merely identify it as a chart, and complex visuals need nearby text or tabular data. SVG is preferred for charts. DOM-to-PNG is intended for composed visuals; paragraphs, headings, and tables should be generated natively in Typst. Captured regions must have a non-zero rendered size. DOM-to-PNG follows browser rasterization constraints: cross-origin images need suitable CORS headers, web fonts and images must already be ready, and an `AbortSignal` cannot preempt work already executing inside `html2canvas`.
 

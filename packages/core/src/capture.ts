@@ -1,4 +1,4 @@
-import type { PdfRequest } from './types.js';
+import type { Assets } from './types.js';
 
 const idAttribute = 'data-typfolio-capture';
 const kindAttribute = 'data-typfolio-capture-kind';
@@ -75,8 +75,8 @@ export type CapturedAssetReference =
   | { readonly path: string; readonly decorative: true };
 
 export interface CapturedAssets {
-  readonly assets: NonNullable<PdfRequest['assets']>;
-  /** JSON-safe metadata keyed by region id, suitable for request.input. */
+  readonly assets: Assets;
+  /** JSON-safe metadata keyed by region id, suitable for a template's data. */
   readonly references: Readonly<Record<string, CapturedAssetReference>>;
 }
 

@@ -24,7 +24,7 @@ Two [pretext](https://github.com/chenglou/pretext) demos reproduced as Typst-ren
 - **Layout is JavaScript.** pretext decides where every line breaks, how wide it is and where it sits. `src/editorial/engine.ts` and `src/ascii/engine.ts` are pure: they return plain data.
 - **Rendering is Typst.** Each template (`asciiTemplate` in `src/ascii/capture.ts`, `editorialTemplate` in `src/editorial/capture.ts`) is a loop of absolutely positioned `place(top + left, dx:, dy:, ...)` calls. Typst never breaks a line or centres a row.
 - **One layout object feeds both sides.** The live DOM renderer and the JSON capture read the same frame, so the PDF is exactly the frozen live panel. "Capture" freezes the animation on the frame it serialised.
-- Both templates are inline strings in `template.files`; the compiler has no remote package imports.
+- Both templates are inline Typst strings, each the one file of a `defineTemplate` without a schema: `asciiTemplate(framesToInput(...))` and `editorialTemplate(layoutToInput(...))` are the documents to compile, typed by the TypeScript input types and not checked at runtime. Not being editor-authored files, they read their data with plain `json()` at their `schemaPath` (`/frames.json`, `/layout.json`) and need no JSON Schema file. The compiler has no remote package imports.
 
 ## Live PDF mode
 

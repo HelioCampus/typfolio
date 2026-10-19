@@ -244,10 +244,10 @@ function createAssetRenderer(store: StageStore): ComponentType {
  * give them, so the PDF never depends on how wide the page is or what it hides. Each element
  * becomes an SVG asset.
  *
- * `build` runs during render whenever `deps` change, like `useMemo`: it returns your template
- * input, and each `render(element)` inside it returns the asset path to put in that input.
+ * `build` runs during render whenever `deps` change, like `useMemo`: it returns your template's
+ * data, and each `render(element)` inside it returns the asset path to put in that data.
  * Render `<AssetRenderer />` in your tree; once every element has drawn, `assets` holds the files
- * for `PdfRequest.assets`. An element whose component and props are unchanged since the last
+ * for `compile`'s `assets`. An element whose component and props are unchanged since the last
  * build is not drawn again. Turn chart animations off: the first drawing is the one serialized.
  *
  * Most applications use `usePdf`, which builds, draws and compiles; this hook is the drawing
@@ -266,7 +266,8 @@ export function useRenderedAssets<T>(
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const built = useMemo(() => build(builder, directory), [...deps, generation]);
   const invalid = useMemo(() => {
-    if (options.validate === undefined) return undefined;
+    // Disabled, nothing is checked: the data may not be there yet. Enabling checks the current build.
+    if (options.validate === undefined || !enabled) return undefined;
     try {
       options.validate(built.value);
       return undefined;
@@ -275,7 +276,7 @@ export function useRenderedAssets<T>(
     }
     // Checked once per build.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [built]);
+  }, [built, enabled]);
   const [drawn, setDrawn] = useState<Drawn>();
   const [store] = useState<StageStore>(() => ({ stage: null, listeners: new Set(), slots: new Map(), mounted: 0 }));
   const [AssetRenderer] = useState(() => createAssetRenderer(store));

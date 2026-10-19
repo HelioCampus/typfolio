@@ -1,4 +1,5 @@
-import { createCompiler, TypstPdfError } from '@typfolio/core';
+import { TypstPdfError } from '@typfolio/core';
+import { createRequestCompiler } from '@typfolio/core/internal';
 import { decodeHostMessage, protocolVersion, type RuntimeMessage, type SerializedError } from './protocol.js';
 
 export interface WorkerRuntimeScope {
@@ -23,7 +24,7 @@ function transferable(bytes: Uint8Array): Uint8Array {
 }
 
 export function installWorkerRuntime(scope: WorkerRuntimeScope): void {
-  let compiler: Awaited<ReturnType<typeof createCompiler>> | undefined;
+  let compiler: Awaited<ReturnType<typeof createRequestCompiler>> | undefined;
   let initializing: Promise<void> | undefined;
 
   scope.addEventListener('message', event => {
@@ -33,7 +34,7 @@ export function installWorkerRuntime(scope: WorkerRuntimeScope): void {
       if (message.type === 'initialize') {
         if (initializing || compiler) throw new Error('Typfolio worker is already initialized');
         // The request is owned by this worker (a transferred snapshot), so core need not copy its assets again.
-        initializing = createCompiler({ ...message.compiler, copyAssets: false }).then(value => {
+        initializing = createRequestCompiler({ ...message.compiler, copyAssets: false }).then(value => {
           compiler = value;
           scope.postMessage({ protocol: protocolVersion, type: 'ready' });
         }).catch(error => {
@@ -44,7 +45,8 @@ export function installWorkerRuntime(scope: WorkerRuntimeScope): void {
 
       requestId = message.id;
       if (!compiler) throw new Error('Typfolio worker is not ready');
-      void compiler.compile(message.request).then(result => {
+      // Resolved and checked against its schemas on the page's thread: only files and data arrive here.
+      void compiler.compile(() => ({ request: message.request })).then(result => {
         const bytes = transferable(result.bytes);
         scope.postMessage({
           protocol: protocolVersion,

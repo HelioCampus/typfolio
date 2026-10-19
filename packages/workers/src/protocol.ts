@@ -1,11 +1,12 @@
-import type { Diagnostic, PdfRequest, PdfResult } from '@typfolio/core';
+import type { Diagnostic, PdfResult } from '@typfolio/core';
+import type { ResolvedRequest } from '@typfolio/core/internal';
 import type { SerializedCompilerOptions, WorkerErrorCode, WorkerWasmSource } from './types.js';
 
 export const protocolVersion = 1;
 
 export type HostMessage =
   | { readonly protocol: 1; readonly type: 'initialize'; readonly compiler: SerializedCompilerOptions }
-  | { readonly protocol: 1; readonly type: 'compile'; readonly id: number; readonly request: PdfRequest<unknown> };
+  | { readonly protocol: 1; readonly type: 'compile'; readonly id: number; readonly request: ResolvedRequest };
 
 export interface SerializedError {
   readonly code: WorkerErrorCode;
@@ -50,7 +51,7 @@ export function decodeHostMessage(value: unknown): HostMessage {
     return { protocol: protocolVersion, type: 'initialize', compiler: compilerOptions(message.compiler) };
   }
   if (message.type === 'compile' && Number.isSafeInteger(message.id)) {
-    const request = record(message.request, 'request') as unknown as PdfRequest<unknown>;
+    const request = record(message.request, 'request') as unknown as ResolvedRequest;
     return { protocol: protocolVersion, type: 'compile', id: Number(message.id), request };
   }
   throw new TypeError('Unknown Typfolio worker message');

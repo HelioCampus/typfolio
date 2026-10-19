@@ -5,6 +5,9 @@
 export { createEngine, initialize, resolveFonts } from './engine.js';
 export type { CompileExtras } from './engine.js';
 export { prepareRequest } from './request.js';
-export { isTemplateDefinition, resolveRequest } from './definition.js';
+export { isTemplateDefinition, resolveDocument } from './definition.js';
+export type { ResolvedRequest } from './definition.js';
 export { bundledPackageDirectory, packageFileMounts } from './typst-package.js';
 export { explainCompileError } from './explain.js';
+export { createRequestCompiler } from './request-compiler.js';
+export type { ResolveRequest } from './request-compiler.js';

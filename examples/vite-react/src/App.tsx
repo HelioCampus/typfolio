@@ -1,7 +1,8 @@
 import { useRef, useState, type FormEvent } from 'react';
-import { templateFromFiles, type PdfClient } from '@typfolio/core';
+import { defineTemplate, type PdfClient, type TemplateDefinition } from '@typfolio/core';
 import { usePdf, type PdfStatus } from '@typfolio/react';
 import type { ReportInput } from './report/input.ts';
+import reportSource from './report/main.typ?raw';
 import { Topbar } from './Topbar.tsx';
 
 export interface RuntimeProfile {
@@ -24,10 +25,14 @@ interface AppProps {
   readonly client: PdfClient;
 }
 
-// The glob stays literal here so Vite can analyse it; report.schema.json is for the editor and is not matched, so it is never sent at runtime.
-const template = templateFromFiles(
-  import.meta.glob<string>('./report/**/*.typ', { query: '?raw', import: 'default', eager: true }),
-);
+// A template without a schema: its data is not checked, and ReportInput types the call. main.typ reads
+// its data at report/report.schema.json: there the editor finds the hand-written JSON Schema, and the
+// app's data is mounted when it compiles. The schema file is not one of the files, so it is never sent.
+const report: TemplateDefinition<ReportInput> = defineTemplate({
+  entrypoint: 'report/main.typ',
+  files: { 'report/main.typ': reportSource },
+  schemaPath: 'report/report.schema.json',
+});
 
 function makeInput(title: string, summary: string, profile: RuntimeProfile): ReportInput {
   return {
@@ -75,14 +80,14 @@ export function App({ profile, client }: AppProps) {
   const [summary, setSummary] = useState(
     'A concise field note on keeping document generation portable: application data stays outside the renderer, compilation stays behind one client contract, and heavier execution remains an explicit choice.',
   );
-  // The brief as last submitted: usePdf compiles it, and again whenever a new one is submitted.
+  // The brief as last submitted: usePdf compiles it once there is one, and again whenever a new one
+  // is submitted. The document is written inline: it is compared by its data, not by reference.
   const [submitted, setSubmitted] = useState<ReportInput>();
   const startedAt = useRef(0);
   const [durationMs, setDurationMs] = useState<number>();
-  const pdf = usePdf({
+  const pdf = usePdf(report(submitted as ReportInput), {
     client,
-    template,
-    data: { input: submitted },
+    // Disabled until the first submit: nothing is checked or compiled before there is a brief.
     enabled: submitted !== undefined,
     pdf: pdfOptions,
     onSuccess: () => setDurationMs(performance.now() - startedAt.current),
@@ -118,7 +123,7 @@ export function App({ profile, client }: AppProps) {
                 <p className="section-number">01</p>
                 <h2>Document brief</h2>
               </div>
-              <span className="file-label">input.json</span>
+              <span className="file-label">ReportInput</span>
             </div>
 
             <label className="field">

@@ -1,6 +1,6 @@
 #import "@local/typfolio:0.1.0": input
 // The header's own data. In an editor, ./header.schema.json is its schema and this is a sample;
-// when the app compiles, the request's partials.header is mounted at that path.
+// when the app compiles, the header data of the call (`outcomesTemplate(data, { header })`) is mounted at that path.
 #let header = input(json.with("./header.schema.json"))
 
 #let report-header() = grid(

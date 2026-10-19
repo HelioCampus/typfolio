@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
-import type { PdfRequest } from '@typfolio/core';
+import type { PdfDocument } from '@typfolio/core';
 import type { FontUrls } from '../assets.ts';
 import { ModeSwitch, ViewerToolbar, type PreviewMode } from './chrome.tsx';
 import { ProofBar, usePdfBytesUrl } from './proof.tsx';
@@ -56,7 +56,7 @@ interface LivePanelProps<T> {
   /** PDF page width / height. */
   readonly aspect: number;
   readonly maxWidth: number;
-  readonly buildRequest: (frame: T, burn: number) => PdfRequest<unknown>;
+  readonly buildDocument: (frame: T, burn: number) => PdfDocument;
   /**
    * Resolves with the next frame to capture. Called whenever a pool slot is
    * free. With `demand`, the route advances its own simulation on the spot
@@ -169,7 +169,7 @@ export function LivePanel<T>(props: LivePanelProps<T>) {
         scale: baseScale.current,
         poolSize,
         burn: load,
-        buildRequest: (frame, burn) => latest.current.buildRequest(frame, burn),
+        buildDocument: (frame, burn) => latest.current.buildDocument(frame, burn),
         acquireFrame: signal => latest.current.acquireFrame(signal, demand),
         onStats: setStats,
       });

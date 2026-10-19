@@ -106,7 +106,7 @@ The generated WASM is 24,325,868 bytes (8,941,574 bytes at gzip level 9, about 6
 | Multiple standards | Explicitly rejected; upstream binding accepts one string |
 | Tags and creation timestamp | Exposed and verified in PDF output; tags default to true |
 | Page ranges / experimental features | Explicitly unsupported; upstream binding needs extensions |
-| JSON | Plain JSON values serialized to reserved `/input.json`; no business schemas |
+| JSON | Each piece of data (the template's and each partial's) checked against the application's Standard Schema, then serialized as JSON at its `schemaPath`; core has no schema library of its own |
 | Files | Nested virtual paths; collisions, dot segments, traversal, and reserved-path replacement rejected |
 | Resource loading | Explicit fonts (bytes, or URLs fetched with `fetch` by the realm that creates the compiler: the page for core, each worker for the workers package) and request assets; no implicit font CDN, host file access, or remote Typst packages; the only importable package is the bundled `@local/typfolio:0.1.0` |
 | Diagnostics | Structured compile diagnostics with upstream ranges; export failures retain upstream text/cause but may lack source locations |

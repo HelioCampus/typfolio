@@ -2,14 +2,13 @@
 // and core never imports it, so none of it (nor the generated sample source it embeds) reaches a production bundle.
 import {
   TypstPdfError,
+  type AnyTemplate,
+  type Assets,
   type CompilerOptions,
   type Diagnostic,
   type PartialDefinition,
   type PdfOptions,
-  type PdfTemplate,
   type StandardSchemaV1,
-  type TemplateDefinition,
-  type TemplateInput,
 } from '@typfolio/core';
 import {
   bundledPackageDirectory,
@@ -35,9 +34,15 @@ export interface JSONSchemaOptions {
   toJSONSchema?(schema: StandardSchemaV1): unknown;
 }
 
-type Definition = TemplateDefinition<unknown, unknown> | PartialDefinition | TemplateInput;
+/** A schema and the path its Typst file reads the data from, for a script that cannot import the definitions. */
+export interface SchemaFile {
+  readonly schema: StandardSchemaV1;
+  readonly schemaPath: string;
+}
 
-// Each input of these templates, partials and inputs, nested partials included, once per path.
+type Definition = AnyTemplate | PartialDefinition | SchemaFile;
+
+// Each input of these templates, partials and schema files, nested partials included, once per path.
 function inputsOf(definitions: readonly Definition[]): Map<string, StandardSchemaV1 | undefined> {
   const found = new Map<string, StandardSchemaV1 | undefined>();
   const add = (path: string, schema: StandardSchemaV1 | undefined) => {
@@ -51,13 +56,13 @@ function inputsOf(definitions: readonly Definition[]): Map<string, StandardSchem
       for (const slot of definition.inputs) add(slot.path, slot.schema);
     } else if ((definition as PartialDefinition)?.kind === 'typfolio-partial') {
       const partial = definition as PartialDefinition;
-      visit(partial.input);
+      add(partial.schemaPath, partial.schema as StandardSchemaV1 | undefined);
       for (const nested of Object.values(partial.partials)) visit(nested);
-    } else if (typeof (definition as TemplateInput)?.path === 'string') {
-      const input = definition as TemplateInput;
-      add(input.path.replace(/^\/+/, ''), input.schema as StandardSchemaV1 | undefined);
+    } else if (typeof (definition as SchemaFile)?.schemaPath === 'string') {
+      const file = definition as SchemaFile;
+      add(file.schemaPath.replace(/^\/+/, ''), file.schema);
     } else {
-      throw new TypstPdfError('INVALID_REQUEST', 'Expected a defineTemplate(...), a definePartial(...) or a defineInput(...)');
+      throw new TypstPdfError('INVALID_REQUEST', 'Expected a defineTemplate(...), a definePartial(...) or { schema, schemaPath }');
     }
   };
   for (const definition of definitions) visit(definition);
@@ -76,7 +81,7 @@ function jsonSchemaOf(schema: StandardSchemaV1, path: string, options: JSONSchem
 
 /**
  * The JSON Schema file of each input of these templates, partials (nested ones included) or
- * `defineInput(...)` results, by its path, such as `common/header.schema.json`, as JSON text. Write
+ * `{ schema, schemaPath }` pairs, by its path, such as `common/header.schema.json`, as JSON text. Write
  * each next to the Typst files, where its `input(json.with("./header.schema.json"))` reads it in an
  * editor for a sample, and in a test compare the parsed files with these to catch a schema that
  * changed without its file. An input without a schema is left out. Nothing is written here.
@@ -95,14 +100,13 @@ export function inputSchemaFiles(
 export interface TemplateCheckOptions extends JSONSchemaOptions {
   /** Defaults to `['minimal', 'full']`. Each mode is a separate compile. */
   modes?: readonly SampleMode[];
-  /** Same options as a request's `pdf`. */
+  /** Same options as `compile`'s `pdf`. */
   pdf?: PdfOptions;
   /**
-   * Files the template reads besides its input, such as shared settings or a logo: same as a
-   * request's `assets`. For a template made with `defineTemplate`, a schema file given here is used
-   * as it is instead of one made from the input's schema.
+   * Files the template reads besides its data, such as a logo: as `compile`'s `assets`. A JSON Schema
+   * file given here at a data path is used as it is, instead of one made from the schema.
    */
-  assets?: Readonly<Record<string, Uint8Array>>;
+  assets?: Assets;
 }
 
 export interface TemplateCheckResult {
@@ -124,14 +128,13 @@ export interface TemplateCheckReport {
 
 export interface TemplateChecker {
   /**
-   * Compiles `template` once per mode in editor mode: no runtime marker, so `input()` reads the schema
-   * from `template.files` (at the path its `json.with(...)` names, relative to the file that writes it)
-   * and builds the sample. A template made with `defineTemplate` is compiled from the files it
-   * declares only, with each input's JSON Schema at its path (see `inputSchemaFiles`): a file it
-   * imports without declaring it fails, with what to do. A failed compile is reported in its result;
+   * Compiles `template` once per mode in editor mode: no runtime marker, so `input()` reads the JSON
+   * Schema at each data path (made from the schema, see `inputSchemaFiles`, or given in `assets`) and
+   * builds the sample. The template is compiled from the files it declares only: a file it imports
+   * without declaring it fails, with what to do. A failed compile is reported in its result;
    * a malformed template or option rejects with `INVALID_REQUEST` or `UNSUPPORTED_OPTION`.
    */
-  check(template: PdfTemplate | TemplateDefinition<unknown, unknown>, options?: TemplateCheckOptions): Promise<TemplateCheckReport>;
+  check(template: AnyTemplate, options?: TemplateCheckOptions): Promise<TemplateCheckReport>;
   /** Stops accepting checks; waits for an accepted one and frees the compiler. */
   dispose(): Promise<void>;
 }
@@ -148,20 +151,27 @@ function parseOptions(options: unknown): Omit<TemplateCheckOptions, 'modes'> & {
   return { modes, pdf, assets, ...(toJSONSchema === undefined ? {} : { toJSONSchema }) };
 }
 
-// A defined template as the editor sees it: its declared files, and each input's JSON Schema at its path.
-function editorRequest(template: PdfTemplate | TemplateDefinition<unknown, unknown>, options: Omit<TemplateCheckOptions, 'modes'>) {
+// A template as the editor sees it: its declared files, and each input's JSON Schema at the path its data is read.
+function editorRequest(template: AnyTemplate, options: Omit<TemplateCheckOptions, 'modes'>) {
   const { pdf, assets } = options;
-  if (!isTemplateDefinition(template)) return { template, input: null, pdf, ...(assets === undefined ? {} : { assets }) };
-  const encoder = new TextEncoder();
-  const schemas: Record<string, Uint8Array> = {};
+  if (!isTemplateDefinition(template)) throw new TypstPdfError('INVALID_REQUEST', 'check takes a template made with defineTemplate');
+  // A JSON Schema is JSON: mounted like data, where `input(json.with(...))` reads it in the editor branch.
+  const schemas: Record<string, unknown> = {};
+  const given = new Set(Object.keys(assets ?? {}).map(path => path.replace(/^\/+/, '')));
   for (const [path, schema] of inputsOf([template])) {
-    if (assets?.[path] !== undefined) continue;
+    if (given.has(path)) continue;
     if (schema === undefined) {
-      throw new TypstPdfError('INVALID_REQUEST', `The input at ${path} has no schema: give its JSON Schema file in assets`);
+      throw new TypstPdfError('INVALID_REQUEST', `The data at ${path} has no schema: give its JSON Schema file in assets`);
     }
-    schemas[path] = encoder.encode(JSON.stringify(jsonSchemaOf(schema, path, options)));
+    schemas[path] = jsonSchemaOf(schema, path, options);
   }
-  return { template: { entrypoint: template.entrypoint, files: template.files }, input: null, pdf, assets: { ...assets, ...schemas } };
+  return {
+    entrypoint: template.entrypoint,
+    files: template.files,
+    documents: schemas,
+    ...(assets === undefined ? {} : { assets }),
+    ...(pdf === undefined ? {} : { pdf }),
+  };
 }
 
 /** Same options as `createCompiler`. One active check per checker. */
@@ -181,7 +191,6 @@ export async function createTemplateChecker(options: CompilerOptions): Promise<T
       if (closed) throw new TypstPdfError('DISPOSED', 'The template checker is disposed');
       if (busy) throw new TypstPdfError('BUSY', 'The template checker already has an active check');
       const { modes, ...rest } = parseOptions(checkOptions);
-      // `input: null` only fills the reserved /input.json; the editor branch never reads it.
       const prepared = prepareRequest(editorRequest(template, rest));
       busy = true;
       let release!: () => void;
@@ -210,7 +219,7 @@ export async function createTemplateChecker(options: CompilerOptions): Promise<T
 }
 
 /** One-shot form of `createTemplateChecker`: creates a checker, runs one check, disposes it. */
-export async function checkTemplate(template: PdfTemplate | TemplateDefinition<unknown, unknown>, options: CompilerOptions & TemplateCheckOptions): Promise<TemplateCheckReport> {
+export async function checkTemplate(template: AnyTemplate, options: CompilerOptions & TemplateCheckOptions): Promise<TemplateCheckReport> {
   const { wasm, fonts, ...checkOptions } = options ?? {} as CompilerOptions;
   const checker = await createTemplateChecker({ wasm, fonts });
   try { return await checker.check(template, checkOptions); } finally { await checker.dispose(); }

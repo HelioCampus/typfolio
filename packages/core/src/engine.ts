@@ -142,8 +142,8 @@ class Engine {
     let diagnostics: Diagnostic[] = [];
     try {
       this.compiler.reset_shadow();
-      // The request's files, then the extras: for a runtime compile, the helper package plus the input at
-      // its root (absolute paths inside a package resolve there).
+      // The request's files (the template's, its data by path and the assets), then the extras: the helper
+      // package's files.
       for (const [path, bytes] of [...request.files, ...extras.mounts]) {
         if (!this.compiler.map_shadow(path, bytes)) throw new TypstPdfError('ENGINE', `Could not mount ${path}`);
       }

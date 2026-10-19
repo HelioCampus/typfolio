@@ -77,13 +77,11 @@ function formatBytes(value: number): string {
 
 function ChartsApp({ client }: { readonly client: PdfClient }) {
   const [requested, setRequested] = useState(false);
-  const pdf = usePdf({
-    client,
-    template: outcomesTemplate,
-    // Built once (no deps): render() draws a chart for the PDF and attach() adds a file; each
-    // returns the path to put in the data. The template's schemas type and check it.
-    data: ({ render, attach }) => ({
-      input: {
+  // Built once (no deps): render() draws a chart for the PDF and attach() adds a file; each returns
+  // the path to put in the data. The template's schemas type and check its data and the header's.
+  const pdf = usePdf(
+    ({ render, attach }) => outcomesTemplate(
+      {
         title: 'Outcome results',
         generatedAt: new Intl.DateTimeFormat('en', { dateStyle: 'long' }).format(new Date()),
         outcomes: outcomes.map(outcome => ({
@@ -94,14 +92,15 @@ function ChartsApp({ client }: { readonly client: PdfClient }) {
             outcome.levels.map(level => `${level.name} ${level.students}`).join(', ') + '.',
         })),
       },
-      partials: {
-        header: { institution: 'Example University', logo: attach(logo, 'svg') },
-      },
-    }),
-    pdf: { standards: ['ua-1'] },
-    charts,
-    enabled: requested,
-  });
+      { header: { institution: 'Example University', logo: attach(logo, 'svg') } },
+    ),
+    {
+      client,
+      pdf: { standards: ['ua-1'] },
+      charts,
+      enabled: requested,
+    },
+  );
 
   return (
     <div className="app-shell">
@@ -115,7 +114,7 @@ function ChartsApp({ client }: { readonly client: PdfClient }) {
           </div>
           <p className="hero-copy">
             The page shows each chart at the width it has. For the PDF, usePdf draws every chart again in a hidden
-            renderer at the template's image size, in the PDF's font, puts the paths in the input, and compiles.
+            renderer at the template's image size, in the PDF's font, puts the paths in the data, and compiles.
           </p>
         </section>
 
