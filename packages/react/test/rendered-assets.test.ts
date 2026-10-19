@@ -3,8 +3,9 @@ import test from 'node:test';
 import { JSDOM } from 'jsdom';
 import { createContext, createElement, Fragment, useContext, useEffect, type DependencyList, type ReactElement } from 'react';
 import { act, render, waitFor } from '@testing-library/react';
-import { useRenderedAssets } from '../dist/index.js';
-import type { RenderAsset, RenderedAssets, UseRenderedAssetsOptions } from '../dist/index.js';
+// usePdf's chart drawing, an internal module.
+import { useRenderedAssets } from '../dist/rendered-assets.js';
+import type { RenderAsset, RenderedAssets, UseRenderedAssetsOptions } from '../dist/rendered-assets.js';
 
 const dom = new JSDOM('<!doctype html><html><head></head><body></body></html>', { url: 'https://typfolio.test/' });
 globalThis.window = dom.window as unknown as typeof globalThis.window;
@@ -78,8 +79,8 @@ test('useRenderedAssets draws each rendered element into an SVG asset at the pat
     { onReady: (assets, value) => { ready = [assets, value]; } },
   );
   assert.deepEqual(harness.current?.value, [
-    { name: 'A', chart: 'charts/0.svg' },
-    { name: 'B', chart: 'charts/1.svg' },
+    { name: 'A', chart: '/charts/0.svg' },
+    { name: 'B', chart: '/charts/1.svg' },
   ]);
   assert.equal(harness.current?.status, 'drawing');
   assert.equal(harness.current?.assets, undefined);
@@ -108,7 +109,7 @@ test('useRenderedAssets forces the font family, runs beforeSerialize on the copy
     fontFamily: 'Source Sans 3',
     beforeSerialize: svg => svg.querySelectorAll('.tooltip').forEach(node => node.remove()),
   });
-  assert.deepEqual(harness.current?.value, { chart: 'figures/outcomes/0.svg' });
+  assert.deepEqual(harness.current?.value, { chart: '/figures/outcomes/0.svg' });
   await waitFor(() => assert.ok(document.querySelector('[data-typfolio-asset-renderer] svg')));
   const style = [...document.head.querySelectorAll('style')].find(node => node.textContent?.includes('Source Sans 3'));
   assert.ok(style, 'a scoped stylesheet forces the font while drawing');

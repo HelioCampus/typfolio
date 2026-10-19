@@ -3,9 +3,9 @@ import test from 'node:test';
 import { JSDOM } from 'jsdom';
 import { createElement, Fragment, useEffect, type ReactElement } from 'react';
 import { act, render, waitFor } from '@testing-library/react';
-import type { PdfRequest, PdfResult } from '@typfolio/core';
-import { PdfProvider, usePdf } from '../dist/index.js';
-import type { PdfDocument, UsePdfOptions } from '../dist/index.js';
+import { defineInput, definePartial, defineTemplate, type AnyPdfRequest, type PdfResult, type StandardSchemaV1 } from '@typfolio/core';
+import { usePdf } from '../dist/index.js';
+import type { AnyPdfTemplate, PdfDocument, UsePdfOptions } from '../dist/index.js';
 
 const dom = new JSDOM('<!doctype html><html><head></head><body></body></html>', { url: 'https://typfolio.test/' });
 globalThis.window = dom.window as unknown as typeof globalThis.window;
@@ -24,7 +24,8 @@ URL.createObjectURL = () => `blob:test-${++urls}`;
 URL.revokeObjectURL = (url: string) => { revoked.push(url); };
 
 interface Call {
-  request: PdfRequest<unknown>;
+  // What the client gets: the fields of every request form, flattened for the assertions.
+  request: AnyPdfRequest & { input?: unknown; partials?: Record<string, unknown> };
   signal?: AbortSignal;
   resolve: (result: PdfResult) => void;
   reject: (error: unknown) => void;
@@ -33,7 +34,7 @@ interface Call {
 // Records every compile and settles it when the test says so.
 class FakeClient {
   calls: Call[] = [];
-  compile(request: PdfRequest<unknown>, options: { signal?: AbortSignal } = {}): Promise<PdfResult> {
+  compile(request: AnyPdfRequest, options: { signal?: AbortSignal } = {}): Promise<PdfResult> {
     return new Promise((resolve, reject) => {
       this.calls.push({ request, signal: options.signal, resolve, reject });
       options.signal?.addEventListener('abort', () => reject(options.signal?.reason), { once: true });
@@ -60,17 +61,20 @@ function Chart({ value }: { value: number }): ReactElement {
 
 const template = { entrypoint: 'main.typ', files: { 'main.typ': '#let data = json("/input.json")' } };
 
-function mount<Input>(options: UsePdfOptions<Input>) {
+// The options a test gives; mount adds the client.
+type Options<T extends AnyPdfTemplate> = Omit<UsePdfOptions<T>, 'client'>;
+
+function mount<T extends AnyPdfTemplate>(options: Options<T>) {
   const client = new FakeClient();
   const harness: { current?: PdfDocument } = {};
-  function Report(props: { options: UsePdfOptions<Input> }): ReactElement {
-    const pdf = usePdf(props.options);
+  function Report(props: { options: Options<T> }): ReactElement {
+    const pdf = usePdf({ ...props.options, client } as UsePdfOptions<T>);
     harness.current = pdf;
     return createElement(Fragment, null, createElement(pdf.AssetRenderer));
   }
-  const tree = (next: UsePdfOptions<Input>) => createElement(PdfProvider, { client }, createElement(Report, { options: next }));
+  const tree = (next: Options<T>) => createElement(Report, { options: next });
   const view = render(tree(options));
-  return { client, harness, view, update: (next: UsePdfOptions<Input>) => view.rerender(tree(next)) };
+  return { client, harness, view, update: (next: Options<T>) => view.rerender(tree(next)) };
 }
 
 const settle = () => act(async () => new Promise(resolve => setTimeout(resolve, 30)));
@@ -81,7 +85,7 @@ test('usePdf draws the charts, then compiles the input, its charts and its asset
   const events: string[] = [];
   const { client, harness, view } = mount({
     template,
-    input: ({ render: draw }) => ({ title: 'Report', chart: draw(createElement(Chart, { value: 3 })) }),
+    data: ({ render: draw }) => ({ input: { title: 'Report', chart: draw(createElement(Chart, { value: 3 })) } }),
     assets: { 'logo.png': logo },
     pdf: { standards: ['ua-1'] },
     onSuccess: value => events.push(`success ${value.metadata.title}`),
@@ -92,7 +96,7 @@ test('usePdf draws the charts, then compiles the input, its charts and its asset
   await waitFor(() => assert.equal(client.calls.length, 1));
   assert.equal(harness.current?.status, 'compiling');
   const request = client.last.request;
-  assert.deepEqual(request.input, { title: 'Report', chart: 'charts/0.svg' });
+  assert.deepEqual(request.input, { title: 'Report', chart: '/charts/0.svg' });
   assert.equal(request.template, template);
   assert.deepEqual(request.pdf, { standards: ['ua-1'] });
   assert.equal(request.assets?.['logo.png'], logo);
@@ -111,9 +115,9 @@ test('usePdf draws the charts, then compiles the input, its charts and its asset
 
 test('usePdf recompiles when deps change, keeps the older PDF meanwhile, and redraws only changed charts', async () => {
   mounts = 0;
-  const options = (includeDetails: boolean): UsePdfOptions<{ includeDetails: boolean; chart: string }> => ({
+  const options = (includeDetails: boolean): Options<typeof template> => ({
     template,
-    input: ({ render: draw }) => ({ includeDetails, chart: draw(createElement(Chart, { value: 1 })) }),
+    data: ({ render: draw }) => ({ input: { includeDetails, chart: draw(createElement(Chart, { value: 1 })) } }),
     deps: [includeDetails],
   });
   const { client, harness, view, update } = mount(options(true));
@@ -122,7 +126,7 @@ test('usePdf recompiles when deps change, keeps the older PDF meanwhile, and red
 
   update(options(false));
   await waitFor(() => assert.equal(client.calls.length, 2));
-  assert.deepEqual(client.last.request.input, { includeDetails: false, chart: 'charts/0.svg' });
+  assert.deepEqual(client.last.request.input, { includeDetails: false, chart: '/charts/0.svg' });
   assert.equal(harness.current?.status, 'compiling');
   assert.equal(harness.current?.isLoading, false);
   assert.equal(harness.current?.isFetching, true);
@@ -139,9 +143,9 @@ test('usePdf recompiles when deps change, keeps the older PDF meanwhile, and red
 });
 
 test('usePdf does not recompile for equal values written inline on every render', async () => {
-  const options = (): UsePdfOptions<{ title: string }> => ({
+  const options = (): Options<typeof template> => ({
     template: { entrypoint: 'main.typ', files: { 'main.typ': template.files['main.typ'] } },
-    input: { title: 'Inline' },
+    data: { input: { title: 'Inline' } },
     assets: { 'logo.png': logoBytes },
     pdf: { standards: ['ua-1'] },
   });
@@ -156,7 +160,7 @@ test('usePdf does not recompile for equal values written inline on every render'
   assert.equal(harness.current?.status, 'success');
 
   // A plain input value that does change recompiles.
-  update({ ...options(), input: { title: 'Changed' } });
+  update({ ...options(), data: { input: { title: 'Changed' } } });
   await waitFor(() => assert.equal(client.calls.length, 2));
   assert.deepEqual(client.last.request.input, { title: 'Changed' });
   view.unmount();
@@ -164,9 +168,9 @@ test('usePdf does not recompile for equal values written inline on every render'
 
 test('usePdf neither draws nor compiles while disabled', async () => {
   mounts = 0;
-  const options = (enabled: boolean): UsePdfOptions<string> => ({
+  const options = (enabled: boolean): Options<typeof template> => ({
     template,
-    input: ({ render: draw }) => draw(createElement(Chart, { value: 1 })),
+    data: ({ render: draw }) => ({ input: draw(createElement(Chart, { value: 1 })) }),
     enabled,
   });
   const { client, harness, view, update } = mount(options(false));
@@ -181,7 +185,7 @@ test('usePdf neither draws nor compiles while disabled', async () => {
 
 test('usePdf reports a failed compile and a chart that cannot be drawn', async () => {
   const errors: unknown[] = [];
-  const failing = mount({ template, input: { title: 'x' }, onError: error => errors.push(error) });
+  const failing = mount({ template, data: { input: { title: 'x' } }, onError: error => errors.push(error) });
   await waitFor(() => assert.equal(failing.client.calls.length, 1));
   const failure = new Error('compile failed');
   await act(async () => failing.client.last.reject(failure));
@@ -193,7 +197,7 @@ test('usePdf reports a failed compile and a chart that cannot be drawn', async (
 
   const undrawn = mount({
     template,
-    input: ({ render: draw }) => draw(createElement('p', null, 'no svg')),
+    data: ({ render: draw }) => ({ input: draw(createElement('p', null, 'no svg')) }),
     charts: { timeoutMs: 50 },
     onError: error => errors.push(error),
   });
@@ -208,7 +212,7 @@ test('usePdf rebuild() draws and compiles again; cancel() keeps the newest PDF',
   mounts = 0;
   const { client, harness, view } = mount({
     template,
-    input: ({ render: draw }) => draw(createElement(Chart, { value: 2 })),
+    data: ({ render: draw }) => ({ input: draw(createElement(Chart, { value: 2 })) }),
   });
   await waitFor(() => assert.equal(client.calls.length, 1));
   await act(async () => client.last.resolve(result('one')));
@@ -223,7 +227,7 @@ test('usePdf rebuild() draws and compiles again; cancel() keeps the newest PDF',
 });
 
 test('usePdf download() saves the newest PDF under one .pdf extension', async () => {
-  const { client, harness, view } = mount({ template, input: { title: 'x' } });
+  const { client, harness, view } = mount({ template, data: { input: { title: 'x' } } });
   await waitFor(() => assert.equal(client.calls.length, 1));
   await act(async () => client.last.resolve(result('Assessment Results')));
   const clicked: string[] = [];
@@ -246,9 +250,9 @@ test('usePdf download() saves the newest PDF under one .pdf extension', async ()
 
 test('usePdf cancels a compile in flight when disabled, and reuses a finished PDF when enabled again', async () => {
   const errors: unknown[] = [];
-  const options = (enabled: boolean): UsePdfOptions<{ title: string }> => ({
+  const options = (enabled: boolean): Options<typeof template> => ({
     template,
-    input: { title: 'Toggle' },
+    data: { input: { title: 'Toggle' } },
     enabled,
     onError: error => errors.push(error),
   });
@@ -274,12 +278,12 @@ test('usePdf cancels a compile in flight when disabled, and reuses a finished PD
 test('usePdf rejects an input that validate throws for: nothing is drawn or compiled', async () => {
   mounts = 0;
   const errors: unknown[] = [];
-  const validate = (input: { title: string }) => {
-    if (!input.title) throw new Error('title must not be empty');
+  const validate = (data: { input?: unknown }) => {
+    if (!(data.input as { title: string }).title) throw new Error('title must not be empty');
   };
-  const options = (title: string): UsePdfOptions<{ title: string; chart: string }> => ({
+  const options = (title: string): Options<typeof template> => ({
     template,
-    input: ({ render: draw }) => ({ title, chart: draw(createElement(Chart, { value: 1 })) }),
+    data: ({ render: draw }) => ({ input: { title, chart: draw(createElement(Chart, { value: 1 })) } }),
     deps: [title],
     validate,
     onError: error => errors.push(error),
@@ -298,17 +302,67 @@ test('usePdf rejects an input that validate throws for: nothing is drawn or comp
   view.unmount();
 });
 
-test('usePdf compiles with a client passed as an option, without a PdfProvider', async () => {
-  const client = new FakeClient();
-  const harness: { current?: PdfDocument } = {};
-  function Report(): ReactElement {
-    const pdf = usePdf({ template, input: { title: 'No provider' }, client });
-    harness.current = pdf;
-    return createElement(pdf.AssetRenderer);
-  }
-  const view = render(createElement(Report));
+// A Standard Schema without a schema library: `check` returns a message for invalid data.
+function schema<T>(check: (value: T) => string | undefined): StandardSchemaV1<T> {
+  return {
+    '~standard': {
+      version: 1,
+      vendor: 'test',
+      validate: (value: unknown) => {
+        const message = check(value as T);
+        return message ? { issues: [{ message }] } : { value: value as T };
+      },
+    },
+  };
+}
+
+const header = definePartial({
+  files: { 'common/header.typ': '#import "@local/typfolio:0.1.0": input\n#let settings = input(json.with("./header.schema.json"))' },
+  input: defineInput(schema<{ institution: string; logo: string }>(value => (value.institution ? undefined : 'institution is empty')), 'common/header.schema.json'),
+});
+const report = defineTemplate({
+  entrypoint: 'report/main.typ',
+  files: { 'report/main.typ': '#import "../common/header.typ": settings' },
+  input: defineInput(schema<{ title: string; chart: string }>(() => undefined), 'report/input.schema.json'),
+  partials: { header },
+});
+
+test('usePdf compiles a defined template with its partials\' data, attachments and charts', async () => {
+  const logo = new Uint8Array([7, 7, 7]);
+  const { client, view } = mount({
+    template: report,
+    data: ({ render: draw, attach }) => ({
+      input: { title: 'Report', chart: draw(createElement(Chart, { value: 4 })) },
+      partials: { header: { institution: 'Example University', logo: attach(logo, 'png') } },
+    }),
+  });
   await waitFor(() => assert.equal(client.calls.length, 1));
-  await act(async () => client.last.resolve(result('No provider')));
-  assert.equal(harness.current?.status, 'success');
+  const request = client.last.request;
+  assert.equal(request.template, report);
+  assert.deepEqual(request.input, { title: 'Report', chart: '/charts/0.svg' });
+  assert.deepEqual(request.partials, { header: { institution: 'Example University', logo: '/attachments/0.png' } });
+  assert.deepEqual(Object.keys(request.assets ?? {}).sort(), ['attachments/0.png', 'charts/0.svg']);
+  assert.equal(request.assets?.['attachments/0.png'], logo);
+  view.unmount();
+});
+
+test('usePdf checks a defined template\'s schemas before drawing anything', async () => {
+  mounts = 0;
+  const errors: unknown[] = [];
+  const { client, harness, view } = mount({
+    template: report,
+    data: ({ render: draw }) => ({
+      input: { title: 'Report', chart: draw(createElement(Chart, { value: 5 })) },
+      partials: { header: { institution: '', logo: '' } },
+    }),
+    onError: error => errors.push(error),
+  });
+  await settle();
+  assert.equal(harness.current?.status, 'error');
+  assert.match(String((harness.current?.error as Error).message), /The data of partial "header" does not match its schema \(common\/header\.schema\.json\):\n- institution is empty/);
+  assert.equal((harness.current?.error as { code?: string }).code, 'INVALID_INPUT');
+  assert.equal(errors.length, 1);
+  assert.equal(mounts, 0, 'nothing is drawn for data that fails its schema');
+  assert.equal(client.calls.length, 0);
   view.unmount();
 });

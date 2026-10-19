@@ -1,6 +1,6 @@
 {
   "name": "@typfolio/core",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Framework-independent Typst PDF compiler for the browser and Node, running on WebAssembly",
   "type": "module",
   "license": "Apache-2.0",
@@ -30,7 +30,7 @@
     }
   },
   "dependencies": {
-    "@typfolio/wasm": "0.1.0"
+    "@typfolio/wasm": "0.1.1"
   },
   "peerDependencies": {
     "html2canvas": "^1.4.1"

@@ -14,8 +14,9 @@ import {
 import { createPortal } from 'react-dom';
 
 /**
- * Adds an element to the PDF's assets and returns the asset path it is drawn into, such as
- * `charts/0.svg`. The element is drawn at the size its own props give it.
+ * Adds an element to the PDF's assets and returns the path it is drawn into, such as
+ * `/charts/0.svg`: absolute, so a template reads it with `image(path)` from any of its files. The
+ * element is drawn at the size its own props give it.
  */
 export type RenderAsset = (element: ReactElement) => string;
 
@@ -82,6 +83,7 @@ interface Built<T> {
   readonly elements: readonly ReactElement[];
   /** A reuse key per element, from its component and props; undefined when it cannot be compared. */
   readonly keys: readonly (string | undefined)[];
+  /** Asset keys, such as `charts/0.svg`. */
   readonly paths: readonly string[];
 }
 
@@ -163,7 +165,7 @@ function build<T>(builder: (tools: { readonly render: RenderAsset }) => T, direc
       const path = `${directory}/${elements.length}.svg`;
       elements.push(element);
       paths.push(path);
-      return path;
+      return `/${path}`;
     },
   });
   open = false;

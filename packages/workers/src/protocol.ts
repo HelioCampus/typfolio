@@ -65,6 +65,9 @@ function diagnostic(value: unknown): Diagnostic {
     path: typeof item.path === 'string' ? item.path : undefined,
     range: typeof item.range === 'string' ? item.range : undefined,
     package: typeof item.package === 'string' ? item.package : undefined,
+    ...(typeof item.code === 'string' ? { code: item.code as Diagnostic['code'] } : {}),
+    ...(typeof item.file === 'string' ? { file: item.file } : {}),
+    ...(typeof item.text === 'string' ? { text: item.text } : {}),
   };
 }
 
@@ -74,7 +77,7 @@ function serializedError(value: unknown): SerializedError {
     throw new TypeError('Invalid worker error');
   }
   const codes: readonly WorkerErrorCode[] = [
-    'INITIALIZATION', 'INVALID_REQUEST', 'UNSUPPORTED_OPTION', 'BUSY', 'DISPOSED',
+    'INITIALIZATION', 'INVALID_REQUEST', 'INVALID_INPUT', 'UNSUPPORTED_OPTION', 'BUSY', 'DISPOSED',
     'ABORTED', 'COMPILATION', 'ENGINE', 'WORKER', 'TIMEOUT', 'QUEUE_FULL',
   ];
   const code = codes.find(candidate => candidate === error.code);

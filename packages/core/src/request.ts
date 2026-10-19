@@ -1,3 +1,4 @@
+import type { DocumentsRequest } from './definition.js';
 import { pdfStandards, TypstPdfError, type PdfRequest } from './types.js';
 import { isReservedPath, reservedDirectory } from './typst-package.js';
 
@@ -57,10 +58,10 @@ export interface PrepareRequestOptions {
   readonly copyAssets?: boolean;
 }
 
-export function prepareRequest(request: PdfRequest<unknown>, options: PrepareRequestOptions = {}) {
+export function prepareRequest(request: PdfRequest<unknown> | DocumentsRequest, options: PrepareRequestOptions = {}) {
   const copyAssets = options.copyAssets ?? true;
   const value = record(request, 'request');
-  keys(value, ['template', 'input', 'assets', 'pdf'], 'request');
+  keys(value, ['template', 'input', 'documents', 'assets', 'pdf'], 'request');
   // A string template is shorthand for { files: { 'main.typ': template } } with the default entrypoint.
   const template = typeof value.template === 'string'
     ? { files: { [defaultEntrypoint]: value.template } } as Record<string, unknown>
@@ -71,7 +72,7 @@ export function prepareRequest(request: PdfRequest<unknown>, options: PrepareReq
   const files = new Map<string, Uint8Array>();
   const put = (name: string, contents: Uint8Array) => {
     const path = virtualPath(name);
-    if (path === '/input.json') invalid('/input.json is reserved for request.input');
+    if (path === '/input.json' || path.startsWith('/input.json/')) invalid('/input.json is reserved for request.input');
     if (isReservedPath(path)) invalid(`${reservedDirectory}/ is reserved for core's Typst package: ${path}`);
     if (files.has(path)) invalid(`Duplicate virtual path: ${path}`);
     for (const existing of files.keys()) {
@@ -94,12 +95,20 @@ export function prepareRequest(request: PdfRequest<unknown>, options: PrepareReq
       put(name, copyAssets ? new Uint8Array(bytes as Uint8Array) : bytes as Uint8Array);
     }
   }
-  if (Array.from(files.keys()).some(path => path.startsWith('/input.json/'))) invalid('/input.json is reserved for request.input');
-  try { files.set('/input.json', encoder.encode(JSON.stringify(jsonData(value.input, new Set(), 'input')))); }
-  catch (error) {
-    if (error instanceof TypstPdfError) throw error;
-    throw new TypstPdfError('INVALID_REQUEST', 'Could not serialize input as JSON', [], { cause: error });
+  // The JSON bytes of request data, or INVALID_REQUEST naming it.
+  const json = (data: unknown, at: string) => {
+    try { return encoder.encode(JSON.stringify(jsonData(data, new Set(), at))); }
+    catch (error) {
+      if (error instanceof TypstPdfError) throw error;
+      throw new TypstPdfError('INVALID_REQUEST', `Could not serialize ${at} as JSON`, [], { cause: error });
+    }
+  };
+  // Documents: JSON data mounted at the paths of their schema files, read with `input(json.with(...))`.
+  const documents = value.documents !== undefined;
+  if (documents) {
+    for (const [name, data] of Object.entries(record(value.documents, 'documents'))) put(name, json(data, `document ${name}`));
   }
+  files.set('/input.json', json(value.input, 'input'));
   const pdf = value.pdf === undefined ? {} : record(value.pdf, 'pdf');
   keys(pdf, ['standards', 'tags', 'creationTimestamp'], 'pdf');
   const standards = pdf.standards ?? [];
@@ -111,7 +120,7 @@ export function prepareRequest(request: PdfRequest<unknown>, options: PrepareReq
   if (pdf.tags === false && ['ua-1', 'a-1a', 'a-2a', 'a-3a'].includes(standards[0])) invalid(`${standards[0]} requires PDF tags`);
   if (pdf.creationTimestamp !== undefined && !Number.isSafeInteger(pdf.creationTimestamp)) invalid('creationTimestamp must be Unix seconds as a safe integer');
   return {
-    entrypoint, files,
+    entrypoint, files, documents,
     pdf: { pdf_standard: standards[0], pdf_tags: pdf.tags ?? true, creation_timestamp: pdf.creationTimestamp },
   };
 }

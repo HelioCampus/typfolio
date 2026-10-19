@@ -9,7 +9,7 @@ const StaticViewer = lazy(() => import('./StaticViewer.tsx'));
 interface StaticPreviewProps {
   /** Result of a single capture / flipbook, compiled on the main thread. */
   readonly bytes: Uint8Array | undefined;
-  /** Object URL of `bytes` (from `usePdfObjectUrl`), for the native viewer. */
+  /** Object URL of `bytes` (`usePdf`'s `url`), for the native viewer. */
   readonly url: string | undefined;
   readonly pending: boolean;
   readonly error: unknown;

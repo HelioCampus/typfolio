@@ -3,11 +3,13 @@ import { after, before, test } from 'node:test';
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import * as main from '@typfolio/core';
-import { TypstPdfError } from '@typfolio/core';
-import type { ErrorCode } from '@typfolio/core';
+import { defineInput, definePartial, defineTemplate, TypstPdfError } from '@typfolio/core';
+import type { ErrorCode, StandardSchemaV1 } from '@typfolio/core';
 import * as devTools from '../dist/index.js';
-import { checkTemplate, createTemplateChecker } from '../dist/index.js';
+import { checkTemplate, createTemplateChecker, inputSchemaFiles } from '../dist/index.js';
 import type { SampleMode, TemplateCheckReport, TemplateChecker, TemplateCheckResult } from '../dist/index.js';
+import { headerInput } from '../../../examples/vite-react/src/common/header.schema.ts';
+import { outcomesInput } from '../../../examples/vite-react/src/outcomes/outcomes.schema.ts';
 
 const root = new URL('../../../', import.meta.url);
 const file = (path: string) => readFile(new URL(path, root));
@@ -38,7 +40,7 @@ after(() => checker?.dispose());
 
 test('the core main entry exports nothing from dev-tools and never reaches it', async () => {
   for (const name of Object.keys(devTools)) assert.equal(name in main, false, `${name} leaked into the main entry`);
-  assert.deepEqual(Object.keys(devTools).sort(), ['checkTemplate', 'createTemplateChecker']);
+  assert.deepEqual(Object.keys(devTools).sort(), ['checkTemplate', 'createTemplateChecker', 'inputSchemaFiles']);
   // Follow the static import graph of the main entry's compiled files.
   const seen = new Set<string>();
   const visit = async (url: URL): Promise<void> => {
@@ -138,7 +140,7 @@ test('a nested entrypoint finds its schema at a path relative to itself', async 
   const missing = await checker.check({ entrypoint, files: { [entrypoint]: read('#let data = input(json.with("./schemas/report.schema.json"))', '#data.title') } });
   assert.equal(missing.ok, false);
   assert.equal(missing.results.length, 2);
-  assert.match(missing.results[0].error!.message, /failed to load file/);
+  assert.deepEqual(missing.results[0].diagnostics.filter(d => d.code === 'file-not-found').map(d => d.file), ['/reports/outcome/schemas/report.schema.json']);
 });
 
 test('pdf options pass through to every compile', async () => {
@@ -285,4 +287,103 @@ test('checkTemplate is the one-shot form, and fonts are required', async () => {
   assert.equal(report.ok, true);
   assert.deepEqual(report.results.map(result => result.mode), ['minimal']);
   await assert.rejects(createTemplateChecker({ wasm, fonts: [] }), hasCode('INVALID_REQUEST'));
+});
+
+// A Standard Schema that accepts anything and, unless `plain`, also implements Standard JSON Schema.
+function described(json: object, plain = false): StandardSchemaV1 {
+  const standard = { version: 1 as const, vendor: 'test', validate: (value: unknown) => ({ value }) };
+  const props = plain ? standard : { ...standard, jsonSchema: { input: () => json, output: () => json } };
+  return { '~standard': props };
+}
+
+const headerJson = { type: 'object', properties: { institution: { type: 'string' } }, required: ['institution'] };
+const reportJson = { type: 'object', properties: { title: { type: 'string' } }, required: ['title'] };
+const header = definePartial({
+  files: { 'common/header.typ': read('#let settings = input(json.with("./header.schema.json"))', '#let standard-header(title) = [#settings.institution: #title]') },
+  input: defineInput(described(headerJson), 'common/header.schema.json'),
+});
+const reportMain = read(
+  '#import "../common/header.typ": standard-header',
+  '#let data = input(json.with("./input.schema.json"))',
+  '#set text(font: "Libertinus Serif")',
+  '#standard-header(data.title)',
+);
+const report = defineTemplate({
+  entrypoint: 'report/main.typ',
+  files: { 'report/main.typ': reportMain },
+  input: defineInput(described(reportJson), 'report/input.schema.json'),
+  partials: { header },
+});
+
+test('inputSchemaFiles gives the JSON Schema file of every input, by path, from Standard JSON Schema or toJSONSchema', () => {
+  const files = inputSchemaFiles(report);
+  assert.deepEqual(Object.keys(files), ['report/input.schema.json', 'common/header.schema.json']);
+  assert.deepEqual(JSON.parse(files['common/header.schema.json']), headerJson);
+  assert.ok(files['report/input.schema.json'].endsWith('}\n'));
+  // A partial on its own, and the same partial reached twice, give each file once.
+  assert.deepEqual(Object.keys(inputSchemaFiles([header, report])), ['common/header.schema.json', 'report/input.schema.json']);
+
+  const plain = definePartial({ files: {}, input: defineInput(described(headerJson, true), 'common/plain.schema.json') });
+  assert.throws(() => inputSchemaFiles(plain), (error: unknown) => hasCode('INVALID_REQUEST')(error) && /common\/plain\.schema\.json does not implement Standard JSON Schema/.test((error as Error).message));
+  const converted: StandardSchemaV1[] = [];
+  const viaOption = inputSchemaFiles(plain, { toJSONSchema: schema => { converted.push(schema); return { converted: true }; } });
+  assert.deepEqual(JSON.parse(viaOption['common/plain.schema.json']), { converted: true });
+  assert.equal(converted[0], plain.input.schema);
+});
+
+test('check compiles a defined template from its declared files, with each input schema at its path', async () => {
+  const report1 = await checker.check(report);
+  assert.equal(report1.ok, true, report1.results.map(result => result.error?.message).join('\n'));
+  assert.deepEqual(report1.results.map(result => result.mode), ['minimal', 'full']);
+  // A schema file given in assets is used as it is.
+  const given = await checker.check(report, {
+    modes: ['full'],
+    assets: { 'common/header.schema.json': new TextEncoder().encode(JSON.stringify({ type: 'object', properties: { institution: { type: 'string' } } })) },
+  });
+  assert.equal(given.ok, true);
+});
+
+test('check fails a defined template that imports a file it does not declare, saying what to do', async () => {
+  const forgetful = defineTemplate({
+    entrypoint: 'report/main.typ',
+    files: { 'report/main.typ': reportMain },
+    input: defineInput(described(reportJson), 'report/input.schema.json'),
+  });
+  const result = (await checker.check(forgetful, { modes: ['minimal'] })).results[0];
+  assert.equal(result.ok, false);
+  assert.deepEqual(result.diagnostics.filter(d => d.code === 'file-not-found').map(d => [d.file, d.path]), [['/common/header.typ', '/report/main.typ']]);
+  assert.match(result.error!.message, /^File not found: \/common\/header\.typ \(read by \/report\/main\.typ\)\. See https:\/\/github\.com\/HelioCampus\/typfolio\/blob\/main\/docs\/errors\.md#file-not-found/);
+
+  // The header's code is listed, but not as a partial: no schema is mounted for it.
+  const codeOnly = defineTemplate({
+    entrypoint: 'report/main.typ',
+    files: { 'report/main.typ': reportMain, 'common/header.typ': header.files['common/header.typ'] },
+    input: defineInput(described(reportJson), 'report/input.schema.json'),
+  });
+  const missing = (await checker.check(codeOnly, { modes: ['minimal'] })).results[0];
+  assert.deepEqual(missing.diagnostics.filter(d => d.code === 'file-not-found').map(d => [d.file, d.path]), [['/common/header.schema.json', '/common/header.typ']]);
+});
+
+// What an application's test does: its schema files are up to date, and its templates check in the editor.
+test('the vite-react example: its schema files match its Zod schemas, and the outcomes template checks', async () => {
+  const example = 'examples/vite-react/src/';
+  const source = async (path: string) => String(await file(example + path));
+  // The inputs come from modules a script can import (the definitions import .typ files through the bundler).
+  const files = inputSchemaFiles([headerInput, outcomesInput]);
+  assert.deepEqual(Object.keys(files), ['common/header.schema.json', 'outcomes/outcomes.schema.json']);
+  for (const [path, text] of Object.entries(files)) {
+    assert.deepEqual(JSON.parse(await source(path)), JSON.parse(text), `${example}${path} is out of date`);
+  }
+  // The definitions as the app makes them, with the Typst sources read from disk.
+  const exampleHeader = definePartial({ files: { 'common/header.typ': await source('common/header.typ') }, input: headerInput });
+  const outcomes = defineTemplate({
+    entrypoint: 'outcomes/main.typ',
+    files: { 'outcomes/main.typ': await source('outcomes/main.typ') },
+    input: outcomesInput,
+    partials: { header: exampleHeader },
+  });
+  assert.deepEqual(inputSchemaFiles(outcomes), { 'outcomes/outcomes.schema.json': files['outcomes/outcomes.schema.json'], 'common/header.schema.json': files['common/header.schema.json'] });
+  // The chart and logo fields are images (contentMediaType): the sample draws placeholders for them.
+  const report = await checker.check(outcomes, { pdf: { standards: ['ua-1'] } });
+  assert.equal(report.ok, true, report.results.map(result => result.error?.message).join('\n'));
 });

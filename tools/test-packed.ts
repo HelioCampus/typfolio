@@ -87,12 +87,13 @@ for (const [name, extra] of [['wasm', ['NOTICE', 'THIRD_PARTY_NOTICES.md', 'THIR
 await writeFile(join(dir, 'smoke.mjs'), `
 import { readFile } from 'node:fs/promises';
 import assert from 'node:assert/strict';
-import { createCompiler, templateFromFiles } from '@typfolio/core';
+import { createAttachments, createCompiler, defineInput, definePartial, defineTemplate, templateFromFiles } from '@typfolio/core';
 import { createWorkerClient } from '@typfolio/workers';
-import { PdfProvider, usePdf, usePdfCompilation, usePdfObjectUrl, useRenderedAssets } from '@typfolio/react';
+import * as react from '@typfolio/react';
+import { usePdf } from '@typfolio/react';
 import * as coreMain from '@typfolio/core';
 import * as devTools from '@typfolio/dev-tools';
-import { checkTemplate, createTemplateChecker } from '@typfolio/dev-tools';
+import { checkTemplate, createTemplateChecker, inputSchemaFiles } from '@typfolio/dev-tools';
 import * as devToolsPdf from '@typfolio/dev-tools/pdf';
 import { inspectPdf } from '@typfolio/dev-tools/pdf';
 import { captureAssets, captureProps } from '@typfolio/core/capture';
@@ -101,18 +102,18 @@ import { domPngCapture } from '@typfolio/core/capture/dom';
 import { CaptureRegion } from '@typfolio/react/capture';
 import * as reactCapture from '@typfolio/react/capture';
 assert.equal(typeof createWorkerClient, 'function');
-assert.equal(typeof PdfProvider, 'function');
-assert.equal(typeof usePdfCompilation, 'function');
-assert.equal(typeof usePdfObjectUrl, 'function');
-assert.equal(typeof useRenderedAssets, 'function');
 assert.equal(typeof usePdf, 'function');
+// usePdf is the React API: its compile lifecycle and chart drawing are internal.
+assert.deepEqual(Object.keys(react), ['usePdf']);
+assert.equal('isTemplateDefinition' in coreMain, false);
 assert.equal(typeof serializeSvg, 'function');
 assert.equal(typeof CaptureRegion, 'function');
 assert.equal(typeof captureAssets, 'function');
 assert.equal(typeof captureProps, 'function');
 assert.deepEqual(Object.keys(reactCapture).sort(), ['CaptureRegion']);
 assert.equal('captureAssets' in coreMain, false);
-assert.deepEqual(Object.keys(devTools).sort(), ['checkTemplate', 'createTemplateChecker']);
+assert.deepEqual(Object.keys(devTools).sort(), ['checkTemplate', 'createTemplateChecker', 'inputSchemaFiles']);
+assert.equal(typeof inputSchemaFiles, 'function');
 assert.deepEqual(Object.keys(devToolsPdf), ['inspectPdf']);
 assert.equal('inspectPdf' in devTools, false);
 await assert.rejects(import('@typfolio/core/dev-tools'), { code: 'ERR_PACKAGE_PATH_NOT_EXPORTED' });
@@ -153,6 +154,24 @@ try {
   });
   assert.equal(packaged.metadata.title, 'Packed Typst package works');
   console.log('Packed core compiles a template that imports @local/typfolio:0.1.0.');
+  // A Standard Schema without a schema library.
+  const schema = check => ({ '~standard': { version: 1, vendor: 'smoke', validate: value => (check(value) ? { value } : { issues: [{ message: 'invalid' }] }) } });
+  const header = definePartial({
+    files: { 'common/header.typ': '#import "@local/typfolio:0.1.0": input\\n#let header = input(json.with("./header.schema.json"))' },
+    input: defineInput(schema(value => typeof value.name === 'string'), 'common/header.schema.json'),
+  });
+  const report = defineTemplate({
+    entrypoint: 'report/main.typ',
+    files: { 'report/main.typ': '#import "@local/typfolio:0.1.0": input\\n#import "../common/header.typ": header\\n#let data = input(json.with("./input.schema.json"))\\n#set document(title: data.title + " / " + header.name)\\n#image(data.logo, width: 1cm, alt: "Logo")' },
+    input: defineInput(schema(value => typeof value.title === 'string'), 'report/input.schema.json'),
+    partials: { header },
+  });
+  const attachments = createAttachments();
+  const logo = attachments.add(new TextEncoder().encode('<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"><rect width="10" height="10"/></svg>'), 'svg');
+  const defined = await compiler.compile({ template: report, input: { title: 'Defined', logo }, partials: { header: { name: 'Header' } }, assets: attachments.assets });
+  assert.equal(defined.metadata.title, 'Defined / Header');
+  await assert.rejects(compiler.compile({ template: report, input: { title: 1, logo }, partials: { header: { name: 'H' } } }), { code: 'INVALID_INPUT' });
+  console.log('Packed core compiles a defined template with a partial and an attachment, and rejects data that fails its schema.');
 } finally { await compiler.dispose(); }
 const checker = await createTemplateChecker({
   wasm,
@@ -173,25 +192,19 @@ try {
 } finally { await checker.dispose(); }
 `);
 await writeFile(join(dir, 'consumer.ts'), `
-import { createCompiler, templateFromFiles, type CompilerOptions, type FontSource, type JsonValue, type PdfRequest, type PdfTemplate, type PdfClient, type PdfResult } from '@typfolio/core';
+import { createCompiler, createLazyCompiler, templateFromFiles, type CompilerOptions, type FontSource, type JsonValue, type LazyCompiler, type PdfRequest, type PdfTemplate, type PdfClient, type PdfResult } from '@typfolio/core';
+import { createAttachments, defineInput, definePartial, defineTemplate, type AnyPdfRequest, type StandardSchemaV1, type TemplateRequest } from '@typfolio/core';
 import { collectBatch, compileBatch, createWorkerClient, type PdfWorkerClient } from '@typfolio/workers';
 import {
-  PdfProvider,
-  usePdfCompilation,
-  usePdfObjectUrl,
-  type PdfCompilation,
-  type PdfCompilationOptions,
-  type PdfProviderProps,
-  type UsePdfCompilationOptions,
   usePdf,
+  type AnyPdfTemplate,
+  type PdfBuildTools,
+  type PdfData,
   type PdfDocument,
   type PdfStatus,
   type UsePdfOptions,
-  useRenderedAssets,
   type RenderAsset,
   type RenderAssetsOptions,
-  type RenderedAssets,
-  type UseRenderedAssetsOptions,
 } from '@typfolio/react';
 import {
   captureAssets,
@@ -207,6 +220,7 @@ import { CaptureRegion, type CaptureRegionProps } from '@typfolio/react/capture'
 import {
   checkTemplate,
   createTemplateChecker,
+  inputSchemaFiles,
   type SampleMode,
   type TemplateCheckOptions,
   type TemplateCheckReport,
@@ -253,20 +267,9 @@ for await (const outcome of compileBatch(workerClient, jobs)) {
 }
 const collected = await collectBatch(workerClient, jobs);
 collected[0]?.id satisfies string;
-const providerProps: PdfProviderProps = { client: compiler };
-const workerProviderProps: PdfProviderProps = { client: workerClient };
-PdfProvider satisfies (props: PdfProviderProps) => unknown;
-usePdfCompilation satisfies (options?: UsePdfCompilationOptions) => { compile(request: PdfRequest): Promise<unknown> };
-usePdfObjectUrl satisfies (result: PdfResult | undefined) => string | undefined;
-declare const compilation: PdfCompilation;
-const compileOptions: PdfCompilationOptions = {
-  onSuccess: (value, input) => value.bytes.length + (typeof input.template === 'string' ? input.template : Object.keys(input.template.files).join()).length,
-  onSettled: (value, error, input) => [value?.bytes.length, error, input.input],
-};
-compilation.compile(request, compileOptions) satisfies Promise<PdfResult>;
-compilation.isRecompiling satisfies boolean;
-providerProps.client satisfies PdfClient;
-workerProviderProps.client satisfies PdfClient;
+// usePdf takes the client: a core compiler, or a worker client.
+const workerPdfOptions: UsePdfOptions<'Hello'> = { client: workerClient, template: 'Hello', data: { input: null } };
+void workerPdfOptions;
 const adapters: Record<string, CaptureAdapter> = {
   svg: svgCapture(),
   png: domPngCapture({ pixelRatio: 2 }),
@@ -297,10 +300,7 @@ const typedRequest: PdfRequest<ReportInput> = { template: 'Hello', input: { titl
 typedRequest.input.rows[0]?.name satisfies string | undefined;
 await compiler.compile(typedRequest);
 await workerClient.compile(typedRequest);
-await compilation.compile(typedRequest);
 await collectBatch(workerClient, [{ id: 'typed', request: typedRequest }]);
-const typedOptions: PdfCompilationOptions = { onSuccess: (_value, submitted) => submitted.input satisfies unknown };
-void typedOptions;
 // @ts-expect-error input does not match ReportInput
 const wrongInput: PdfRequest<ReportInput> = { template: 'Hello', input: { title: 1, rows: [] } };
 void wrongInput;
@@ -338,6 +338,10 @@ void badMode;
 // A plain PdfRequest keeps working, and a loaded template folder is a PdfTemplate.
 const folderTemplate: PdfTemplate = templateFromFiles({ './report/main.typ': 'Hello' }, { entrypoint: 'main.typ' });
 await compiler.compile({ template: folderTemplate, input: {} });
+const lazy: LazyCompiler = createLazyCompiler({ wasm, fonts: [font] });
+lazy satisfies PdfClient;
+await lazy.compile(typedRequest);
+await lazy.dispose();
 // A PDF kept up to date with its inputs, and its charts.
 const chartOptions: RenderAssetsOptions = {
   fontFamily: 'Libertinus Serif',
@@ -345,9 +349,10 @@ const chartOptions: RenderAssetsOptions = {
   beforeSerialize: svg => svg.querySelector('.tooltip')?.remove(),
   directory: 'figures',
 };
-const pdfOptions: UsePdfOptions<{ title: string; chart: string }> = {
+const pdfOptions: UsePdfOptions<typeof folderTemplate> = {
+  client: lazy,
   template: folderTemplate,
-  input: ({ render }) => ({ title: 'T', chart: render(null as never) }),
+  data: ({ render, attach }) => ({ input: { title: 'T', chart: render(null as never), logo: attach(new Uint8Array([1]), 'png') } }),
   deps: ['T'],
   assets: { 'logo.png': new Uint8Array([1]) },
   pdf: { standards: ['ua-1'] },
@@ -356,7 +361,7 @@ const pdfOptions: UsePdfOptions<{ title: string; chart: string }> = {
   onSuccess: value => value.bytes satisfies Uint8Array,
   onError: error => error satisfies unknown,
 };
-const plainPdfOptions: UsePdfOptions<{ title: string }> = { template: 'Hello', input: { title: 'T' } };
+const plainPdfOptions: UsePdfOptions<'Hello'> = { client: compiler, template: 'Hello', data: { input: { title: 'T' } } };
 declare const pdfDocument: PdfDocument;
 pdfDocument.status satisfies PdfStatus;
 pdfDocument.result?.bytes satisfies Uint8Array | undefined;
@@ -365,25 +370,37 @@ pdfDocument.download('report');
 pdfDocument.rebuild();
 pdfDocument.cancel();
 pdfDocument.AssetRenderer satisfies import('react').ComponentType;
-usePdf satisfies <Input>(options: UsePdfOptions<Input>) => PdfDocument;
-const renderedOptions: UseRenderedAssetsOptions<{ chart: string }> = {
-  ...chartOptions,
-  deps: [1],
-  enabled: false,
-  onReady: (assets, value) => void [assets['figures/0.svg'], value.chart],
-  onError: error => error.message satisfies string,
+usePdf satisfies <T extends AnyPdfTemplate>(options: UsePdfOptions<T>) => PdfDocument;
+// A template whose parts have data of their own: requests and usePdf's data are typed by its schemas.
+declare const titleSchema: StandardSchemaV1<{ title: string }>;
+declare const headerSchema: StandardSchemaV1<{ name: string }>;
+const typedHeader = definePartial({ files: { 'common/header.typ': '' }, input: defineInput(headerSchema, 'common/header.schema.json') });
+const typedTemplate = defineTemplate({ files: { 'main.typ': '' }, input: defineInput(titleSchema, 'input.schema.json'), partials: { header: typedHeader } });
+const typedTemplateRequest: TemplateRequest<typeof typedTemplate> = { template: typedTemplate, input: { title: 'T' }, partials: { header: { name: 'H' } } };
+await compiler.compile(typedTemplateRequest);
+await workerClient.compile({ template: typedTemplate, input: { title: 'T' }, partials: { header: { name: 'H' } } });
+// @ts-expect-error the header's data is required
+await compiler.compile({ template: typedTemplate, input: { title: 'T' } });
+// @ts-expect-error the input is typed by its schema
+await compiler.compile({ template: typedTemplate, input: { title: 1 }, partials: { header: { name: 'H' } } });
+const anyRequest: AnyPdfRequest = typedTemplateRequest;
+await compiler.compile(anyRequest);
+const definedPdfOptions: UsePdfOptions<typeof typedTemplate> = {
+  client: compiler,
+  template: typedTemplate,
+  data: ({ attach }: PdfBuildTools) => ({ input: { title: 'T' }, partials: { header: { name: attach(new Uint8Array([1]), 'png') } } }),
 };
-declare const rendered: RenderedAssets<{ chart: string }>;
-rendered.assets satisfies PdfRequest['assets'];
-rendered.value.chart satisfies string;
-rendered.status satisfies 'idle' | 'drawing' | 'ready' | 'error';
-rendered.rebuild();
-const renderChart: RenderAsset = () => 'charts/0.svg';
-useRenderedAssets satisfies <T>(build: (tools: { readonly render: RenderAsset }) => T, options?: UseRenderedAssetsOptions<T>) => RenderedAssets<T>;
+const definedData: PdfData<typeof typedTemplate> = { input: { title: 'T' }, partials: { header: { name: 'H' } } };
+// @ts-expect-error data is typed by the template
+const wrongData: PdfData<typeof typedTemplate> = { input: { title: 'T' } };
+inputSchemaFiles([typedTemplate, typedHeader.input], { toJSONSchema: () => ({}) }) satisfies Record<string, string>;
+createAttachments().add(new Uint8Array([1]), 'png') satisfies string;
+void [definedPdfOptions, definedData, wrongData];
+const renderChart: RenderAsset = () => '/charts/0.svg';
 serializeSvg satisfies (svg: SVGSVGElement, options?: SvgSerializeOptions) => Uint8Array;
 // @ts-expect-error removeSelectors was replaced by beforeSerialize
 svgCapture({ removeSelectors: ['.tooltip'] });
-void [pdfOptions, plainPdfOptions, renderedOptions, renderChart];
+void [pdfOptions, plainPdfOptions, renderChart];
 `);
 run(process.execPath, ['smoke.mjs', root]);
 const tsc = join(root, 'node_modules/typescript/bin/tsc');

@@ -1,5 +1,5 @@
 import init, { TypstCompilerBuilder, type TypstCompiler, type TypstCompileWorld } from '@typfolio/wasm';
-import { TypstPdfError, type Diagnostic, type FontSource, type PdfResult, type WasmSource } from './types.js';
+import { errorLink, TypstPdfError, type Diagnostic, type FontSource, type PdfResult, type WasmSource } from './types.js';
 import type { prepareRequest } from './request.js';
 import { resolvePackage } from './typst-package.js';
 
@@ -26,6 +26,26 @@ function message(error: unknown): string {
   if (error instanceof Error) return error.message;
   if (typeof error === 'string') return error;
   try { return JSON.stringify(error) ?? String(error); } catch { return String(error); }
+}
+
+const quoted = /"((?:[^"\\]|\\.)*)"/g;
+const unquote = (text: string) => { try { return JSON.parse(`"${text}"`) as string; } catch { return text; } };
+
+// The binding reports a failed PDF export as Rust debug text,
+// `[SourceDiagnostic { severity: Error, span: …, message: "…", trace: [], hints: ["…"] }]`:
+// one diagnostic per message, its hints appended. A character no loaded font can display (refused
+// by a PDF standard) is `missing-glyph`. Anything else is kept as it is.
+function exportDiagnostics(text: string): Diagnostic[] {
+  const found = text.split('SourceDiagnostic {').slice(1).flatMap((part): Diagnostic[] => {
+    const [, said] = /message: "((?:[^"\\]|\\.)*)"/.exec(part) ?? [];
+    if (said === undefined) return [];
+    const message = unquote(said);
+    const [, glyph] = /^PDF\/\S+ error: the text `"(.*)"` could not be displayed with font/.exec(message) ?? [];
+    if (glyph !== undefined) return [{ severity: 'error', code: 'missing-glyph', text: glyph, message: `${message}. See ${errorLink('missing-glyph')}` }];
+    const hints = [...(/hints: \[(.*)\]/s.exec(part)?.[1] ?? '').matchAll(quoted)].map(([, hint]) => `\nhint: ${unquote(hint)}`);
+    return [{ severity: 'error', message: message + hints.join('') }];
+  });
+  return found.length ? found : [{ severity: 'error', message: text }];
 }
 
 /** What differs between compile flavors: extra files to mount and the `sys.inputs` to set. */
@@ -122,11 +142,9 @@ class Engine {
     let diagnostics: Diagnostic[] = [];
     try {
       this.compiler.reset_shadow();
-      for (const [path, bytes] of request.files) {
-        if (!this.compiler.map_shadow(path, bytes)) throw new TypstPdfError('ENGINE', `Could not mount ${path}`);
-      }
-      // For a runtime compile these are the helper package plus the input at its root (absolute paths inside a package resolve there).
-      for (const [path, bytes] of extras.mounts) {
+      // The request's files, then the extras: for a runtime compile, the helper package plus the input at
+      // its root (absolute paths inside a package resolve there).
+      for (const [path, bytes] of [...request.files, ...extras.mounts]) {
         if (!this.compiler.map_shadow(path, bytes)) throw new TypstPdfError('ENGINE', `Could not mount ${path}`);
       }
       world = this.compiler.snapshot('/', request.entrypoint, extras.inputs.map(entry => [...entry]));
@@ -142,9 +160,9 @@ class Engine {
       return { bytes, diagnostics, metadata: { title: world.title(0) } };
     } catch (error) {
       if (error instanceof TypstPdfError) throw error;
-      // Upstream export failures currently lack structured source locations.
-      const text = message(error);
-      throw new TypstPdfError('COMPILATION', text, [...diagnostics, { severity: 'error', message: text }], { cause: error });
+      // Upstream export failures (a PDF standard's checks) lack source locations.
+      const failures = exportDiagnostics(message(error));
+      throw new TypstPdfError('COMPILATION', failures.map(d => d.message).join('\n'), [...diagnostics, ...failures], { cause: error });
     } finally {
       try { world?.free(); } finally { this.compiler.reset_shadow(); }
     }

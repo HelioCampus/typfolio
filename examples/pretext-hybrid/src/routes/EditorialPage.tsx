@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from 'react';
-import { usePdfCompilation, usePdfObjectUrl } from '@typfolio/react';
+import type { JsonValue, PdfClient } from '@typfolio/core';
+import { usePdf } from '@typfolio/react';
 import { CompilerBoundary } from '../CompilerBoundary.tsx';
 import { FONT_FAMILY, type FontUrls } from '../assets.ts';
 import { StaticPreview } from '../live/StaticPreview.tsx';
 import { Shell } from '../Shell.tsx';
-import { STAGE_BACKGROUND, layoutToInput, makeEditorialRequest, type Baselines } from '../editorial/capture.ts';
+import { STAGE_BACKGROUND, editorialTemplate, layoutToInput, makeEditorialRequest, type Baselines } from '../editorial/capture.ts';
 import {
   STAGE_PRESETS,
   createEditorialEngine,
@@ -17,6 +18,7 @@ import type { Captured } from '../live/session.ts';
 
 interface WorkbenchProps {
   readonly fonts: FontUrls;
+  readonly client: PdfClient;
   readonly preset: StagePresetId;
   readonly onPreset: (preset: StagePresetId) => void;
 }
@@ -34,7 +36,7 @@ function formatMs(value: number | undefined): string {
   return value === undefined ? '—' : `${Math.round(value)} ms`;
 }
 
-function Workbench({ fonts, preset, onPreset }: WorkbenchProps) {
+function Workbench({ fonts, client, preset, onPreset }: WorkbenchProps) {
   const [engine] = useState(() => createEditorialEngine(FONT_FAMILY, STAGE_PRESETS[preset]));
   const { width, height } = engine.stage;
 
@@ -54,8 +56,20 @@ function Workbench({ fonts, preset, onPreset }: WorkbenchProps) {
   const [live, setLive] = useState(false);
   const [liveStatus, setLiveStatus] = useState<LiveStatus>('starting');
 
-  const pdf = usePdfCompilation();
-  const pdfUrl = usePdfObjectUrl(pdf.result);
+  // The frame captured last: usePdf compiles it, and again on the next capture.
+  const [capturedInput, setCapturedInput] = useState<JsonValue>();
+  const startedAtRef = useRef(0);
+  const pdf = usePdf({
+    client,
+    template: editorialTemplate,
+    data: { input: capturedInput },
+    enabled: capturedInput !== undefined,
+    onSuccess: () => {
+      const ms = performance.now() - startedAtRef.current;
+      setCaptured(previous => (previous === undefined ? previous : { ...previous, ms }));
+    },
+  });
+  const pdfUrl = pdf.url;
 
   // Fit the fixed logical stage to the available width; the PDF page keeps the logical size.
   useEffect(() => {
@@ -136,14 +150,11 @@ function Workbench({ fonts, preset, onPreset }: WorkbenchProps) {
     const input = layoutToInput(layout, baselinesFor(view, layout));
     const bytes = JSON.stringify(input).length;
     setCaptured({ bytes, layout });
-    const startedAt = performance.now();
-    try {
-      await pdf.compile(makeEditorialRequest(input));
-      setCaptured({ bytes, layout, ms: performance.now() - startedAt });
-    } catch {
-      // usePdfCompilation exposes the failure through its state.
-    }
-  }, [pdf]);
+    startedAtRef.current = performance.now();
+    // The same frame again is the same data, so compile it again explicitly.
+    if (JSON.stringify(input) === JSON.stringify(capturedInput)) pdf.rebuild();
+    else setCapturedInput(input);
+  }, [capturedInput, pdf.rebuild]);
 
   // Live PDF mode: the shared pipeline (src/live) asks for a frame whenever a pool slot is free.
   const acquireFrame = useCallback(
@@ -233,8 +244,8 @@ function Workbench({ fonts, preset, onPreset }: WorkbenchProps) {
           />
         </div>
         <div className="card-actions">
-          <button className="button button--primary" disabled={pdf.isCompiling || live} onClick={() => void capture()} type="button">
-            {pdf.isCompiling ? 'Compiling…' : 'Capture frame as PDF'}
+          <button className="button button--primary" disabled={pdf.isFetching || live} onClick={() => void capture()} type="button">
+            {pdf.isFetching ? 'Compiling…' : 'Capture frame as PDF'}
           </button>
           <button className="button" disabled={!frozen || live} onClick={resume} type="button">Resume</button>
           <span className="hint">Drag an orb · click to pause it · {frozen ? 'frozen on the captured frame' : 'running'}</span>
@@ -275,7 +286,7 @@ function Workbench({ fonts, preset, onPreset }: WorkbenchProps) {
             downloadName="typfolio-editorial-frame.pdf"
             error={pdf.isError ? pdf.error : undefined}
             maxWidth={width}
-            pending={pdf.isCompiling && pdfUrl === undefined}
+            pending={pdf.isFetching && pdfUrl === undefined}
             url={pdfUrl}
           />
         )}
@@ -293,10 +304,10 @@ function Workbench({ fonts, preset, onPreset }: WorkbenchProps) {
   );
 }
 
-function EditorialRoute({ fonts }: { readonly fonts: FontUrls }) {
+function EditorialRoute({ fonts, client }: { readonly fonts: FontUrls; readonly client: PdfClient }) {
   const [preset, setPreset] = useState<StagePresetId>('wide');
   // Re-keying rebuilds the engine (and its prepared texts) for the new stage size.
-  return <Workbench fonts={fonts} key={preset} onPreset={setPreset} preset={preset} />;
+  return <Workbench client={client} fonts={fonts} key={preset} onPreset={setPreset} preset={preset} />;
 }
 
 export default function EditorialPage() {
@@ -308,7 +319,7 @@ export default function EditorialPage() {
       lede="Pretext breaks every line around moving circular obstacles and hands text across columns mid-sentence. Capture freezes the orbs; Typst receives positioned lines and a few gradients, and does no line breaking at all."
     >
       <CompilerBoundary label="Loading Libertinus Serif and the Typst compiler…">
-        {fonts => <EditorialRoute fonts={fonts} />}
+        {(fonts, client) => <EditorialRoute client={client} fonts={fonts} />}
       </CompilerBoundary>
     </Shell>
   );

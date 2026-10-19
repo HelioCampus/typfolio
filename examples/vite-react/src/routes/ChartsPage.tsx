@@ -1,12 +1,13 @@
 import { useState } from 'react';
-import { createCompiler, templateFromFiles } from '@typfolio/core';
+import { createCompiler, type PdfClient } from '@typfolio/core';
 import { usePdf, type PdfStatus } from '@typfolio/react';
 import type { RuntimeProfile } from '../App.tsx';
 import { ClientPage } from '../ClientPage.tsx';
 import { ChartGoalColor, LevelsChart, type Level } from '../LevelsChart.tsx';
 import { Topbar } from '../Topbar.tsx';
 import { fontUrl, wasmUrl } from '../assets.ts';
-import type { OutcomesInput } from '../outcomes/input.ts';
+import logoSvg from '../common/logo.svg?raw';
+import { outcomesTemplate } from '../outcomes/template.ts';
 
 const profile: RuntimeProfile = {
   eyebrow: 'Charts for the PDF',
@@ -23,9 +24,8 @@ const profile: RuntimeProfile = {
   runtimeNote: '',
 };
 
-const template = templateFromFiles(
-  import.meta.glob<string>('../outcomes/**/*.typ', { query: '?raw', import: 'default', eager: true }),
-);
+// The header's logo. An application would fetch its institution's logo; attach() takes the bytes.
+const logo = new TextEncoder().encode(logoSvg);
 
 interface Outcome {
   readonly name: string;
@@ -75,21 +75,28 @@ function formatBytes(value: number): string {
     .format(value / 1_000);
 }
 
-function ChartsApp() {
+function ChartsApp({ client }: { readonly client: PdfClient }) {
   const [requested, setRequested] = useState(false);
-  const pdf = usePdf<OutcomesInput>({
-    template,
-    // Built once (no deps): each render() draws a chart for the PDF and returns its path.
-    input: ({ render }) => ({
-      title: 'Outcome results',
-      generatedAt: new Intl.DateTimeFormat('en', { dateStyle: 'long' }).format(new Date()),
-      outcomes: outcomes.map(outcome => ({
-        name: outcome.name,
-        summary: `${proficient(outcome)} students reached Proficient or above; the goal is ${outcome.goal}.`,
-        chart: render(<LevelsChart levels={outcome.levels} goal={outcome.goal} {...pdfChart} />),
-        chartAlt: `Students per level for ${outcome.name}: ` +
-          outcome.levels.map(level => `${level.name} ${level.students}`).join(', ') + '.',
-      })),
+  const pdf = usePdf({
+    client,
+    template: outcomesTemplate,
+    // Built once (no deps): render() draws a chart for the PDF and attach() adds a file; each
+    // returns the path to put in the data. The template's schemas type and check it.
+    data: ({ render, attach }) => ({
+      input: {
+        title: 'Outcome results',
+        generatedAt: new Intl.DateTimeFormat('en', { dateStyle: 'long' }).format(new Date()),
+        outcomes: outcomes.map(outcome => ({
+          name: outcome.name,
+          summary: `${proficient(outcome)} students reached Proficient or above; the goal is ${outcome.goal}.`,
+          chart: render(<LevelsChart levels={outcome.levels} goal={outcome.goal} {...pdfChart} />),
+          chartAlt: `Students per level for ${outcome.name}: ` +
+            outcome.levels.map(level => `${level.name} ${level.students}`).join(', ') + '.',
+        })),
+      },
+      partials: {
+        header: { institution: 'Example University', logo: attach(logo, 'svg') },
+      },
     }),
     pdf: { standards: ['ua-1'] },
     charts,
@@ -203,10 +210,12 @@ export default function ChartsPage() {
       loadingCopy="Loading the Typst WASM engine and report font on the main thread…"
       profile={profile}
     >
-      {/* App context the charts read; the PDF's copies see it too, through <pdf.AssetRenderer />. */}
-      <ChartGoalColor.Provider value="#c0392b">
-        <ChartsApp />
-      </ChartGoalColor.Provider>
+      {client => (
+        // App context the charts read; the PDF's copies see it too, through <pdf.AssetRenderer />.
+        <ChartGoalColor.Provider value="#c0392b">
+          <ChartsApp client={client} />
+        </ChartGoalColor.Provider>
+      )}
     </ClientPage>
   );
 }

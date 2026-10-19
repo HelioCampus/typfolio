@@ -1,6 +1,6 @@
 {
   "name": "@typfolio/wasm",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Typst compiler built to WebAssembly, with JavaScript bindings and build provenance, for @typfolio/core",
   "type": "module",
   "license": "Apache-2.0",

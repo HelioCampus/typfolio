@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "institution": {
+      "type": "string",
+      "minLength": 1,
+      "examples": [
+        "Example University"
+      ]
+    },
+    "logo": {
+      "type": "string",
+      "contentMediaType": "image/svg+xml",
+      "description": "Path attach() returned for the logo."
+    }
+  },
+  "required": [
+    "institution",
+    "logo"
+  ]
+}

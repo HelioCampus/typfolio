@@ -1,8 +1,9 @@
 import type {
+  AnyPdfRequest,
+  CheckedRequest,
   Diagnostic,
   ErrorCode,
   PdfClient,
-  PdfRequest,
   PdfResult,
 } from '@typfolio/core';
 
@@ -34,7 +35,8 @@ export interface WorkerCompileOptions {
 
 export interface PdfWorkerClient extends PdfClient {
   readonly workerCount: number;
-  compile(request: PdfRequest<unknown>, options?: WorkerCompileOptions): Promise<PdfResult>;
+  /** A plain request, or one for a defined template: its inputs are checked against their schemas on this thread. */
+  compile<R extends AnyPdfRequest>(request: R & CheckedRequest<R>, options?: WorkerCompileOptions): Promise<PdfResult>;
   /** Rejects queued/active jobs and terminates all owned workers. Idempotent. */
   dispose(): Promise<void>;
 }
@@ -55,7 +57,7 @@ export interface CreateWorkerClientOptions {
 
 export interface PdfBatchJob<Id> {
   readonly id: Id;
-  readonly request: PdfRequest<unknown>;
+  readonly request: AnyPdfRequest;
   readonly timeoutMs?: number;
 }
 

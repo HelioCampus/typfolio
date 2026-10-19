@@ -3,7 +3,8 @@ import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
-import type { PdfRequest, PdfResult } from '@typfolio/core';
+import { defineInput, definePartial, defineTemplate } from '@typfolio/core';
+import type { PdfRequest, PdfResult, StandardSchemaV1 } from '@typfolio/core';
 import type { RuntimeMessage } from '../dist/protocol.js';
 import { transferableBuffers } from '../dist/snapshot.js';
 import {
@@ -340,7 +341,9 @@ function automaticWorker(delays: Record<string, number> = {}) {
       queueMicrotask(() => ready(worker));
       return;
     }
-    const title = message.request.input.title;
+    // A defined template's request carries its data in documents, the template's own input first.
+    const documents = (message.request as { documents?: Record<string, { title: string }> }).documents;
+    const title = documents ? Object.values(documents)[0].title : message.request.input.title;
     setTimeout(() => {
       if (title === 'Error') {
         worker.emit('message', {
@@ -718,6 +721,89 @@ test('an INITIALIZATION failure reported by the worker rejects the job with that
     return true;
   });
   assert.equal(workers[0].terminated, true);
+  await client.dispose();
+});
+
+// A Standard Schema without a schema library: data without a title is rejected.
+function titled(async = false): StandardSchemaV1<{ title: string }> {
+  return {
+    '~standard': {
+      version: 1,
+      vendor: 'test',
+      validate: (value: unknown) => {
+        const result = (value as { title?: string }).title ? { value: value as { title: string } } : { issues: [{ message: 'title is empty', path: ['title'] }] };
+        return async ? Promise.resolve(result) : result;
+      },
+    },
+  };
+}
+
+const header = definePartial({
+  files: { 'common/header.typ': '#let header = none' },
+  input: defineInput(titled(), 'common/header.schema.json'),
+});
+const defined = (async = false) => defineTemplate({
+  entrypoint: 'report/main.typ',
+  files: { 'report/main.typ': '#import "../common/header.typ": header' },
+  input: defineInput(titled(async), 'report/input.schema.json'),
+  partials: { header },
+});
+
+test('a defined template crosses the boundary as its files and the data at each schema path', async () => {
+  const worker = new FakeWorker();
+  const client = createWorkerClient(options(() => worker));
+  const pending = client.compile({ template: defined(), input: { title: 'Report' }, partials: { header: { title: 'Header' } } });
+  ready(worker);
+  const message = worker.messages.at(-1)!;
+  assert.equal(message.type, 'compile');
+  assert.deepEqual(message.request, {
+    template: { entrypoint: 'report/main.typ', files: { 'report/main.typ': '#import "../common/header.typ": header', 'common/header.typ': '#let header = none' } },
+    input: null,
+    documents: { 'report/input.schema.json': { title: 'Report' }, 'common/header.schema.json': { title: 'Header' } },
+  });
+  success(worker, message.id, 'Report');
+  assert.equal((await pending).metadata.title, 'Report');
+  await client.dispose();
+});
+
+test('data that fails its schema is rejected with INVALID_INPUT on the calling thread, before any worker exists', async () => {
+  let workers = 0;
+  const client = createWorkerClient(options(() => { workers += 1; return new FakeWorker(); }));
+  await assert.rejects(
+    client.compile({ template: defined(), input: { title: 'Report' }, partials: { header: { title: '' } } }),
+    error => assertCode(error, 'INVALID_INPUT') && /The data of partial "header" does not match its schema/.test((error as Error).message),
+  );
+  await assert.rejects(client.compile({ template: defined(), input: { title: 'Report' } } as never), error => assertCode(error, 'INVALID_REQUEST'));
+  assert.equal(workers, 0);
+  await client.dispose();
+});
+
+test('a schema that validates asynchronously is awaited before the job is posted', async () => {
+  const worker = new FakeWorker((message, self) => {
+    if (message.type === 'initialize') queueMicrotask(() => ready(self));
+  });
+  const client = createWorkerClient(options(() => worker));
+  await assert.rejects(
+    client.compile({ template: defined(true), input: { title: '' }, partials: { header: { title: 'Header' } } }),
+    error => assertCode(error, 'INVALID_INPUT'),
+  );
+  assert.equal(worker.messages.filter(message => message.type === 'compile').length, 0);
+  const pending = client.compile({ template: defined(true), input: { title: 'Report' }, partials: { header: { title: 'Header' } } });
+  await waitFor(() => worker.messages.some(message => message.type === 'compile'));
+  success(worker, worker.messages.at(-1)!.id, 'Report');
+  assert.equal((await pending).metadata.title, 'Report');
+  await client.dispose();
+});
+
+test('in a batch, a job whose data fails its schema is that job\'s error and the rest still compile', async () => {
+  const client = createWorkerClient(options(() => automaticWorker(), { workerCount: 2 }));
+  const job = (id: string, title: string, async = false) => ({
+    id,
+    request: { template: defined(async), input: { title }, partials: { header: { title: 'Header' } } },
+  });
+  const outcomes = await collectBatch(client, [job('ok', 'First'), job('sync', ''), job('async', '', true), job('later', 'Second', true)]);
+  assert.deepEqual(outcomes.map(outcome => outcome.status), ['success', 'error', 'error', 'success']);
+  for (const outcome of outcomes.filter(outcome => outcome.status === 'error')) assertCode(outcome.error, 'INVALID_INPUT');
   await client.dispose();
 });
 

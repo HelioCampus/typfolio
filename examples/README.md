@@ -16,6 +16,4 @@ The check builds both modes, compares each emitted WASM file with the provenance
 
 `npm run test:browsers` drives the capture smoke page, the Vite application, and the React routes (direct, workers and charts) in Chromium, Firefox, and WebKit; see `tests/browser`.
 
-`bench-offscreen` measures drawing 150 charts (Highcharts and MUI X Charts) for a PDF in a hidden iframe, a hidden div, and a hidden div with CSS containment. It has its own `package.json` and is not part of the workspace; see its README.
-
 `pretext-hybrid` ports two pretext demos to PDF: pretext lays the text out in the browser, the geometry travels as JSON input, and Typst only places and draws it. Run it with `npm run dev:pretext`; see its README.

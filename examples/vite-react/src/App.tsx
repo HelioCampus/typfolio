@@ -1,10 +1,6 @@
-import { useState, type FormEvent } from 'react';
-import { templateFromFiles, type PdfRequest } from '@typfolio/core';
-import {
-  usePdfCompilation,
-  usePdfObjectUrl,
-  type PdfCompilationStatus,
-} from '@typfolio/react';
+import { useRef, useState, type FormEvent } from 'react';
+import { templateFromFiles, type PdfClient } from '@typfolio/core';
+import { usePdf, type PdfStatus } from '@typfolio/react';
 import type { ReportInput } from './report/input.ts';
 import { Topbar } from './Topbar.tsx';
 
@@ -25,6 +21,7 @@ export interface RuntimeProfile {
 
 interface AppProps {
   readonly profile: RuntimeProfile;
+  readonly client: PdfClient;
 }
 
 // The glob stays literal here so Vite can analyse it; report.schema.json is for the editor and is not matched, so it is never sent at runtime.
@@ -32,33 +29,31 @@ const template = templateFromFiles(
   import.meta.glob<string>('./report/**/*.typ', { query: '?raw', import: 'default', eager: true }),
 );
 
-function makeRequest(title: string, summary: string, profile: RuntimeProfile): PdfRequest<ReportInput> {
+function makeInput(title: string, summary: string, profile: RuntimeProfile): ReportInput {
   return {
-    template,
-    input: {
-      title,
-      summary,
-      generatedAt: new Intl.DateTimeFormat('en', {
-        dateStyle: 'long',
-        timeStyle: 'short',
-      }).format(new Date()),
-      runtimeLineOne: profile.runtimeLineOne,
-      runtimeLineTwo: profile.runtimeLineTwo,
-      runtimeLineThree: profile.runtimeLineThree,
-      runtimeEmphasis: profile.runtimeEmphasis,
-      runtimeNote: profile.runtimeNote,
-    },
-    pdf: { standards: ['ua-1'] },
+    title,
+    summary,
+    generatedAt: new Intl.DateTimeFormat('en', {
+      dateStyle: 'long',
+      timeStyle: 'short',
+    }).format(new Date()),
+    runtimeLineOne: profile.runtimeLineOne,
+    runtimeLineTwo: profile.runtimeLineTwo,
+    runtimeLineThree: profile.runtimeLineThree,
+    runtimeEmphasis: profile.runtimeEmphasis,
+    runtimeNote: profile.runtimeNote,
   };
 }
 
-function statusLabel(status: PdfCompilationStatus): string {
+const pdfOptions = { standards: ['ua-1' as const] };
+
+function statusLabel(status: PdfStatus): string {
   switch (status) {
     case 'idle': return 'Ready';
+    case 'drawing':
     case 'compiling': return 'Compiling';
     case 'success': return 'Complete';
     case 'error': return 'Failed';
-    case 'cancelled': return 'Cancelled';
   }
 }
 
@@ -75,25 +70,32 @@ function formatBytes(value: number): string {
   }).format(value / 1_000);
 }
 
-export function App({ profile }: AppProps) {
-  const pdf = usePdfCompilation();
+export function App({ profile, client }: AppProps) {
   const [title, setTitle] = useState('Designing resilient document workflows');
   const [summary, setSummary] = useState(
     'A concise field note on keeping document generation portable: application data stays outside the renderer, compilation stays behind one client contract, and heavier execution remains an explicit choice.',
   );
+  // The brief as last submitted: usePdf compiles it, and again whenever a new one is submitted.
+  const [submitted, setSubmitted] = useState<ReportInput>();
+  const startedAt = useRef(0);
   const [durationMs, setDurationMs] = useState<number>();
-  const downloadUrl = usePdfObjectUrl(pdf.result);
+  const pdf = usePdf({
+    client,
+    template,
+    data: { input: submitted },
+    enabled: submitted !== undefined,
+    pdf: pdfOptions,
+    onSuccess: () => setDurationMs(performance.now() - startedAt.current),
+  });
 
-  const compile = async (event: FormEvent<HTMLFormElement>): Promise<void> => {
+  const compile = (event: FormEvent<HTMLFormElement>): void => {
     event.preventDefault();
-    const startedAt = performance.now();
+    startedAt.current = performance.now();
     setDurationMs(undefined);
-    try {
-      await pdf.compile(makeRequest(title.trim(), summary.trim(), profile));
-      setDurationMs(performance.now() - startedAt);
-    } catch {
-      // The hook exposes failures and cancellation through its state.
-    }
+    const next = makeInput(title.trim(), summary.trim(), profile);
+    // An unchanged brief is the same data, so compile it again explicitly.
+    if (JSON.stringify(next) === JSON.stringify(submitted)) pdf.rebuild();
+    else setSubmitted(next);
   };
 
   return (
@@ -148,13 +150,13 @@ export function App({ profile }: AppProps) {
             <div className="actions">
               <button
                 className="button button--primary"
-                disabled={pdf.isCompiling || title.trim() === '' || summary.trim() === ''}
+                disabled={pdf.isFetching || title.trim() === '' || summary.trim() === ''}
                 type="submit"
               >
-                {pdf.isCompiling ? <span className="button-spinner" /> : null}
-                {pdf.isCompiling ? 'Building PDF' : 'Generate PDF'}
+                {pdf.isFetching ? <span className="button-spinner" /> : null}
+                {pdf.isFetching ? 'Building PDF' : 'Generate PDF'}
               </button>
-              {pdf.isCompiling ? (
+              {pdf.isFetching ? (
                 <button className="button button--quiet" onClick={() => pdf.cancel()} type="button">
                   Cancel
                 </button>
@@ -173,7 +175,7 @@ export function App({ profile }: AppProps) {
               </span>
             </div>
 
-            {downloadUrl !== undefined && pdf.result !== undefined ? (
+            {pdf.url !== undefined && pdf.result !== undefined ? (
               <div className="result">
                 <div className="result-summary">
                   <div>
@@ -189,12 +191,12 @@ export function App({ profile }: AppProps) {
                     <strong>{pdf.diagnostics.length}</strong>
                   </div>
                 </div>
-                <iframe className="pdf-preview" src={downloadUrl} title="Generated PDF preview" />
-                <a className="button button--download" download="typfolio-report.pdf" href={downloadUrl}>
+                <iframe className="pdf-preview" src={pdf.url} title="Generated PDF preview" />
+                <a className="button button--download" download="typfolio-report.pdf" href={pdf.url}>
                   Download PDF <span aria-hidden="true">↓</span>
                 </a>
               </div>
-            ) : pdf.status === 'error' ? (
+            ) : pdf.isError ? (
               <div className="empty-state empty-state--error">
                 <span className="empty-icon">!</span>
                 <h3>Compilation failed</h3>
@@ -205,9 +207,9 @@ export function App({ profile }: AppProps) {
                 <div className="document-ghost" aria-hidden="true">
                   <span /><span /><span /><i />
                 </div>
-                <h3>{pdf.isCompiling ? 'Typesetting your document' : 'Your preview will appear here'}</h3>
+                <h3>{pdf.isFetching ? 'Typesetting your document' : 'Your preview will appear here'}</h3>
                 <p>
-                  {pdf.isCompiling
+                  {pdf.isFetching
                     ? profile.compilingCopy
                     : 'Edit the brief, generate a PDF, then inspect or download the exact returned bytes.'}
                 </p>

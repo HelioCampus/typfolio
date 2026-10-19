@@ -1,4 +1,14 @@
-import type { Diagnostic, PdfClient, PdfOptions, PdfRequest, PdfResult, PdfTemplate } from '@typfolio/core';
+import {
+  createAttachments,
+  type AnyPdfRequest,
+  type Diagnostic,
+  type PdfClient,
+  type PdfOptions,
+  type PdfResult,
+  type PdfTemplate,
+  type TemplateDefinition,
+} from '@typfolio/core';
+import { isTemplateDefinition, resolveRequest } from '@typfolio/core/internal';
 import { useEffect, useMemo, useRef, useState, type ComponentType, type DependencyList } from 'react';
 import { usePdfCompilation } from './compilation.js';
 import { usePdfObjectUrl } from './object-url.js';
@@ -6,21 +16,47 @@ import { useRenderedAssets, type RenderAsset, type RenderAssetsOptions } from '.
 
 export type PdfStatus = 'idle' | 'drawing' | 'compiling' | 'success' | 'error';
 
-export interface UsePdfOptions<Input> {
+/**
+ * Adds a file the PDF shows, such as a logo, and returns its path to put in the data, such as
+ * `/attachments/0.png`. The same bytes added twice share one path.
+ */
+export type AttachFile = (bytes: Uint8Array, extension: string) => string;
+
+/** What a `data` function gets. */
+export interface PdfBuildTools {
+  /** Draws a React element (a chart) for the PDF and returns its path, such as `/charts/0.svg`. */
+  readonly render: RenderAsset;
+  readonly attach: AttachFile;
+}
+
+/** A template made with `defineTemplate`, or a plain one. */
+export type AnyPdfTemplate = PdfTemplate | TemplateDefinition<unknown, unknown>;
+
+/**
+ * The data a template reads: for one made with `defineTemplate`, its input and the data of each of
+ * its partials, typed by it; for a plain template, its `input`.
+ */
+export type PdfData<T> = T extends TemplateDefinition<infer Input, infer Partials>
+  ? ([Input] extends [undefined] ? { readonly input?: undefined } : { readonly input: Input })
+    & ([keyof Partials] extends [never] ? { readonly partials?: Record<never, never> } : { readonly partials: Partials })
+  : { readonly input?: unknown; readonly partials?: undefined };
+
+export interface UsePdfOptions<T extends AnyPdfTemplate = AnyPdfTemplate> {
   /** Keep it stable (defined outside the component, or memoized): a new template recompiles. */
-  readonly template: PdfTemplate;
+  readonly template: T;
   /**
-   * The template input, or a function that builds it. A function gets `render`, which draws a
-   * React element (a chart) for the PDF and returns its asset path to put in the input.
+   * The data, `{ input, partials }`, or a function that builds it. A function gets `render`,
+   * which draws a React element (a chart) for the PDF, and `attach`, which adds a file such as a
+   * logo; each returns the path to put in the data.
    */
-  readonly input: Input | ((tools: { readonly render: RenderAsset }) => Input);
+  readonly data: PdfData<T> | ((tools: PdfBuildTools) => PdfData<T>);
   /**
-   * What a function `input` reads, compared like `useMemo`'s dependencies: a change builds the
-   * input again and recompiles. Defaults to `[]`, built once. A plain `input` value is compared
-   * by reference instead.
+   * What a `data` function reads, compared like `useMemo`'s dependencies: a change builds the
+   * data again and recompiles. Defaults to `[]`, built once. A plain `data` value is compared as
+   * JSON instead, so an object written inline does not recompile.
    */
   readonly deps?: DependencyList;
-  /** Files the template reads besides drawn charts, such as a logo. Compared by reference. */
+  /** Files the template reads that `data` does not attach, by path. Compared by reference. */
   readonly assets?: Readonly<Record<string, Uint8Array>>;
   /** PDF output options, such as `{ standards: ['ua-1'] }`. */
   readonly pdf?: PdfOptions;
@@ -29,15 +65,19 @@ export interface UsePdfOptions<Input> {
   /** When false, nothing is drawn or compiled. Defaults to true. */
   readonly enabled?: boolean;
   /**
-   * Checks the built input before anything is drawn or compiled: throw to reject it, for example
-   * `validate: input => schema.parse(input)` with your schema library. A rejected input is
+   * Checks the built data before anything is drawn or compiled: throw to reject it. A template
+   * made with `defineTemplate` checks its schemas itself (before drawing, too); use this for a
+   * plain template, for example `validate: data => schema.parse(data.input)`. Rejected data is
    * reported through `error` and `onError`, and nothing is compiled.
    */
-  readonly validate?: (input: Input) => void;
-  /** Compiles with this client instead of the one from `PdfProvider`. */
-  readonly client?: PdfClient;
+  readonly validate?: (data: PdfData<T>) => void;
+  /**
+   * The client that compiles: `createLazyCompiler(...)` from `@typfolio/core`, or a worker client from
+   * `@typfolio/workers`. Create it once, outside components; the hook neither creates nor disposes it.
+   */
+  readonly client: PdfClient;
   readonly onSuccess?: (result: PdfResult) => void;
-  /** A rejected input, a chart that could not be drawn, or a compile that failed. */
+  /** Data that does not match its schema, a chart that could not be drawn, or a compile that failed. */
   readonly onError?: (error: unknown) => void;
   readonly onSettled?: (result: PdfResult | undefined, error: unknown) => void;
 }
@@ -75,8 +115,9 @@ function sameRecord<V>(a: Readonly<Record<string, V>> | undefined, b: Readonly<R
   return keys.length === Object.keys(b).length && keys.every(key => Object.hasOwn(b, key) && Object.is(a[key], b[key]));
 }
 
-function sameTemplate(a: PdfTemplate, b: PdfTemplate): boolean {
-  if (typeof a === 'string' || typeof b === 'string') return a === b;
+function sameTemplate(a: AnyPdfTemplate, b: AnyPdfTemplate): boolean {
+  // A defined template is also its schemas: it is the same only by reference.
+  if (typeof a === 'string' || typeof b === 'string' || isTemplateDefinition(a) || isTemplateDefinition(b)) return a === b;
   return a.entrypoint === b.entrypoint && sameRecord(a.files, b.files);
 }
 
@@ -99,45 +140,83 @@ function useStable<V>(value: V, same: (a: V, b: V) => boolean): V {
   return held.current;
 }
 
+interface Data {
+  readonly input?: unknown;
+  readonly partials?: Readonly<Record<string, unknown>>;
+}
+
+interface Built {
+  readonly data: Data;
+  readonly attachments: Readonly<Record<string, Uint8Array>>;
+}
+
+// A defined template's schemas, checked before anything is drawn. One that validates
+// asynchronously is checked when the client compiles.
+function checkSchemas(template: AnyPdfTemplate, data: Data): void {
+  if (!isTemplateDefinition(template)) return;
+  const { validated } = resolveRequest({ template, input: data.input, partials: data.partials });
+  validated?.catch(() => {});
+}
+
 function pdfFileName(fileName: string | undefined, title: string | undefined): string {
   const stem = (fileName ?? '').trim().replace(/\.pdf$/i, '') || title?.trim() || 'document';
   return `${stem}.pdf`;
 }
 
 /**
- * A PDF, kept up to date with its inputs, like a query: it draws the input's charts, compiles
- * once they are drawn, and compiles again when `deps`, `assets`, `template` or `pdf` change. A
- * newer compile replaces an older one. Uses `client`, or the one from `PdfProvider`.
+ * A PDF, kept up to date with its data, like a query: it draws the data's charts, compiles once
+ * they are drawn, and compiles again when `deps`, `assets`, `template` or `pdf` change. A newer
+ * compile replaces an older one.
  *
  * ```tsx
  * const pdf = usePdf({
- *   template,
- *   input: ({ render }) => ({ rows: rows.map(row => ({ ...row, chart: render(<Chart row={row} />) })) }),
- *   deps: [rows],
+ *   client, // createLazyCompiler({ wasm, fonts }), created once
+ *   template: report, // defineTemplate({ ..., partials: { header } })
+ *   data: ({ render, attach }) => ({
+ *     input: { rows: rows.map(row => ({ ...row, chart: render(<Chart row={row} />) })) },
+ *     partials: { header: { institution, logo: attach(logo, 'png') } },
+ *   }),
+ *   deps: [rows, institution, logo],
  * });
  * return <><pdf.AssetRenderer /><a href={pdf.url}>Open PDF</a></>;
  * ```
  */
-export function usePdf<Input>(options: UsePdfOptions<Input>): PdfDocument {
+export function usePdf<T extends AnyPdfTemplate>(options: UsePdfOptions<T>): PdfDocument {
   const { deps = [], pdf: pdfOptions, charts, enabled = true } = options;
-  const template = useStable(options.template, sameTemplate);
+  const template = useStable<AnyPdfTemplate>(options.template, sameTemplate);
   const assets = useStable(options.assets, sameRecord);
-  const builds = typeof options.input === 'function';
-  // A plain input value is compared as JSON, and only when its reference changes.
-  const input = useStable(options.input, (a, b) => !builds && typeof a !== 'function' && sameJson(a, b));
+  const builds = typeof options.data === 'function';
+  // A plain data value is compared as JSON, and only when its reference changes.
+  const data = useStable<unknown>(options.data, (a, b) => !builds && typeof a !== 'function' && sameJson(a, b));
   const latest = useRef(options);
   useEffect(() => {
     latest.current = options;
   });
 
-  const rendered = useRenderedAssets<Input>(
-    builds ? input as (tools: { readonly render: RenderAsset }) => Input : () => input as Input,
+  const rendered = useRenderedAssets<Built>(
+    ({ render }) => {
+      const files = createAttachments();
+      let open = true;
+      const attach: AttachFile = (bytes, extension) => {
+        if (!open) throw new Error('usePdf: attach was called after data returned; call it only inside data');
+        return files.add(bytes, extension);
+      };
+      try {
+        const value = builds ? (data as (tools: PdfBuildTools) => Data)({ render, attach }) : data as Data;
+        return { data: value ?? {}, attachments: files.assets };
+      } finally {
+        open = false;
+      }
+    },
     {
       ...charts,
       // Same length either way: a plain value is its own dependency.
-      deps: [builds ? null : input, ...deps],
+      deps: [builds ? null : data, ...deps],
       enabled,
-      validate: options.validate,
+      validate: built => {
+        checkSchemas(template, built.data);
+        options.validate?.(built.data as PdfData<T>);
+      },
       onError: error => {
         latest.current.onError?.(error);
         latest.current.onSettled?.(undefined, error);
@@ -148,24 +227,30 @@ export function usePdf<Input>(options: UsePdfOptions<Input>): PdfDocument {
   const compilation = usePdfCompilation({ client: options.client });
   // Compared as text, so `pdf: { standards: ['ua-1'] }` written inline does not recompile.
   const pdfKey = JSON.stringify(pdfOptions ?? null);
-  const request = useMemo<PdfRequest<unknown> | undefined>(() => {
+  const request = useMemo<AnyPdfRequest | undefined>(() => {
     if (rendered.status !== 'ready' || rendered.assets === undefined) return undefined;
-    const files = { ...assets, ...rendered.assets };
-    return {
-      template,
-      input: rendered.value,
+    const { data: value, attachments } = rendered.value;
+    const files = { ...assets, ...attachments, ...rendered.assets };
+    const rest = {
       ...(Object.keys(files).length > 0 ? { assets: files } : {}),
       ...(pdfOptions === undefined ? {} : { pdf: pdfOptions }),
+    };
+    if (!isTemplateDefinition(template)) return { template, input: value.input ?? null, ...rest };
+    return {
+      template,
+      ...(value.input === undefined ? {} : { input: value.input }),
+      ...(value.partials === undefined ? {} : { partials: value.partials }),
+      ...rest,
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rendered.status, rendered.value, rendered.assets, assets, template, pdfKey]);
 
   // The request the newest compile started for: until the effect below starts one for a new
   // request, the hook already reports it as compiling.
-  const [started, setStarted] = useState<PdfRequest<unknown>>();
+  const [started, setStarted] = useState<AnyPdfRequest>();
   const { compile } = compilation;
   // The request the newest finished PDF is for: enabling again with nothing changed reuses it.
-  const succeeded = useRef<PdfRequest<unknown>>(undefined);
+  const succeeded = useRef<AnyPdfRequest>(undefined);
   const { cancel } = compilation;
   useEffect(() => {
     // Disabled (an export dialog closed, say): stop the compile in flight; nothing late is reported.

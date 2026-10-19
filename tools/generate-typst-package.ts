@@ -38,18 +38,29 @@ for (const file of files) {
 const unassigned = Object.keys(contents).filter(file => ![...runtimeFiles, ...devFiles].includes(file));
 if (unassigned.length) throw new Error(`Package files that are neither runtime nor dev-tools files: ${unassigned.join(', ')}; assign them in ${relative(root, fileURLToPath(import.meta.url))}`);
 for (const file of [...runtimeFiles, ...devFiles]) if (!(file in contents)) throw new Error(`The package is missing ${file}`);
-const pick = (names: string[]) => Object.fromEntries(names.map(file => [file, contents[file]]));
 const toml = contents['typst.toml'] ?? '';
 const field = (key: string) => new RegExp(`^${key}\\s*=\\s*"([^"]*)"`, 'm').exec(toml)?.[1];
 if (field('name') !== name || field('version') !== version) {
   throw new Error(`typst.toml name/version (${field('name')}/${field('version')}) must match the directory ${namespace}/${name}/${version}`);
 }
 
+/**
+ * What every app bundles, so only what the compiler reads: typst.toml's `[package]` name, version and
+ * entrypoint, and lib.typ with its comment lines blanked (not removed, so a compile error's line
+ * numbers still match the file). Editors read the files themselves, comments included.
+ */
+function runtimeFileContents(files: Readonly<Record<string, string>>): Record<string, string> {
+  return {
+    'typst.toml': files['typst.toml'].split('\n').filter(line => /^\s*(\[package\]|(name|version|entrypoint)\s*=)/.test(line)).join('\n') + '\n',
+    'lib.typ': files['lib.typ'].split('\n').map(line => (/^\s*\/\//.test(line) ? '' : line)).join('\n'),
+  };
+}
+
 const body = `// GENERATED FILE. Do not edit.
 // Source of truth: packages/core/typst-packages/${posix.join(namespace, name, version)}/.
 // Regenerate with \`node tools/generate-typst-package.mjs\` (the root \`npm run build\` does this first).
 
-export const typfolioPackage = ${JSON.stringify({ namespace, name, version, files: pick(runtimeFiles) }, null, 2)} as const;
+export const typfolioPackage = ${JSON.stringify({ namespace, name, version, files: runtimeFileContents(contents) }, null, 2)} as const;
 `;
 await writeFile(output, body);
 const sampleBody = `// GENERATED FILE. Do not edit.

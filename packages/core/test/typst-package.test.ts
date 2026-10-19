@@ -448,10 +448,14 @@ test('the generated modules equal the shipped package files, and the runtime mod
   const onDisk: Record<string, string> = {};
   for (const path of await walk(directory)) onDisk[fileURLToPath(path).slice(fileURLToPath(directory).length)] = await readFile(path, 'utf8');
   assert.deepEqual(Object.keys(onDisk).sort(), ['lib.typ', 'sample.typ', 'typst.toml']);
-  // The runtime module embeds typst.toml and lib.typ only.
-  const { 'sample.typ': diskSample, ...diskRuntime } = onDisk;
-  assert.deepEqual({ ...typfolioPackage.files }, diskRuntime);
+  // The runtime module embeds typst.toml and lib.typ only, as the compiler reads them: the manifest's
+  // name, version and entrypoint, and lib.typ with its comment lines blank (line numbers unchanged).
+  const { 'sample.typ': diskSample } = onDisk;
   assert.deepEqual(Object.keys(typfolioPackage.files).sort(), ['lib.typ', 'typst.toml']);
+  assert.equal(typfolioPackage.files['typst.toml'], '[package]\nname = "typfolio"\nversion = "0.1.0"\nentrypoint = "lib.typ"\n');
+  const lines = onDisk['lib.typ'].split('\n');
+  assert.deepEqual(typfolioPackage.files['lib.typ'].split('\n'), lines.map(line => (line.trim().startsWith('//') ? '' : line)));
+  assert.ok(!typfolioPackage.files['lib.typ'].includes('//'), 'the embedded lib.typ keeps no comment');
   // (`sample-from-schema` is no marker: lib.typ names it in its import.) These appear only in sample.typ.
   const generated = await readFile(new URL('../dist/typst-package.generated.js', import.meta.url), 'utf8');
   for (const marker of ['_is-nullable', 'Sample text', '123e4567-e89b-12d3-a456-426614174000']) {

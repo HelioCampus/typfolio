@@ -7,9 +7,19 @@
 // `sample-from-schema(schema, mode: "full")` builds a value from a JSON Schema (a dictionary):
 //   "full"    shape-complete, for editor completion: every property, one array item, non-null shapes.
 //   "minimal" the sparsest value the schema allows, to expose templates that assume optional data.
+// In both, an image field (`contentMediaType: "image/..."`) is a placeholder image's bytes.
 // The sample is not validated against the schema.
 
 #let _is-empty(v) = (type(v) == array or type(v) == dictionary) and v.len() == 0
+
+// A field that holds the path of an image file says so with `contentMediaType: "image/..."`. In the
+// editor and in template checks there is no such file to read, so the sample is the bytes of a grey
+// placeholder image instead, which `image()` draws: write `image(data.logo)`, not `image("/" + ...)`.
+#let _placeholder = bytes("<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"400\" height=\"200\" viewBox=\"0 0 400 200\"><rect width=\"400\" height=\"200\" fill=\"#e6e8eb\"/><path d=\"M0 0L400 200M400 0L0 200\" stroke=\"#c4c8cd\" stroke-width=\"2\"/></svg>")
+#let _is-image(node) = {
+  let media = node.at("contentMediaType", default: none)
+  type(media) == str and media.starts-with("image/")
+}
 
 #let _formats = (
   "date": "2024-01-15",
@@ -53,6 +63,7 @@
 
 #let _sample(root, node, depth, seen) = {
   if depth > 16 or type(node) != dictionary { return none }
+  if _is-image(node) { return _placeholder }
   let candidates = ()
   if "examples" in node { candidates += node.at("examples") }
   if "default" in node { candidates.push(node.at("default")) }
@@ -129,6 +140,7 @@
 #let _minimal(root, node, depth, seen) = {
   if depth > 16 or type(node) != dictionary { return none }
   if _is-nullable(node) { return none }
+  if _is-image(node) { return _placeholder }
   if "const" in node { return node.at("const") }
   if "enum" in node and node.at("enum").len() > 0 { return node.at("enum").first() }
   if "$ref" in node {

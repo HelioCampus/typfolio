@@ -1,6 +1,6 @@
 {
   "name": "@typfolio/workers",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Framework-independent Web Worker execution for Typfolio PDF compilation",
   "type": "module",
   "license": "Apache-2.0",
@@ -25,7 +25,7 @@
     "./runtime": "./dist/runtime.js"
   },
   "dependencies": {
-    "@typfolio/core": "^0.1.0",
+    "@typfolio/core": "^0.2.0",
     "effect": "4.0.0-rc.118"
   },
   "publishConfig": {
