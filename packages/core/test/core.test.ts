@@ -88,6 +88,20 @@ test('PDF/UA rejects an image without alternative text', async () => {
   assert.ok(normal.bytes.length > 1000);
 });
 
+test('a PDF standard\'s failure reads as its message and hint, one diagnostic per failure', async () => {
+  // No loaded font draws these characters: PDF/UA-1 refuses each.
+  const template = '#set text(font: "Libertinus Serif", lang: "en")\n#set document(title: "Glyphs")\nName: 王小';
+  await assert.rejects(compiler.compile({ template, input: null, pdf: { standards: ['ua-1'] } }), (error: TypstPdfError) => {
+    assert.equal(error.code, 'COMPILATION');
+    const failures = error.diagnostics.filter(d => d.severity === 'error');
+    assert.deepEqual(failures.map(d => [d.code, d.text]), [['missing-glyph', '王'], ['missing-glyph', '小']]);
+    assert.equal(failures[0].message, 'PDF/UA-1 error: the text `"王"` could not be displayed with font `"Libertinus Serif"`. See https://github.com/HelioCampus/typfolio/blob/main/docs/errors.md#missing-glyph');
+    assert.equal(error.message, failures.map(d => d.message).join('\n'));
+    assert.doesNotMatch(error.message, /SourceDiagnostic/);
+    return true;
+  });
+});
+
 test('JSON strings stay data and requests capture caller input before yielding', async () => {
   const mutated = structuredClone(request);
   const title = '#panic("must remain data") <script> & Turkish: İstanbul';

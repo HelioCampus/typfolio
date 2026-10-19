@@ -9,7 +9,8 @@ export function usePdfObjectUrl(result: PdfResult | undefined): string | undefin
   const [url, setUrl] = useState<string>();
 
   useEffect(() => {
-    if (result === undefined) {
+    // No result yet, or a platform without object URLs (jsdom, say): no URL.
+    if (result === undefined || typeof URL.createObjectURL !== 'function') {
       setUrl(undefined);
       return;
     }

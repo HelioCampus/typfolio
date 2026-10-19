@@ -1,0 +1,61 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "title": {
+      "type": "string",
+      "minLength": 1,
+      "examples": [
+        "Outcome results"
+      ]
+    },
+    "generatedAt": {
+      "type": "string",
+      "examples": [
+        "18 October 2026"
+      ]
+    },
+    "outcomes": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "examples": [
+              "Written communication"
+            ]
+          },
+          "summary": {
+            "type": "string",
+            "examples": [
+              "21 of 30 students reached Proficient or above."
+            ]
+          },
+          "chart": {
+            "type": "string",
+            "contentMediaType": "image/svg+xml",
+            "description": "Path render() returned, such as /charts/0.svg."
+          },
+          "chartAlt": {
+            "type": "string",
+            "examples": [
+              "Bar chart of students per level."
+            ]
+          }
+        },
+        "required": [
+          "name",
+          "summary",
+          "chart",
+          "chartAlt"
+        ]
+      }
+    }
+  },
+  "required": [
+    "title",
+    "generatedAt",
+    "outcomes"
+  ]
+}

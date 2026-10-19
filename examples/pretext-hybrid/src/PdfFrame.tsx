@@ -11,7 +11,7 @@ function describeError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-/** Embeds the compiled PDF bytes through an object URL owned by `usePdfObjectUrl`. */
+/** Embeds the compiled PDF bytes through the object URL `usePdf` owns. */
 export function PdfFrame({ url, pending, error, aspect, fileName, maxWidth = 468 }: PdfFrameProps) {
   return (
     <div className="pdf-frame" style={{ aspectRatio: String(aspect), maxWidth }}>

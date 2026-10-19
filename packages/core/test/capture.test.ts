@@ -120,7 +120,17 @@ test('SVG capture discovers regions and returns compiler assets and references',
   root.querySelector('svg')!.getBoundingClientRect = () => bounds();
 
   const captured = await captureAssets(root, {
-    adapters: { svg: svgCapture({ fontFamily: 'Open Sans', removeSelectors: ['.tooltip'] }) },
+    adapters: {
+      svg: svgCapture({
+        fontFamily: 'Open Sans',
+        beforeSerialize: svg => {
+          // The clone, sized and styled: the live SVG keeps its tooltip.
+          assert.notEqual(svg, root.querySelector('svg'));
+          assert.equal(svg.getAttribute('width'), '400');
+          for (const node of svg.querySelectorAll('.tooltip')) node.remove();
+        },
+      }),
+    },
   });
   assert.deepEqual(Object.keys(captured.assets), ['captures/chart.svg']);
   const source = new TextDecoder().decode(captured.assets['captures/chart.svg']);
@@ -150,10 +160,11 @@ test('DOM capture rasterizes only when requested and trims alt text', async () =
   card.getBoundingClientRect = () => bounds(320, 180);
   const expected = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]);
   let rasterized = undefined as { element: HTMLElement; options: DomPngRasterizeOptions } | undefined;
+  const beforeRasterize = (element: HTMLElement) => element.querySelector('.transient')?.remove();
   const adapter = domPngCapture({
     pixelRatio: 2,
     backgroundColor: null,
-    removeSelectors: ['.transient'],
+    beforeRasterize,
     rasterize: async (element, options) => {
       rasterized = { element, options };
       // A canvas stand-in: the adapter only asks it for a blob.
@@ -169,7 +180,7 @@ test('DOM capture rasterizes only when requested and trims alt text', async () =
   assert.equal(rasterized!.element, card);
   assert.equal(rasterized!.options.pixelRatio, 2);
   assert.equal(rasterized!.options.backgroundColor, null);
-  assert.deepEqual(rasterized!.options.removeSelectors, ['.transient']);
+  assert.equal(rasterized!.options.beforeRasterize, beforeRasterize);
   assert.deepEqual(captured.assets['captures/card.png'], expected);
   assert.deepEqual(captured.references.card, {
     path: 'captures/card.png',
@@ -360,6 +371,10 @@ test('invalid adapters and options are rejected', async () => {
     captureAssets(root, { adapters: {}, require: 'chart' }),
     isCaptureError('INVALID_OPTIONS'),
   );
+  // @ts-expect-error beforeSerialize must be a function
+  assert.throws(() => svgCapture({ beforeSerialize: '.tooltip' }), isCaptureError('INVALID_OPTIONS'));
+  // @ts-expect-error beforeRasterize must be a function
+  assert.throws(() => domPngCapture({ beforeRasterize: ['.tooltip'] }), isCaptureError('INVALID_OPTIONS'));
 });
 
 test('adapter failures are wrapped and empty output is rejected', async () => {

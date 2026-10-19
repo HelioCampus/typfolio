@@ -1,12 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { usePdfCompilation, usePdfObjectUrl } from '@typfolio/react';
+import type { PdfClient } from '@typfolio/core';
+import { usePdf } from '@typfolio/react';
 import { CompilerBoundary } from '../CompilerBoundary.tsx';
 import { FONT_FAMILY, type FontUrls } from '../assets.ts';
 import { Shell } from '../Shell.tsx';
 import { StaticPreview } from '../live/StaticPreview.tsx';
 import type { Captured } from '../live/session.ts';
 import { LivePanel, LiveSwitch, type LiveStatus } from '../live/LivePanel.tsx';
-import { COLORS, framesToInput, makeAsciiRequest } from '../ascii/capture.ts';
+import { COLORS, asciiTemplate, framesToInput, makeAsciiRequest, type AsciiFrameInput } from '../ascii/capture.ts';
 import {
   ART_PADDING,
   LINE_HEIGHT,
@@ -67,9 +68,10 @@ function formatMs(value: number | undefined): string {
 interface AsciiWorkbenchProps {
   readonly engine: AsciiEngine;
   readonly fonts: FontUrls;
+  readonly client: PdfClient;
 }
 
-function AsciiWorkbench({ engine, fonts }: AsciiWorkbenchProps) {
+function AsciiWorkbench({ engine, fonts, client }: AsciiWorkbenchProps) {
   const stageRef = useRef<HTMLDivElement>(null);
   const sourceRef = useRef<HTMLDivElement>(null);
   const rowRefs = useRef<HTMLDivElement[]>([]);
@@ -88,8 +90,17 @@ function AsciiWorkbench({ engine, fonts }: AsciiWorkbenchProps) {
   const [live, setLive] = useState(false);
   const [liveStatus, setLiveStatus] = useState<LiveStatus>('starting');
 
-  const pdf = usePdfCompilation();
-  const pdfUrl = usePdfObjectUrl(pdf.result);
+  // The frames captured last: usePdf compiles them, and again on the next capture.
+  const [capturedInput, setCapturedInput] = useState<AsciiFrameInput>();
+  const startedAtRef = useRef(0);
+  const pdf = usePdf({
+    client,
+    template: asciiTemplate,
+    data: { input: capturedInput },
+    enabled: capturedInput !== undefined,
+    onSuccess: () => setCaptureMs(performance.now() - startedAtRef.current),
+  });
+  const pdfUrl = pdf.url;
 
   useEffect(() => {
     const stage = stageRef.current;
@@ -159,14 +170,12 @@ function AsciiWorkbench({ engine, fonts }: AsciiWorkbenchProps) {
     const input = framesToInput(frames, engine.spaceWidth, baselineRef.current);
     setInputBytes(JSON.stringify(input).length);
     setPageCount(frames.length);
-    const startedAt = performance.now();
-    try {
-      await pdf.compile(makeAsciiRequest(input));
-      setCaptureMs(performance.now() - startedAt);
-    } catch {
-      // usePdfCompilation exposes the failure through its state.
-    }
-  }, [engine, pdf]);
+    startedAtRef.current = performance.now();
+    setCaptureMs(undefined);
+    // The same frames again are the same data, so compile them again explicitly.
+    if (JSON.stringify(input) === JSON.stringify(capturedInput)) pdf.rebuild();
+    else setCapturedInput(input);
+  }, [engine, capturedInput, pdf.rebuild]);
 
   // Live PDF mode: capture is demand-driven by the shared pipeline (src/live).
   const acquireFrame = useCallback(
@@ -215,7 +224,7 @@ function AsciiWorkbench({ engine, fonts }: AsciiWorkbenchProps) {
     }
   }, [engine]);
 
-  const busy = pdf.isCompiling || recording !== undefined || live;
+  const busy = pdf.isFetching || recording !== undefined || live;
 
   const resume = (): void => {
     pausedRef.current = false;
@@ -267,7 +276,7 @@ function AsciiWorkbench({ engine, fonts }: AsciiWorkbenchProps) {
             onClick={() => void capture(1)}
             type="button"
           >
-            {pdf.isCompiling ? 'Compiling…' : 'Capture frame as PDF'}
+            {pdf.isFetching ? 'Compiling…' : 'Capture frame as PDF'}
           </button>
           <button className="button" disabled={busy} onClick={() => void capture(FLIPBOOK_FRAMES)} type="button">
             {recording === undefined ? `Flipbook · ${FLIPBOOK_FRAMES} pages` : `Recording ${recording.done}/${recording.total}…`}
@@ -316,7 +325,7 @@ function AsciiWorkbench({ engine, fonts }: AsciiWorkbenchProps) {
             error={pdf.isError ? pdf.error : undefined}
             maxWidth={468}
             pages={pageCount}
-            pending={pdf.isCompiling && pdfUrl === undefined}
+            pending={pdf.isFetching && pdfUrl === undefined}
             url={pdfUrl}
           />
         )}
@@ -337,11 +346,11 @@ function AsciiWorkbench({ engine, fonts }: AsciiWorkbenchProps) {
   );
 }
 
-function AsciiRoute({ fonts }: { readonly fonts: FontUrls }) {
+function AsciiRoute({ fonts, client }: { readonly fonts: FontUrls; readonly client: PdfClient }) {
   // Fonts are registered by CompilerBoundary before this mounts, so both
   // pretext widths and canvas brightness see the Libertinus faces.
   const [engine] = useState(() => createAsciiEngine(FONT_FAMILY));
-  return <AsciiWorkbench engine={engine} fonts={fonts} />;
+  return <AsciiWorkbench client={client} engine={engine} fonts={fonts} />;
 }
 
 export default function AsciiPage() {
@@ -352,7 +361,7 @@ export default function AsciiPage() {
       lede="A particle field is sampled into a grid. Every cell is a glyph chosen by brightness and measured width; rows are centered from the measured advances. Capture freezes that geometry as JSON — Typst only places it."
     >
       <CompilerBoundary label="Loading Libertinus Serif and the Typst compiler…">
-        {fonts => <AsciiRoute fonts={fonts} />}
+        {(fonts, client) => <AsciiRoute client={client} fonts={fonts} />}
       </CompilerBoundary>
     </Shell>
   );

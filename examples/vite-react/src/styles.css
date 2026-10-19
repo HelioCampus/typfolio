@@ -352,3 +352,15 @@ footer { display: flex; align-items: center; gap: 14px; padding: 18px 28px; bord
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; }
 }
+
+/* Charts route: the chart colours live in the page stylesheet, and still reach the SVGs drawn for the PDF. */
+.chart-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 14px; }
+.chart-card { margin: 0; padding: 12px; border: 1px solid var(--line); border-radius: 9px; background: #fff; }
+.chart-card figcaption { margin-bottom: 6px; font-weight: 700; }
+.levels-chart { display: block; max-width: 100%; height: auto; }
+.levels-chart__axis { stroke: #9aa59d; stroke-width: 1; }
+.levels-chart__bar--0 { fill: #1b5e20; }
+.levels-chart__bar--1 { fill: #43a047; }
+.levels-chart__bar--2 { fill: #f2b233; }
+.levels-chart__bar--3 { fill: #e07a3a; }
+.levels-chart__value, .levels-chart__label { fill: var(--ink); font-size: 11px; text-anchor: middle; }

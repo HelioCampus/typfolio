@@ -41,11 +41,22 @@ The font name in the template must match the supplied font. Fonts and WASM are l
 - `copyAssets` (a `createCompiler` option, default `true`): by default `compile` copies every asset when it captures the request, so mutating, reusing, or detaching a buffer after calling `compile` cannot change the result. `copyAssets: false` mounts the caller's `Uint8Array` views as they are and skips that copy, which matters for multi-megabyte assets. The contract then is: the caller must not mutate, detach, or reuse an asset's buffer until the promise returned by `compile` settles. Validation of paths, types, reserved paths and JSON input is identical either way. `@typfolio/workers` sets it inside its workers, where the request arrives as a private transferred copy; set it yourself only when you own the buffers for the duration of the call.
 - `pdf`: zero or one standard, tags, and creation timestamp in Unix seconds. Read `compiler.capabilities` for current support. Unsupported options are rejected.
 - `compile(request, { signal })`: Promise of PDF bytes, diagnostics, and title metadata.
+- A template made with `defineTemplate({ entrypoint?, files, input?, partials? })` takes `{ template, input, partials, assets?, pdf? }`, typed by its schemas (`TemplateRequest<typeof template>`). `defineInput(schema, path)` pairs a [Standard Schema](https://standardschema.dev) (Zod, Valibot, ArkType, …) with the path of its JSON Schema file; `definePartial({ files, input, partials? })` is Typst code with runtime data of its own. Each piece of data is checked against its schema before compiling (`INVALID_INPUT`, with the issues; an asynchronous schema is awaited) and mounted at its schema's path, where its file reads it with `input(json.with(...))`. Such a template compiles only the files it declares; a file it imports without declaring it fails with a message that says what to do. See `docs/template-authoring.md`.
+- `createAttachments()`: `add(bytes, extension)` returns a path such as `/attachments/0.png` to put in the data, and `assets` holds the files for the request. The same bytes added twice share one path.
 - `dispose()`: idempotent; stops new jobs and waits for accepted work.
+
+`createLazyCompiler(options)` takes the same options but is synchronous and returns a `PdfClient`: nothing is downloaded until its first `compile`, which loads the WASM and fonts once for every later call. A failed load is not kept, so the next call tries again, and calls run one at a time in order, so callers never see `BUSY`. Create it once at module level and pass it to `PdfProvider`, or as `usePdf`'s `client`:
+
+```ts
+import { createLazyCompiler } from '@typfolio/core';
+import wasmUrl from '@typfolio/wasm/compiler.wasm?url';
+
+export const pdfClient = createLazyCompiler({ wasm: wasmUrl, fonts: ['/fonts/report.otf'] });
+```
 
 One active call is allowed per compiler. Concurrent calls reject with `TypstPdfError.code === 'BUSY'`. Core does not schedule jobs. A signal can cancel before synchronous execution; hard cancellation requires a worker. Upstream WASM initialization is shared per JS realm: reuse the same `wasm` value for multiple compilers in that realm.
 
-`TypstPdfError` provides `code`, `message`, `diagnostics`, and (when relevant) `cause`. Compile diagnostic ranges use upstream zero-based line/column notation. Export diagnostics can have only text.
+`TypstPdfError` provides `code`, `message`, `diagnostics`, and (when relevant) `cause`. A diagnostic Typfolio recognises carries a `code` of its own (`file-not-found` with `file`, `missing-glyph` with `text`) and a one-line message that links to what to do; switch on the codes, not the messages. [docs/errors.md](../../docs/errors.md) lists them all. Compile diagnostic ranges use upstream zero-based line/column notation. Export diagnostics can have only text.
 
 Remote Typst packages (everything except the bundled one), page ranges, experimental feature flags, and simultaneous PDF standards are not implemented. The pinned upstream builder requires dynamic function construction, so a strict CSP that forbids `unsafe-eval` needs a future binding change. Importing the JS module alone does not instantiate WASM or fetch resources.
 
@@ -58,7 +69,7 @@ Remote Typst packages (everything except the bundled one), page ranges, experime
 #let data = input(json.with("./report.schema.json"))
 ```
 
-Under Typfolio `input()` returns `request.input` and never reads the schema. In an editor (where nothing sets `sys.inputs`) it imports the sample builder from `sample.typ`, inside the function body, and builds a sample from the JSON Schema so completion works; `--input typfolio-sample=minimal` previews the sparse sample instead of the default `full` one. The runtime embeds only `lib.typ`. `compiler.capabilities.typstPackages` is `['@local/typfolio:0.1.0']`; any other `@namespace/name:version` import fails with a `COMPILATION` error that names the supported package. The directory layout is the one Tinymist expects for `--package-path`; see `docs/template-authoring.md` for the editor setting. The shipped `.typ`/`.toml` files are the source of truth: `tools/generate-typst-package.ts` (the first step of `npm run build`) generates `src/typst-package.generated.ts` (`typst.toml` and `lib.typ`, the runtime module) and `packages/dev-tools/src/sample-source.generated.ts` (`sample.typ`, imported only by `@typfolio/dev-tools`). Neither is edited by hand.
+Under Typfolio `input()` returns `request.input` and never reads the schema; in a template made with `defineTemplate`, it returns the data mounted at the schema's path. In an editor (where nothing sets `sys.inputs`) it imports the sample builder from `sample.typ`, inside the function body, and builds a sample from the JSON Schema so completion works; `--input typfolio-sample=minimal` previews the sparse sample instead of the default `full` one. The runtime embeds only `lib.typ`. `compiler.capabilities.typstPackages` is `['@local/typfolio:0.1.0']`; any other `@namespace/name:version` import fails with a `COMPILATION` error that names the supported package. The directory layout is the one Tinymist expects for `--package-path`; see `docs/template-authoring.md` for the editor setting. The shipped `.typ`/`.toml` files are the source of truth: `tools/generate-typst-package.ts` (the first step of `npm run build`) generates `src/typst-package.generated.ts` (`typst.toml` and `lib.typ`, the runtime module) and `packages/dev-tools/src/sample-source.generated.ts` (`sample.typ`, imported only by `@typfolio/dev-tools`). Neither is edited by hand.
 
 ## Dev-time tools
 
@@ -69,8 +80,8 @@ Tools used while building and testing templates, not while serving requests, liv
 Browser-only helpers live behind separate subpath entries so Node, worker, and server code that imports `@typfolio/core` never loads DOM code. The main entry exports none of them, and none touch browser globals at import time.
 
 - `@typfolio/core/capture`: `captureProps`, `captureAssets`, `TypfolioCaptureError`, and the adapter and result types.
-- `@typfolio/core/capture/svg`: `svgCapture`, a dependency-free adapter that serializes one inline SVG and preserves vector output.
-- `@typfolio/core/capture/dom`: `domPngCapture`, an opt-in PNG fallback for arbitrary DOM. It loads `html2canvas` by dynamic import only when it first runs. `html2canvas` is an optional peer dependency: install it only if you use this adapter. If it is missing when the default rasterizer runs, the capture rejects with `CAPTURE_FAILED` and the import error as `cause`; passing your own `rasterize` never loads it.
+- `@typfolio/core/capture/svg`: `svgCapture`, a dependency-free adapter that serializes one inline SVG and preserves vector output, and `serializeSvg(svg, { fontFamily?, beforeSerialize? })`, the same serializer for an SVG element you already hold. It inlines the computed paint and text styles (chart libraries often style SVGs from page CSS), rewrites `url(#id)` references to be local, writes the drawn size, and returns the file as bytes. The SVG must be in a document and have a rendered size. `beforeSerialize(svg)` runs on the copy just before it is written (remove a tooltip, add a `<title>`); the live SVG is never passed to it. `@typfolio/react`'s `usePdf` uses it for charts.
+- `@typfolio/core/capture/dom`: `domPngCapture`, an opt-in PNG fallback for arbitrary DOM. It loads `html2canvas` by dynamic import only when it first runs. `html2canvas` is an optional peer dependency: install it only if you use this adapter. If it is missing when the default rasterizer runs, the capture rejects with `CAPTURE_FAILED` and the import error as `cause`; passing your own `rasterize` never loads it. `beforeRasterize(element)` runs on html2canvas's copy of the element before it is drawn, never on the live page.
 
 Each marked region owns its adapter `kind` and its alt text. `captureProps` returns the data attributes (`data-typfolio-capture`, `data-typfolio-capture-kind`, and `data-typfolio-capture-alt` or `data-typfolio-capture-decorative`) to spread onto any element. They add no role or accessible name. `@typfolio/react/capture` offers a `CaptureRegion` component over the same attributes; plain DOM and other frameworks can spread `captureProps` directly.
 
@@ -89,7 +100,7 @@ for (const [name, value] of Object.entries(captureProps({
 
 const captured = await captureAssets(document.querySelector('#report'), {
   adapters: {
-    svg: svgCapture({ removeSelectors: ['.chart-tooltip'] }),
+    svg: svgCapture({ beforeSerialize: svg => svg.querySelector('.chart-tooltip')?.remove() }),
     png: domPngCapture({ pixelRatio: 2, backgroundColor: '#fff' }),
   },
   require: ['performance-chart'],

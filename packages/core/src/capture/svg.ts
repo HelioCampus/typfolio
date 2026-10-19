@@ -69,38 +69,105 @@ function findSvg(element: Element, selector: string, context: CaptureAdapterCont
   return matches[0];
 }
 
-export interface SvgCaptureOptions {
+export interface SvgSerializeOptions {
+  /** Overrides text/tspan fonts only in the serialized clone. */
+  readonly fontFamily?: string;
+  /**
+   * Runs on the clone just before it is serialized, after its styles are inlined and its size
+   * is set: remove transient parts such as tooltips, add a `<title>`, rewrite labels. The live
+   * SVG on the page is never passed here.
+   */
+  readonly beforeSerialize?: (svg: SVGSVGElement) => void;
+}
+
+export interface SvgCaptureOptions extends SvgSerializeOptions {
   /** Selects exactly one SVG inside the marked region. Defaults to `svg`. */
   readonly selector?: string;
-  /** Overrides text/tspan fonts only in the exported clone. */
-  readonly fontFamily?: string;
-  /** Removes transient descendants such as chart tooltips from the clone. */
-  readonly removeSelectors?: readonly string[];
+}
+
+function checkSerializeOptions({ fontFamily, beforeSerialize }: SvgSerializeOptions): void {
+  if (fontFamily !== undefined && !fontFamily.trim()) {
+    throw new TypfolioCaptureError('INVALID_OPTIONS', 'SVG fontFamily must be non-empty');
+  }
+  if (beforeSerialize !== undefined && typeof beforeSerialize !== 'function') {
+    throw new TypfolioCaptureError('INVALID_OPTIONS', 'SVG beforeSerialize must be a function');
+  }
+}
+
+/**
+ * Serializes a drawn SVG as a standalone file: a clone with the computed paint and text styles
+ * inlined (chart libraries often style SVGs from document CSS, which a standalone file does not
+ * have), local `url(#id)` references, and the size it was drawn at. The SVG must be in a
+ * document and have a rendered size.
+ */
+export function serializeSvg(svg: SVGSVGElement, options: SvgSerializeOptions = {}): Uint8Array {
+  checkSerializeOptions(options);
+  const { fontFamily, beforeSerialize } = options;
+  const view = svg.ownerDocument.defaultView;
+  if (view === null) {
+    throw new TypfolioCaptureError('NOT_READY', 'The SVG document is no longer available');
+  }
+  const bounds = svg.getBoundingClientRect();
+  if (!(bounds.width > 0) || !(bounds.height > 0)) {
+    throw new TypfolioCaptureError('NOT_READY', 'The SVG has no rendered size');
+  }
+
+  const cloned = svg.cloneNode(true);
+  if (!isSvg(cloned)) {
+    throw new TypfolioCaptureError('CAPTURE_FAILED', 'The SVG could not be cloned');
+  }
+  const originals: Element[] = [svg, ...svg.querySelectorAll('*')];
+  const copies: Element[] = [cloned, ...cloned.querySelectorAll('*')];
+  originals.forEach((original, index) => {
+    const copy = copies[index];
+    const computed = view.getComputedStyle(original);
+    const isText = original.localName === 'text' || original.localName === 'tspan';
+    if (hasStyle(copy)) {
+      for (const property of svgStyles) {
+        const value = computed.getPropertyValue(property);
+        if (value) copy.style.setProperty(property, value);
+      }
+      if (fontFamily && isText) copy.style.setProperty('font-family', fontFamily);
+    }
+    if (fontFamily && isText) copy.setAttribute('font-family', fontFamily);
+    for (const attribute of copy.attributes) {
+      copy.setAttribute(
+        attribute.name,
+        attribute.value.replace(/url\(["']?[^)#]*#([^)"' ]+)["']?\)/g, 'url(#$1)'),
+      );
+    }
+  });
+
+  for (const removable of cloned.querySelectorAll('script, foreignObject')) removable.remove();
+  cloned.setAttribute('width', String(bounds.width));
+  cloned.setAttribute('height', String(bounds.height));
+  if (!cloned.hasAttribute('viewBox')) {
+    cloned.setAttribute('viewBox', `0 0 ${bounds.width} ${bounds.height}`);
+  }
+  beforeSerialize?.(cloned);
+  // The serializer declares the SVG namespace itself. An `xmlns` attribute on the clone (chart
+  // libraries such as Highcharts set one) can be written a second time: invalid XML.
+  cloned.removeAttribute('xmlns');
+  return encoder.encode(new view.XMLSerializer().serializeToString(cloned));
 }
 
 export function svgCapture({
   selector = 'svg',
   fontFamily,
-  removeSelectors = [],
+  beforeSerialize,
 }: SvgCaptureOptions = {}): CaptureAdapter {
   if (!selector.trim()) {
     throw new TypfolioCaptureError('INVALID_OPTIONS', 'SVG selector must be non-empty');
   }
-  if (fontFamily !== undefined && !fontFamily.trim()) {
-    throw new TypfolioCaptureError('INVALID_OPTIONS', 'SVG fontFamily must be non-empty');
-  }
-  if (removeSelectors.some(value => !value.trim())) {
-    throw new TypfolioCaptureError('INVALID_OPTIONS', 'SVG removeSelectors must be non-empty');
-  }
-  const selectors = [...removeSelectors];
+  const serializeOptions: SvgSerializeOptions = { fontFamily, beforeSerialize };
+  checkSerializeOptions(serializeOptions);
 
   return Object.freeze({
     name: 'SVG capture',
     extensions: Object.freeze(['.svg']),
     capture(element: Element, context: CaptureAdapterContext): Uint8Array {
       const svg = findSvg(element, selector, context);
-      const view = svg.ownerDocument.defaultView;
-      if (view === null) {
+      if (svg.ownerDocument.defaultView === null) {
         throw new TypfolioCaptureError(
           'NOT_READY',
           'The SVG document is no longer available',
@@ -117,52 +184,7 @@ export function svgCapture({
           context.path,
         );
       }
-
-      const cloned = svg.cloneNode(true);
-      if (!isSvg(cloned)) {
-        throw new TypfolioCaptureError(
-          'CAPTURE_FAILED',
-          `Capture ${context.captureId} could not clone its SVG`,
-          context.captureId,
-          context.path,
-        );
-      }
-      const originals: Element[] = [svg, ...svg.querySelectorAll('*')];
-      const copies: Element[] = [cloned, ...cloned.querySelectorAll('*')];
-      originals.forEach((original, index) => {
-        const copy = copies[index];
-        const computed = view.getComputedStyle(original);
-        if (hasStyle(copy)) {
-          for (const property of svgStyles) {
-            const value = computed.getPropertyValue(property);
-            if (value) copy.style.setProperty(property, value);
-          }
-          if (fontFamily && (original.localName === 'text' || original.localName === 'tspan')) {
-            copy.style.setProperty('font-family', fontFamily);
-          }
-        }
-        if (fontFamily && (original.localName === 'text' || original.localName === 'tspan')) {
-          copy.setAttribute('font-family', fontFamily);
-        }
-        for (const attribute of copy.attributes) {
-          copy.setAttribute(
-            attribute.name,
-            attribute.value.replace(/url\(["']?[^)#]*#([^)"' ]+)["']?\)/g, 'url(#$1)'),
-          );
-        }
-      });
-
-      for (const removable of cloned.querySelectorAll('script, foreignObject')) removable.remove();
-      for (const removableSelector of selectors) {
-        for (const removable of cloned.querySelectorAll(removableSelector)) removable.remove();
-      }
-      cloned.setAttribute('xmlns', svgNamespace);
-      cloned.setAttribute('width', String(bounds.width));
-      cloned.setAttribute('height', String(bounds.height));
-      if (!cloned.hasAttribute('viewBox')) {
-        cloned.setAttribute('viewBox', `0 0 ${bounds.width} ${bounds.height}`);
-      }
-      return encoder.encode(new view.XMLSerializer().serializeToString(cloned));
+      return serializeSvg(svg, serializeOptions);
     },
   });
 }

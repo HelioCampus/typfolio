@@ -10,6 +10,7 @@ import './styles.css';
 
 const DirectPage = lazy(() => import('./routes/DirectPage.tsx'));
 const WorkerPage = lazy(() => import('./routes/WorkerPage.tsx'));
+const ChartsPage = lazy(() => import('./routes/ChartsPage.tsx'));
 
 function LoadingPage() {
   return (
@@ -35,6 +36,7 @@ createRoot(rootElement).render(
         <Routes>
           <Route index element={<DirectPage />} />
           <Route path="workers" element={<WorkerPage />} />
+          <Route path="charts" element={<ChartsPage />} />
           <Route path="*" element={<Navigate replace to="/" />} />
         </Routes>
       </Suspense>

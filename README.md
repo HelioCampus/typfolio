@@ -47,12 +47,12 @@ const { bytes } = await compiler.compile({
 | Concern | What you get |
 |---|---|
 | Request model | `compile({ template, input, assets, pdf })`: template files, JSON input mounted at `/input.json`, binary assets, PDF options. Each job is isolated; nothing leaks between compiles |
-| Typed input | `PdfRequest<Input>` types the JSON you pass; validation stays with your own tools (Zod or otherwise) |
+| Typed, checked input | `defineTemplate` types each input from its schema and checks the data with it before compiling: any Standard Schema (Zod, Valibot, ArkType), Typfolio has no validator of its own. A shared part with data of its own, such as a header, is a partial with its own schema |
 | Editor completion | Templates import `@local/typfolio` and read `input(json.with("./report.schema.json"))`: at runtime that is the request input, in the editor it is a sample built from your JSON Schema, so `#data.` completes |
 | Build-time checks | `@typfolio/dev-tools` compiles a template against a *minimal* and a *full* sample of its schema, catching unknown fields and unguarded optional data before runtime |
 | Explicit resources | Fonts and the WASM are loaded from where you say; there is no implicit font CDN, no network access during compilation and no remote package downloads |
 | Workers | Keeps the UI responsive: bounded pool of web workers, FIFO queue, per-job `AbortSignal`, timeouts, hard cancellation by terminating the worker mid-compile, worker replacement and streaming batches |
-| React | `PdfProvider`, `usePdfCompilation`, `usePdfObjectUrl`: imperative, cancellation-safe state over either client |
+| React | `usePdf`: a PDF kept up to date with its data, like a query, with charts drawn at the PDF's size, over either client |
 | Browser capture | Turn a live chart (SVG) or DOM region (PNG via html2canvas) into a request asset with mandatory alt text, so what the user sees on screen lands in the PDF; only possible because compilation happens in the page |
 | Reproducible build | The compiler is built from a pinned upstream revision with pinned Rust and wasm-bindgen, path-remapped, with a provenance file whose hashes the tests verify |
 
@@ -86,7 +86,7 @@ The compiler never touches the host file system or the network. Everything a com
 | [`@typfolio/core`](./packages/core/README.md) | Compilation of template files, JSON input and assets into PDF bytes and diagnostics. Subpaths: `/capture`, `/capture/svg`, `/capture/dom` (browser asset capture), kept out of the main entry |
 | [`@typfolio/dev-tools`](./packages/dev-tools/README.md) | Dev-time tools, installed as a devDependency and never needed at runtime: template checks against schema samples, and `inspectPdf` (optional `pdfjs-dist` peer) to report a compiled PDF's structure for tests |
 | [`@typfolio/workers`](./packages/workers/README.md) | Module-worker execution: pools, queues, cancellation, timeouts, batches |
-| [`@typfolio/react`](./packages/react/README.md) | Headless provider and hooks, plus the `CaptureRegion` marker component |
+| [`@typfolio/react`](./packages/react/README.md) | `usePdf`, with charts drawn at the PDF's size, and the `CaptureRegion` marker component |
 | [`@typfolio/wasm`](./packages/wasm/README.md) | The generated compiler binary, its bindings, the upstream licence and the build provenance; no hand-written code |
 
 Core has no runtime dependency other than `@typfolio/wasm`. `html2canvas` (DOM capture) is an optional peer dependency and is never bundled unless you import the DOM adapter.
@@ -235,7 +235,8 @@ Typfolio asks the compiler for tagged PDF by default and for PDF/UA-1 or PDF/A w
 
 ## Documentation
 
-- [docs/template-authoring.md](./docs/template-authoring.md): template folders, `@local/typfolio`, editor completion, build-time checks, typed requests, the folder loader.
+- [docs/template-authoring.md](./docs/template-authoring.md): template folders, `@local/typfolio`, templates with partials, editor completion, build-time checks, typed requests, the folder loader.
+- [docs/errors.md](./docs/errors.md): error and diagnostic codes, and what to do about each.
 - [docs/compiler-build.md](./docs/compiler-build.md): the pinned compiler build, rebuild and test commands, compatibility and limits.
 - Package READMEs: [`core`](./packages/core/README.md), [`workers`](./packages/workers/README.md), [`react`](./packages/react/README.md), [`wasm`](./packages/wasm/README.md).
 
@@ -261,7 +262,7 @@ npm run test:browser   # builds and serves the production worker smoke test for 
 
 Example dev servers (details in [examples/README.md](./examples/README.md)):
 
-- `npm run dev:react`: routed Vite React app with direct-core and worker-backed pages over the same components.
+- `npm run dev:react`: routed Vite React app with direct-core and worker-backed pages over the same components, and a Charts page that draws charts for the PDF with `useRenderedAssets`.
 - `npm run dev:pretext`: two [pretext](https://github.com/chenglou/pretext) demos rendered as PDFs; pretext lays out the text in the browser and Typst draws the result.
 - `npm run dev:capture`: browser smoke page for the SVG and DOM capture adapters.
 

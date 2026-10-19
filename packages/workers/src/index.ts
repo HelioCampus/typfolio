@@ -1,9 +1,9 @@
-import type { PdfRequest, PdfResult } from '@typfolio/core';
+import type { AnyPdfRequest, DocumentsRequest, PdfRequest, PdfResult } from '@typfolio/core';
 import * as Effect from 'effect/Effect';
 import * as Layer from 'effect/Layer';
 import * as ManagedRuntime from 'effect/ManagedRuntime';
 import { decodeRuntimeMessage, protocolVersion, type HostMessage } from './protocol.js';
-import { isSnapshot, snapshotRequest, transferableBuffers } from './snapshot.js';
+import { isSnapshot, snapshotRequest, snapshotValidation, transferableBuffers } from './snapshot.js';
 import {
   TypfolioWorkerError,
   type CreateWorkerClientOptions,
@@ -309,12 +309,12 @@ export function createWorkerClient(options: CreateWorkerClientOptions): PdfWorke
 
   return {
     workerCount,
-    compile(request: PdfRequest<unknown>, compileOptions: WorkerCompileOptions = {}): Promise<PdfResult> {
+    compile(request: AnyPdfRequest, compileOptions: WorkerCompileOptions = {}): Promise<PdfResult> {
       if (clientDisposed) return Promise.reject(new TypfolioWorkerError('DISPOSED', 'The worker client is disposed'));
       if (compileOptions.signal?.aborted) {
         return Promise.reject(new TypfolioWorkerError('ABORTED', 'Compilation was cancelled', [], { cause: compileOptions.signal.reason }));
       }
-      let captured: PdfRequest<unknown>;
+      let captured: PdfRequest<unknown> | DocumentsRequest;
       let duration: number | undefined;
       try {
         // A snapshot (from compileBatch) is already client-owned; copying it again would copy every asset twice.
@@ -324,6 +324,11 @@ export function createWorkerClient(options: CreateWorkerClientOptions): PdfWorke
         return Promise.reject(error);
       }
       let program = compileJob(captured);
+      const validation = snapshotValidation(captured);
+      if (validation) {
+        const checked = captured;
+        program = Effect.flatMap(Effect.tryPromise({ try: () => validation, catch: error => error as TypfolioWorkerError }), () => compileJob(checked));
+      }
       if (duration !== undefined) {
         program = Effect.timeoutOrElse(program, {
           duration,

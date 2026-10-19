@@ -34,3 +34,5 @@ export function packageMounts(input: Uint8Array): [string, Uint8Array][] {
 
 /** `sys.inputs` entry that tells the helper it is running under Typfolio. */
 export const runtimeMarker: [string, string] = ['typfolio', version];
+/** Set when the request mounts documents: `input(json.with(path))` then reads the data mounted at `path`. */
+export const documentsMarker: [string, string] = ['typfolio-inputs', 'documents'];

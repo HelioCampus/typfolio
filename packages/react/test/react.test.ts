@@ -4,13 +4,11 @@ import { JSDOM } from 'jsdom';
 import { createElement } from 'react';
 import { renderToString } from 'react-dom/server';
 import { act, render } from '@testing-library/react';
-import type { PdfRequest, PdfResult } from '@typfolio/core';
-import {
-  PdfProvider,
-  usePdfCompilation,
-  usePdfObjectUrl,
-} from '../dist/index.js';
-import type { PdfCompilation, UsePdfCompilationOptions } from '../dist/index.js';
+import type { AnyPdfRequest, PdfRequest, PdfResult } from '@typfolio/core';
+// usePdf's internals: the compile lifecycle and the object URL it shows.
+import { usePdfCompilation } from '../dist/compilation.js';
+import type { PdfCompilation, UsePdfCompilationOptions } from '../dist/compilation.js';
+import { usePdfObjectUrl } from '../dist/object-url.js';
 
 const dom = new JSDOM('<!doctype html><html><body></body></html>', { url: 'https://typfolio.test/' });
 globalThis.window = dom.window;
@@ -34,7 +32,7 @@ const result = (title: string): PdfResult => ({
 });
 
 interface FakeCall {
-  request: PdfRequest<unknown>;
+  request: AnyPdfRequest;
   signal: AbortSignal | undefined;
   resolve: (value: PdfResult) => void;
   reject: (reason?: unknown) => void;
@@ -44,7 +42,7 @@ interface LifecycleEvent {
   type: string;
   value?: PdfResult;
   error?: unknown;
-  input?: PdfRequest<unknown>;
+  input?: AnyPdfRequest;
 }
 
 // What the hooks do with their `PdfClient`: it records every call and settles it when the test says so.
@@ -52,7 +50,7 @@ class FakeClient {
   calls: FakeCall[] = [];
   disposals = 0;
 
-  compile(value: PdfRequest<unknown>, options: { signal?: AbortSignal } = {}): Promise<PdfResult> {
+  compile(value: AnyPdfRequest, options: { signal?: AbortSignal } = {}): Promise<PdfResult> {
     return new Promise((resolve, reject) => {
       const call = { request: value, signal: options.signal, resolve, reject };
       this.calls.push(call);
@@ -71,10 +69,10 @@ test('manual compilation exposes state, diagnostics, and stable actions', async 
   const client = new FakeClient();
   let current!: PdfCompilation;
   function Harness() {
-    current = usePdfCompilation();
+    current = usePdfCompilation({ client });
     return null;
   }
-  const view = render(createElement(PdfProvider, { client }, createElement(Harness)));
+  const view = render(createElement(Harness));
   const actions = {
     compile: current.compile,
     cancel: current.cancel,
@@ -119,11 +117,7 @@ test('lifecycle callbacks follow the latest visible compilation without changing
     current = usePdfCompilation(options);
     return null;
   }
-  const component = (options: UsePdfCompilationOptions) => createElement(
-    PdfProvider,
-    { client },
-    createElement(Harness, { options }),
-  );
+  const component = (options: Omit<UsePdfCompilationOptions, 'client'>) => createElement(Harness, { options: { ...options, client } });
   const view = render(component({
     onSuccess: value => staleEvents.push(value),
   }));
@@ -213,10 +207,10 @@ test('a newer manual request cancels the old request and owns the visible result
   const client = new FakeClient();
   let current!: PdfCompilation;
   function Harness() {
-    current = usePdfCompilation();
+    current = usePdfCompilation({ client });
     return null;
   }
-  const view = render(createElement(PdfProvider, { client }, createElement(Harness)));
+  const view = render(createElement(Harness));
 
   let first!: Promise<PdfResult | Error>;
   let second!: Promise<PdfResult>;
@@ -241,10 +235,10 @@ test('recompilation preserves the latest result through failure, cancellation, a
   const client = new FakeClient();
   let current!: PdfCompilation;
   function Harness() {
-    current = usePdfCompilation();
+    current = usePdfCompilation({ client });
     return null;
   }
-  const view = render(createElement(PdfProvider, { client }, createElement(Harness)));
+  const view = render(createElement(Harness));
 
   let initial!: Promise<PdfResult>;
   await act(async () => {
@@ -294,10 +288,10 @@ test('unmount cancels hook-owned work without disposing the injected client', as
   const client = new FakeClient();
   let current!: PdfCompilation;
   function Harness() {
-    current = usePdfCompilation();
+    current = usePdfCompilation({ client });
     return null;
   }
-  const view = render(createElement(PdfProvider, { client }, createElement(Harness)));
+  const view = render(createElement(Harness));
   let pending!: Promise<PdfResult | Error>;
   await act(async () => {
     pending = current.compile(request('Unmount')).catch((error: Error) => error);
@@ -354,14 +348,14 @@ test('the PDF object URL hook creates exact blobs and revokes replaced URLs', ()
   }
 });
 
-test('the provider and hooks render on the server without starting work', () => {
+test('the hooks render on the server without starting work', () => {
   const client = new FakeClient();
   function Harness() {
-    const compilation = usePdfCompilation();
+    const compilation = usePdfCompilation({ client });
     const url = usePdfObjectUrl(result('Server render'));
     return createElement('span', null, compilation.status, url);
   }
-  const html = renderToString(createElement(PdfProvider, { client }, createElement(Harness)));
+  const html = renderToString(createElement(Harness));
   assert.equal(html, '<span>idle</span>');
   assert.equal(client.calls.length, 0);
 });

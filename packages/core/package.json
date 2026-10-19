@@ -1,6 +1,6 @@
 {
   "name": "@typfolio/core",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Framework-independent Typst PDF compiler for the browser and Node, running on WebAssembly",
   "type": "module",
   "license": "Apache-2.0",
@@ -13,6 +13,7 @@
   "homepage": "https://github.com/HelioCampus/typfolio#readme",
   "bugs": { "url": "https://github.com/HelioCampus/typfolio/issues" },
   "files": ["dist", "typst-packages", "README.md"],
+  "types": "./dist/index.d.ts",
   "exports": {
     ".": { "types": "./dist/index.d.ts", "import": "./dist/index.js" },
     "./capture": { "types": "./dist/capture.d.ts", "import": "./dist/capture.js" },
@@ -20,8 +21,16 @@
     "./capture/dom": { "types": "./dist/capture/dom.d.ts", "import": "./dist/capture/dom.js" },
     "./internal": { "types": "./dist/internal.d.ts", "import": "./dist/internal.js" }
   },
+  "typesVersions": {
+    "*": {
+      "capture": ["./dist/capture.d.ts"],
+      "capture/svg": ["./dist/capture/svg.d.ts"],
+      "capture/dom": ["./dist/capture/dom.d.ts"],
+      "internal": ["./dist/internal.d.ts"]
+    }
+  },
   "dependencies": {
-    "@typfolio/wasm": "0.1.0"
+    "@typfolio/wasm": "0.1.1"
   },
   "peerDependencies": {
     "html2canvas": "^1.4.1"

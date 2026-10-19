@@ -14,8 +14,19 @@ import {
 interface CapturedJob<Id> {
   readonly id: Id;
   readonly index: number;
-  readonly request: ReturnType<typeof snapshotRequest>;
+  readonly request?: ReturnType<typeof snapshotRequest>;
+  /** Data that failed its schema: this job's outcome is this error, and the rest of the batch runs. */
+  readonly rejected?: TypfolioWorkerError;
   readonly timeoutMs?: number;
+}
+
+function capture<Id>(job: PdfBatchJob<Id>, index: number): CapturedJob<Id> {
+  try {
+    return { id: job.id, index, request: snapshotRequest(job.request), timeoutMs: job.timeoutMs };
+  } catch (error) {
+    if (error instanceof TypfolioWorkerError && error.code === 'INVALID_INPUT') return { id: job.id, index, rejected: error };
+    throw error;
+  }
 }
 
 function cancelled<Id>(job: CapturedJob<Id>): PdfBatchOutcome<Id> {
@@ -34,6 +45,8 @@ const run = Effect.fnUntraced(function*<Id>(
   batchSignal?: AbortSignal,
 ): Effect.fn.Return<PdfBatchOutcome<Id>> {
   if (batchSignal?.aborted) return cancelled(job);
+  if (job.request === undefined) return { id: job.id, index: job.index, status: 'error', error: job.rejected! };
+  const request = job.request;
   return yield* Effect.tryPromise({
     try: effectSignal => {
       const controller = new AbortController();
@@ -43,7 +56,7 @@ const run = Effect.fnUntraced(function*<Id>(
       batchSignal?.addEventListener('abort', abortFromBatch, { once: true });
       if (effectSignal.aborted) abortFromEffect();
       if (batchSignal?.aborted) abortFromBatch();
-      return client.compile(job.request, {
+      return client.compile(request, {
         signal: controller.signal,
         timeoutMs: job.timeoutMs,
       }).finally(() => {
@@ -89,12 +102,7 @@ export function compileBatch<Id>(
   jobs: readonly PdfBatchJob<Id>[],
   options: PdfBatchOptions<Id> = {},
 ): AsyncIterable<PdfBatchOutcome<Id>> {
-  const captured: CapturedJob<Id>[] = jobs.map((job, index) => ({
-    id: job.id,
-    index,
-    request: snapshotRequest(job.request),
-    timeoutMs: job.timeoutMs,
-  }));
+  const captured: CapturedJob<Id>[] = jobs.map(capture);
 
   return (async function* stream(): AsyncGenerator<PdfBatchOutcome<Id>> {
     let progress = initialProgress<Id>(captured.length);

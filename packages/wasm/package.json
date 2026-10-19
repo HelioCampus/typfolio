@@ -1,6 +1,6 @@
 {
   "name": "@typfolio/wasm",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Typst compiler built to WebAssembly, with JavaScript bindings and build provenance, for @typfolio/core",
   "type": "module",
   "license": "Apache-2.0",
@@ -13,6 +13,7 @@
   "homepage": "https://github.com/HelioCampus/typfolio#readme",
   "bugs": { "url": "https://github.com/HelioCampus/typfolio/issues" },
   "files": ["generated", "NOTICE", "THIRD_PARTY_NOTICES.md", "THIRD_PARTY_LICENSES.md", "README.md"],
+  "types": "./generated/compiler.d.ts",
   "exports": {
     ".": { "types": "./generated/compiler.d.ts", "import": "./generated/compiler.js" },
     "./compiler.wasm": "./generated/compiler_bg.wasm",

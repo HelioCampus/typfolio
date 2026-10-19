@@ -1,6 +1,5 @@
-import type { Diagnostic, PdfClient, PdfRequest, PdfResult } from '@typfolio/core';
+import type { AnyPdfRequest, Diagnostic, PdfClient, PdfResult } from '@typfolio/core';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { usePdfClient } from './context.js';
 
 export type PdfCompilationStatus = 'idle' | 'compiling' | 'success' | 'error' | 'cancelled';
 
@@ -11,13 +10,13 @@ export interface PdfCompilationState {
 }
 
 export interface PdfCompilationCallbacks {
-  readonly onSuccess?: (result: PdfResult, request: PdfRequest<unknown>) => void;
-  readonly onError?: (error: unknown, request: PdfRequest<unknown>) => void;
-  readonly onCancel?: (error: Error, request: PdfRequest<unknown>) => void;
+  readonly onSuccess?: (result: PdfResult, request: AnyPdfRequest) => void;
+  readonly onError?: (error: unknown, request: AnyPdfRequest) => void;
+  readonly onCancel?: (error: Error, request: AnyPdfRequest) => void;
   readonly onSettled?: (
     result: PdfResult | undefined,
     error: unknown | undefined,
-    request: PdfRequest<unknown>,
+    request: AnyPdfRequest,
   ) => void;
 }
 
@@ -25,7 +24,9 @@ export interface PdfCompilationOptions extends PdfCompilationCallbacks {
   readonly signal?: AbortSignal;
 }
 
-export interface UsePdfCompilationOptions extends PdfCompilationCallbacks {}
+export interface UsePdfCompilationOptions extends PdfCompilationCallbacks {
+  readonly client: PdfClient;
+}
 
 export interface PdfCompilation extends PdfCompilationState {
   readonly diagnostics: readonly Diagnostic[];
@@ -35,14 +36,14 @@ export interface PdfCompilation extends PdfCompilationState {
   readonly isSuccess: boolean;
   readonly isError: boolean;
   readonly isCancelled: boolean;
-  readonly compile: (request: PdfRequest<unknown>, options?: PdfCompilationOptions) => Promise<PdfResult>;
+  readonly compile: (request: AnyPdfRequest, options?: PdfCompilationOptions) => Promise<PdfResult>;
   readonly cancel: (reason?: unknown) => void;
   readonly reset: () => void;
 }
 
 interface ActiveCompilation {
   readonly controller: AbortController;
-  readonly request: PdfRequest<unknown>;
+  readonly request: AnyPdfRequest;
   readonly options: PdfCompilationOptions;
 }
 
@@ -77,7 +78,7 @@ function notifySuccess(
   hookCallbacks: PdfCompilationCallbacks,
   callCallbacks: PdfCompilationCallbacks,
   result: PdfResult,
-  request: PdfRequest<unknown>,
+  request: AnyPdfRequest,
 ): void {
   notify(hookCallbacks.onSuccess, result, request);
   notify(callCallbacks.onSuccess, result, request);
@@ -89,7 +90,7 @@ function notifyError(
   hookCallbacks: PdfCompilationCallbacks,
   callCallbacks: PdfCompilationCallbacks,
   error: unknown,
-  request: PdfRequest<unknown>,
+  request: AnyPdfRequest,
 ): void {
   notify(hookCallbacks.onError, error, request);
   notify(callCallbacks.onError, error, request);
@@ -101,7 +102,7 @@ function notifyCancellation(
   hookCallbacks: PdfCompilationCallbacks,
   callCallbacks: PdfCompilationCallbacks,
   error: Error,
-  request: PdfRequest<unknown>,
+  request: AnyPdfRequest,
 ): void {
   notify(hookCallbacks.onCancel, error, request);
   notify(callCallbacks.onCancel, error, request);
@@ -113,8 +114,8 @@ function notifyCancellation(
  * Owns one logical compilation at a time. Starting a new call cancels the
  * previous call, and stale calls can never replace newer state.
  */
-export function usePdfCompilation(options: UsePdfCompilationOptions = {}): PdfCompilation {
-  const client = usePdfClient();
+export function usePdfCompilation(options: UsePdfCompilationOptions): PdfCompilation {
+  const { client } = options;
   const clientRef = useRef<PdfClient>(client);
   const optionsRef = useRef(options);
   const activeRef = useRef<ActiveCompilation | undefined>(undefined);
@@ -157,7 +158,7 @@ export function usePdfCompilation(options: UsePdfCompilationOptions = {}): PdfCo
   }, []);
 
   const compile = useCallback(async (
-    request: PdfRequest<unknown>,
+    request: AnyPdfRequest,
     options: PdfCompilationOptions = {},
   ): Promise<PdfResult> => {
     const previous = activeRef.current;

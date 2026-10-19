@@ -1,6 +1,6 @@
 {
   "name": "@typfolio/dev-tools",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Dev-time tools for Typfolio templates: schema-based template checks and PDF inspection (install as a devDependency)",
   "type": "module",
   "license": "Apache-2.0",
@@ -13,12 +13,18 @@
   "homepage": "https://github.com/HelioCampus/typfolio#readme",
   "bugs": { "url": "https://github.com/HelioCampus/typfolio/issues" },
   "files": ["dist", "README.md"],
+  "types": "./dist/index.d.ts",
   "exports": {
     ".": { "types": "./dist/index.d.ts", "import": "./dist/index.js" },
     "./pdf": { "types": "./dist/pdf.d.ts", "import": "./dist/pdf.js" }
   },
+  "typesVersions": {
+    "*": {
+      "pdf": ["./dist/pdf.d.ts"]
+    }
+  },
   "dependencies": {
-    "@typfolio/core": "^0.1.0"
+    "@typfolio/core": "^0.2.0"
   },
   "peerDependencies": {
     "pdfjs-dist": "^6.3.0"

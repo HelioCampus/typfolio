@@ -1,3 +1,4 @@
+import type { AnyPdfRequest, CheckedRequest } from './definition.js';
 import { bundledPackageSpec } from './typst-package.js';
 
 export type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue };
@@ -36,6 +37,9 @@ export interface PdfRequest<Input = JsonValue> {
   pdf?: PdfOptions;
 }
 
+/** A failure Typfolio recognises; `docs/errors.md` explains each and what to do. */
+export type DiagnosticCode = 'file-not-found' | 'missing-glyph';
+
 export interface Diagnostic {
   severity: 'error' | 'warning' | string;
   message: string;
@@ -43,7 +47,16 @@ export interface Diagnostic {
   /** Upstream range: zero-based line:column-line:column. */
   range?: string;
   package?: string;
+  /** Set on a failure Typfolio recognises; switch on it rather than on `message`. */
+  code?: DiagnosticCode;
+  /** `file-not-found`: the missing file, as an absolute virtual path. */
+  file?: string;
+  /** `missing-glyph`: the text none of the loaded fonts can display. */
+  text?: string;
 }
+
+/** The section of docs/errors.md that explains `code`. */
+export const errorLink = (code: DiagnosticCode) => `https://github.com/HelioCampus/typfolio/blob/main/docs/errors.md#${code}`;
 
 export interface PdfResult {
   bytes: Uint8Array;
@@ -52,7 +65,8 @@ export interface PdfResult {
 }
 
 export interface PdfClient {
-  compile(request: PdfRequest<unknown>, options?: { signal?: AbortSignal }): Promise<PdfResult>;
+  /** A plain request, or one for a template made with `defineTemplate`, type-checked against its `TemplateRequest`. */
+  compile<R extends AnyPdfRequest>(request: R & CheckedRequest<R>, options?: { signal?: AbortSignal }): Promise<PdfResult>;
 }
 
 export interface PdfCompiler extends PdfClient {
@@ -75,7 +89,8 @@ export const capabilities = Object.freeze({
   hardCancellation: false,
 } as const);
 
-export type ErrorCode = 'INITIALIZATION' | 'INVALID_REQUEST' | 'UNSUPPORTED_OPTION' | 'BUSY' | 'DISPOSED' | 'ABORTED' | 'COMPILATION' | 'ENGINE';
+/** `INVALID_INPUT`: a defined template's input, or a partial's data, does not match its schema. */
+export type ErrorCode = 'INITIALIZATION' | 'INVALID_REQUEST' | 'INVALID_INPUT' | 'UNSUPPORTED_OPTION' | 'BUSY' | 'DISPOSED' | 'ABORTED' | 'COMPILATION' | 'ENGINE';
 
 export class TypstPdfError extends Error {
   readonly name = 'TypstPdfError';
