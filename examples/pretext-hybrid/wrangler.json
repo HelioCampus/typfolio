@@ -2,6 +2,12 @@
   "$schema": "../../node_modules/wrangler/config-schema.json",
   "name": "typfolio-demos",
   "compatibility_date": "2026-10-23",
+  "routes": [
+    {
+      "pattern": "typfolio.kerematam.com",
+      "custom_domain": true
+    }
+  ],
   "dev": {
     "ip": "127.0.0.1",
     "port": 4190
