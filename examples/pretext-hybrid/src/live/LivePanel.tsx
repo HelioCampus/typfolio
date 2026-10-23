@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
+import { useCallback, useEffect, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react';
 import type { PdfDocument } from '@typfolio/core';
 import type { FontUrls } from '../assets.ts';
 import { ModeSwitch, ViewerToolbar, type PreviewMode } from './chrome.tsx';
 import { ProofBar, usePdfBytesUrl } from './proof.tsx';
+import { pointerToPage } from './pointer.ts';
 import type { Captured, LiveSession, LiveStats } from './session.ts';
 
 export type LiveStatus = 'starting' | 'running' | 'error';
@@ -13,14 +14,15 @@ const POOL_SIZES = [1, 2, 3, 4] as const;
 
 interface LiveSwitchProps {
   readonly checked: boolean;
+  readonly disabled?: boolean;
   readonly onChange: (checked: boolean) => void;
 }
 
 /** The "Live PDF mode" toggle shown in a route's output header. */
-export function LiveSwitch({ checked, onChange }: LiveSwitchProps) {
+export function LiveSwitch({ checked, disabled, onChange }: LiveSwitchProps) {
   return (
     <label className="switch">
-      <input checked={checked} onChange={event => onChange(event.target.checked)} role="switch" type="checkbox" />
+      <input checked={checked} disabled={disabled} onChange={event => onChange(event.target.checked)} role="switch" type="checkbox" />
       <span aria-hidden="true" className="switch-track" />
       Live PDF mode
     </label>
@@ -48,6 +50,8 @@ export interface CanvasInteraction {
 
 interface LivePanelProps<T> {
   readonly interaction?: CanvasInteraction;
+  /** Page-level content placed over the preview, outside the generated PDF. */
+  readonly overlay?: ReactNode;
   /** Shown in the Viewer toolbar, e.g. `ascii-art.pdf`. */
   readonly documentName: string;
   /** File name for "Download frame". */
@@ -56,6 +60,7 @@ interface LivePanelProps<T> {
   /** PDF page width / height. */
   readonly aspect: number;
   readonly maxWidth: number;
+  readonly initialZoom?: number;
   readonly buildDocument: (frame: T, burn: number) => PdfDocument;
   /**
    * Resolves with the next frame to capture. Called whenever a pool slot is
@@ -70,6 +75,7 @@ interface LivePanelProps<T> {
 
 interface NativeViewProps {
   readonly getFrame: () => { readonly bytes: Uint8Array } | undefined;
+  readonly overlay?: ReactNode;
 }
 
 /**
@@ -77,7 +83,7 @@ interface NativeViewProps {
  * it re-instantiates the viewer and resets its state), so it shows a snapshot of
  * the latest frame that is refreshed on demand, or on a slow fixed cadence.
  */
-function NativeView({ getFrame }: NativeViewProps) {
+function NativeView({ getFrame, overlay }: NativeViewProps) {
   const [snapshot, setSnapshot] = useState<Uint8Array | undefined>(() => getFrame()?.bytes);
   const [auto, setAuto] = useState(false);
   const url = usePdfBytesUrl(snapshot);
@@ -104,6 +110,7 @@ function NativeView({ getFrame }: NativeViewProps) {
       </div>
       <div className="native-frame">
         {url === undefined ? <div className="pdf-empty"><p>No frame yet.</p></div> : <iframe src={`${url}#view=Fit`} title="Chrome's PDF viewer" />}
+        {overlay}
       </div>
       <p className="native-caption">
         Chrome's built-in viewer owns pointer input and cannot be re-pointed every frame without flickering and
@@ -136,14 +143,15 @@ export function LivePanel<T>(props: LivePanelProps<T>) {
   const [poolSize, setPoolSize] = useState(2);
   const [load, setLoad] = useState<number>(0);
   const [demand, setDemand] = useState(false);
-  const [mode, setMode] = useState<PreviewMode>('fast');
-  const [zoom, setZoom] = useState(1);
+  const [mode, setMode] = useState<PreviewMode>('viewer');
+  const [zoom, setZoom] = useState(props.initialZoom ?? 0.5);
   const [fitPx, setFitPx] = useState(0);
   const [pages, setPages] = useState(1);
   const backdropRef = useRef<HTMLDivElement>(null);
   const [status, setStatus] = useState<LiveStatus>('starting');
   const [error, setError] = useState<string>();
   const [stats, setStats] = useState<LiveStats>();
+  const [attempt, setAttempt] = useState(0);
 
   useEffect(() => {
     latest.current.onStatus?.(status);
@@ -172,6 +180,11 @@ export function LivePanel<T>(props: LivePanelProps<T>) {
         buildDocument: (frame, burn) => latest.current.buildDocument(frame, burn),
         acquireFrame: signal => latest.current.acquireFrame(signal, demand),
         onStats: setStats,
+        onError: cause => {
+          if (cancelled) return;
+          setStatus('error');
+          setError(cause instanceof Error ? cause.message : String(cause));
+        },
       });
       if (cancelled) {
         await created.dispose();
@@ -192,7 +205,7 @@ export function LivePanel<T>(props: LivePanelProps<T>) {
       latest.current.onActiveChange?.(undefined);
       void session?.dispose();
     };
-  }, [fonts, poolSize, load, demand]);
+  }, [fonts, poolSize, load, demand, attempt]);
 
   const getFrame = useCallback(() => sessionRef.current?.latest(), []);
 
@@ -228,9 +241,10 @@ export function LivePanel<T>(props: LivePanelProps<T>) {
   }, [mode, zoom, fitPx, props.maxWidth]);
 
   const toStage = (event: ReactPointerEvent<HTMLCanvasElement>, interaction: CanvasInteraction) => {
-    const rect = event.currentTarget.getBoundingClientRect();
-    const factor = rect.width / interaction.stageWidth;
-    return { x: (event.clientX - rect.left) / factor, y: (event.clientY - rect.top) / factor };
+    return pointerToPage(event, event.currentTarget.getBoundingClientRect(), {
+      width: interaction.stageWidth,
+      height: interaction.stageWidth / aspect,
+    });
   };
   const canvasHandlers = props.interaction === undefined ? {} : {
     onPointerDown(event: ReactPointerEvent<HTMLCanvasElement>) {
@@ -285,10 +299,14 @@ export function LivePanel<T>(props: LivePanelProps<T>) {
               {...canvasHandlers}
               onPointerCancel={canvasHandlers.onPointerUp}
             />
+            {mode !== 'native' ? props.overlay : null}
             {status !== 'running' || stats === undefined ? (
               <div className="pdf-empty live-overlay">
                 {status === 'error' ? (
-                  <p>{error}</p>
+                  <>
+                    <p>{error}</p>
+                    <button className="button" onClick={() => setAttempt(value => value + 1)} type="button">Restart live PDF</button>
+                  </>
                 ) : (
                   <>
                     <span className="spinner" aria-hidden="true" />
@@ -300,7 +318,7 @@ export function LivePanel<T>(props: LivePanelProps<T>) {
           </div>
         </div>
       </div>
-      {mode === 'native' ? <NativeView getFrame={getFrame} /> : null}
+      {mode === 'native' ? <NativeView getFrame={getFrame} overlay={props.overlay} /> : null}
       <ProofBar fileName={props.downloadName} getFrame={getFrame} />
       <div className="live-controls">
         <div className="segmented" role="group" aria-label="Worker pool size">

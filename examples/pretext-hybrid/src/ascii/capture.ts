@@ -1,6 +1,7 @@
 import { defineTemplate, type TemplateDefinition } from '@typfolio/core';
 import {
   ART_PADDING,
+  CELL_WIDTH,
   COLS,
   FONT_SIZE,
   LINE_HEIGHT,
@@ -8,14 +9,13 @@ import {
   STAGE_H,
   STAGE_W,
   TARGET_ROW_W,
-  rowWidth,
   type Frame,
 } from './engine.ts';
 
 /** Palette colours shared by the live stage (CSS) and the Typst template. */
 export const COLORS = { background: '#07070c', ink: '#c4a35a' } as const;
 
-/** Merged space cells: `{t:"g"}` is a horizontal gap, `{t:"c"}` a placed glyph. */
+/** Measured placement: `{t:"g"}` is a horizontal gap, `{t:"c"}` a glyph. */
 type JsonCell =
   | { t: 'g'; w: number }
   | { t: 'c'; c: string; fw: number; a: number };
@@ -33,7 +33,7 @@ export interface AsciiFrameInput {
   background: string;
   ink: string;
   /** One entry per PDF page; a single capture has one, a flipbook several. */
-  frames: { lines: { padLeft: number; cells: JsonCell[] }[] }[];
+  frames: { lines: { cells: JsonCell[] }[] }[];
   /** Benchmark knob: iterations of a pure Typst script loop (no visual effect). */
   burn: number;
 }
@@ -41,31 +41,32 @@ export interface AsciiFrameInput {
 /** Round to 1/1000 px: enough for sub-pixel parity, keeps the JSON compact. */
 const r3 = (value: number): number => Math.round(value * 1000) / 1000;
 
-function frameLines(frame: Frame, spaceWidth: number): AsciiFrameInput['frames'][number] {
+function frameLines(frame: Frame): AsciiFrameInput['frames'][number] {
   return {
     lines: frame.rows.map(cells => {
       const out: JsonCell[] = [];
-      for (const cell of cells) {
-        if (cell === null) {
-          const last = out[out.length - 1];
-          if (last?.t === 'g') last.w = r3(last.w + spaceWidth);
-          else out.push({ t: 'g', w: r3(spaceWidth) });
-        } else {
-          out.push({ t: 'c', c: cell.entry.char, fw: cell.entry.weight, a: cell.alphaIndex / 10 });
-        }
+      let advance = 0;
+      for (const [index, cell] of cells.entries()) {
+        if (cell === null) continue;
+        // Keep the source grid's full width even when most cells are empty.
+        // Pretext's measured width centers each proportional glyph in its slot;
+        // wide edge glyphs stay inside the artwork border.
+        const x = Math.max(0, Math.min(
+          TARGET_ROW_W - cell.entry.width,
+          (index + 0.5) * CELL_WIDTH - cell.entry.width / 2,
+        ));
+        const gap = r3(x - advance);
+        if (gap !== 0) out.push({ t: 'g', w: gap });
+        out.push({ t: 'c', c: cell.entry.char, fw: cell.entry.weight, a: cell.alphaIndex / 10 });
+        advance = x + cell.entry.width;
       }
-      return {
-        // Same centering as the live panel: (maxW - rowW) / 2, from measured widths.
-        padLeft: r3((TARGET_ROW_W - rowWidth(cells, spaceWidth)) / 2),
-        cells: out,
-      };
+      return { cells: out };
     }),
   };
 }
 
 export function framesToInput(
   frames: readonly Frame[],
-  spaceWidth: number,
   baseline: number,
   burn = 0,
 ): AsciiFrameInput {
@@ -80,17 +81,17 @@ export function framesToInput(
     baseline: r3(baseline),
     background: COLORS.background,
     ink: COLORS.ink,
-    frames: frames.map(frame => frameLines(frame, spaceWidth)),
+    frames: frames.map(frameLines),
     burn,
   };
 }
 
 /**
- * Pretext decided the widths and the row offsets in JS. Typst does no line
- * breaking and no centering: it receives absolute coordinates and draws.
+ * Pretext measured the glyphs; JS centers them in a fixed grid. Typst does no
+ * line breaking and no centering: it receives the measured gaps and draws.
  *
- * Kerning and ligatures are disabled to match the live panel, where every
- * cell advance is the sum of independently measured glyph widths.
+ * Kerning and ligatures are disabled so each glyph retains its independently
+ * measured advance.
  */
 const asciiSource = String.raw`
 #let input = json("/frames.json")
@@ -125,10 +126,21 @@ const asciiSource = String.raw`
 
 #for (page, frame) in input.frames.enumerate() {
   if page > 0 { pagebreak() }
+  place(
+    top + left,
+    dx: input.padding * 1pt,
+    dy: input.padding * 1pt,
+    rect(
+      width: (input.pageW - 2 * input.padding) * 1pt,
+      height: (input.rows * input.lineHeight) * 1pt,
+      fill: none,
+      stroke: (paint: ink.transparentize(40%), thickness: 1pt),
+    ),
+  )
   for (index, row) in frame.lines.enumerate() {
     place(
       top + left,
-      dx: (input.padding + row.padLeft) * 1pt,
+      dx: input.padding * 1pt,
       dy: (input.padding + index * input.lineHeight + input.baseline) * 1pt,
       row-content(row),
     )

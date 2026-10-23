@@ -1,9 +1,23 @@
 <!doctype html>
 <html lang="en">
+<head>
 <meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Typfolio core browser smoke test</title>
+<link rel="stylesheet" href="./demo-header.css">
+</head>
+<body class="typfolio-demo-page">
+<header class="typfolio-header">
+  <a class="typfolio-brand" href="./index.html" aria-label="Typfolio home">
+    <span class="typfolio-mark" aria-hidden="true">T</span>
+    <span><strong>Typfolio</strong><small>Browser compiler demo</small></span>
+  </a>
+  <a class="typfolio-source" href="https://github.com/HelioCampus/typfolio" target="_blank" rel="noreferrer" aria-label="Typfolio on GitHub">GitHub ↗</a>
+</header>
+<main>
 <h1>Typfolio core browser smoke test</h1>
 <pre id="result" data-status="running">Compiling on the page and in a module worker...</pre>
+</main>
 <script type="module">
   import { runSmoke } from './smoke.js';
   const output = document.querySelector('#result');
@@ -23,4 +37,5 @@
     output.dataset.status = 'failed';
   } finally { worker?.terminate(); }
 </script>
+</body>
 </html>

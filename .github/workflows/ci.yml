@@ -267,6 +267,14 @@ jobs:
 
       - run: npm run test:browsers
 
+      - name: Upload the verified static demo site
+        uses: actions/upload-artifact@v7
+        with:
+          name: browser-demos-static
+          path: .build/pretext-hybrid/client/
+          if-no-files-found: error
+          retention-days: 7
+
       - name: Upload the Playwright report
         if: failure()
         uses: actions/upload-artifact@v7

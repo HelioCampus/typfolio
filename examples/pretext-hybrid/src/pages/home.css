@@ -1,0 +1,80 @@
+.home { --home-muted: #a7a3a2; }
+.home h2 { margin: 0; font: 400 30px/1.18 Georgia, serif; letter-spacing: -.02em; }
+.home a:focus-visible { outline: 2px solid var(--gold); outline-offset: 5px; }
+.home-hero { display: grid; grid-template-columns: 1.4fr 1fr; align-items: center; gap: 48px; padding: 64px 0 58px; }
+.home-hero .kicker { margin-bottom: 20px; }
+.home-hero h1 { margin-bottom: 22px; font: 400 clamp(44px, 5.4vw, 68px)/1.06 Georgia, serif; letter-spacing: -.04em; }
+.home-hero h1 em { color: var(--gold); font-weight: 400; }
+/* A light sweeps through "fast" every few seconds: the gradient is clipped to the glyphs and its position animated. The padding and negative margin keep the italic overhang inside the painted box. */
+.home-fast { padding: 0 .18em; margin: 0 -.18em; background: linear-gradient(118deg, var(--gold) 0 38%, #fff4cc 50%, var(--gold) 62% 100%) 100% 0 / 260% 100% no-repeat; -webkit-background-clip: text; background-clip: text; color: transparent; animation: home-flare 4.2s ease-in-out 1s infinite; }
+@keyframes home-flare { 0% { background-position: 100% 0; } 35%, 100% { background-position: 0 0; } }
+.home-lede { max-width: 490px; margin: 0; color: var(--home-muted); font-size: 17px; line-height: 1.7; }
+.home-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 22px; margin-top: 28px; font-size: 13px; }
+.home-cta { display: inline-flex; align-items: center; gap: 22px; padding: 13px 18px; border: 1px solid var(--gold); border-radius: 6px; background: var(--gold); color: #171208; text-decoration: none; font-weight: 600; }
+.home-cta:hover { background: #d6b66d; }
+.home-docs { color: var(--ink); text-decoration: none; }
+.home-docs:hover { color: var(--gold); }
+.home-docs span { margin-left: 6px; }
+.home-detail { margin: 20px 0 0; color: var(--home-muted); font-size: 11px; letter-spacing: .02em; }
+.home-document { justify-self: center; width: min(100%, 306px); margin: 0; }
+.home-paper { position: relative; padding: 24px 26px 16px; background: #ebe5d9; color: #252524; box-shadow: 9px 9px 0 #2b2930, 0 22px 50px #0005; transform: rotate(3deg); }
+.home-paper-masthead { display: flex; justify-content: space-between; align-items: center; padding-bottom: 13px; border-bottom: 1px solid #b8b0a0; }
+.home-paper-masthead span:first-child { font: 600 16px Georgia, serif; }
+.home-paper-masthead span:last-child { font: 9px ui-monospace, monospace; color: #6c655c; }
+.home-paper-overline { margin: 27px 0 9px; font-size: 8px; text-transform: uppercase; letter-spacing: .14em; color: #74613a; }
+.home-paper-title { margin: 0; font: 400 29px/1.05 Georgia, serif; letter-spacing: -.025em; }
+.home-paper-copy { margin: 14px 0 20px; font: 11px/1.6 Georgia, serif; color: #5e5a52; }
+.home-paper-table { display: grid; grid-template-columns: 1fr 1fr; font-size: 9px; }
+.home-paper-table span { padding: 7px 0; border-top: 1px solid #cfc7b8; }
+.home-paper-table span:nth-child(even) { text-align: right; font-family: ui-monospace, monospace; }
+.home-paper-footer { display: flex; justify-content: space-between; align-items: center; margin-top: 20px; color: #6c655c; font-size: 8px; }
+.home-paper-footer span:last-child { font: 600 18px Georgia, serif; }
+.home-document figcaption { display: flex; justify-content: center; align-items: center; gap: 14px; margin-top: 28px; color: var(--home-muted); font-size: 11px; }
+.home-document code { color: var(--gold); font-size: 11px; }
+.home-story { display: grid; grid-template-columns: 1fr 2fr; gap: 64px; padding: 30px 0 32px; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+.home-story p:not(.kicker) { margin: 0; color: var(--home-muted); font-size: 14px; line-height: 1.75; }
+.home-story p:not(.kicker) + p { margin-top: 10px; }
+.home-story strong { color: var(--ink); font-weight: 500; }
+.home-demos { padding-top: 34px; scroll-margin-top: 24px; }
+.home-section-heading { display: flex; justify-content: space-between; align-items: end; gap: 20px; margin-bottom: 22px; }
+.home-section-heading > p { margin: 0 0 3px; color: var(--home-muted); font-size: 12px; }
+.home-demo-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
+.home-demo { display: flex; flex-direction: column; padding: 23px; border: 1px solid var(--line); border-radius: 8px; color: var(--ink); background: var(--panel); text-decoration: none; transition: border-color .15s, background .15s; }
+.home-demo:hover { border-color: var(--gold); background: #1b1920; }
+.home-demo--featured { border-color: #c4a35a66; background: linear-gradient(135deg, #c4a35a15, #12121b 80%); }
+.home-demo-label { display: flex; justify-content: space-between; gap: 10px; color: var(--gold); font-size: 9px; text-transform: uppercase; letter-spacing: .09em; }
+.home-demo-label span:last-child { color: var(--home-muted); font-variant-numeric: tabular-nums; }
+.home-demo h3 { margin: 22px 0 10px; font: 400 24px/1.1 Georgia, serif; letter-spacing: -.02em; }
+.home-demo p { margin: 0 0 24px; color: var(--home-muted); font-size: 13px; line-height: 1.65; }
+.home-demo-open { display: flex; justify-content: space-between; gap: 10px; margin-top: auto; color: var(--gold); font-size: 12px; }
+.home-footer { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 12px; color: var(--home-muted); }
+
+@media (max-width: 900px) {
+  .home-hero { gap: 30px; padding-top: 44px; }
+  .home-hero h1 { font-size: 48px; }
+  .home-lede { font-size: 15px; }
+  .home-story { grid-template-columns: 1fr 1.7fr; gap: 30px; }
+  .home-demo { padding: 18px; }
+  .home-demo h3 { font-size: 22px; }
+}
+
+@media (max-width: 680px) {
+  .home-hero { grid-template-columns: 1fr; gap: 40px; padding: 40px 0 32px; }
+  .home-hero h1 { font-size: clamp(40px, 9vw, 54px); }
+  .home-document { width: 250px; }
+  .home-paper { padding: 20px 22px 14px; }
+  .home-paper-title { font-size: 25px; }
+  .home-story { grid-template-columns: 1fr; gap: 18px; }
+  .home-story h2 br { display: none; }
+  .home h2 { font-size: 27px; }
+  .home-section-heading { display: block; }
+  .home-section-heading > p { margin-top: 12px; }
+  .home-demo-grid { grid-template-columns: 1fr; }
+  .home-demo { padding: 22px; }
+  .home-demo h3 { margin-top: 18px; font-size: 25px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .home-demo { transition: none; }
+  .home-fast { animation: none; background: none; color: var(--gold); }
+}

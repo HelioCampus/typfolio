@@ -1,6 +1,6 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import { createCompiler, type PdfClient, type PdfCompiler } from '@typfolio/core';
-import { fontUrls, loadFonts, wasmUrl, type FontUrls } from './assets.ts';
+import { fontUrls, loadFonts, loadWasm, type FontUrls } from './assets.ts';
 
 type BoundaryState =
   | { readonly status: 'loading' }
@@ -32,8 +32,9 @@ export function CompilerBoundary({ children, label }: CompilerBoundaryProps) {
     };
 
     void (async () => {
-      await loadFonts();
-      const created = await createCompiler({ wasm: wasmUrl, fonts: fontUrls });
+      const [wasm] = await Promise.all([loadWasm(), loadFonts()]);
+      if (stopped) return;
+      const created = await createCompiler({ wasm, fonts: fontUrls });
       if (stopped) {
         dispose(created);
         return;

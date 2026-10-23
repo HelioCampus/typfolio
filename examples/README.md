@@ -16,4 +16,6 @@ The check builds both modes, compares each emitted WASM file with the provenance
 
 `npm run test:browsers` drives the capture smoke page, the Vite application, and the React routes (direct, workers and charts) in Chromium, Firefox, and WebKit; see `tests/browser`.
 
-`pretext-hybrid` ports two pretext demos to PDF: pretext lays the text out in the browser, the geometry travels as JSON input, and Typst only places and draws it. Run it with `npm run dev:pretext`; see its README.
+`pretext-hybrid` is a TanStack Start + TanStack Router app grouping two pretext demos (ASCII and Editorial) with a worker batch performance route at `/performance`. The batch demo generates 1000 synthetic reports by default, with live metrics, charts, PDF previews and worker sweeps. Run the shared app with `npm run dev:pretext`; `npm run preview:pretext` serves the built client files through Cloudflare's local static hosting emulator. The deployed app has no application server. See [its README](./pretext-hybrid/README.md) for build prerequisites, static deployment and the ready-to-upload CI artifact.
+
+Performance measurements exclude runtime schema validation: the React direct/worker comparison, Pretext captures and live mode, core browser timing fixture, and worker-copy benchmark explicitly set `validate: false`. JSON transport checks and the selected PDF export standards still apply.

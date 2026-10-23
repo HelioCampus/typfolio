@@ -297,7 +297,7 @@ npm run test:browser   # builds and serves the production worker smoke test for 
 Example dev servers (details in [examples/README.md](./examples/README.md)):
 
 - `npm run dev:react`: routed Vite React app with direct-core and worker-backed pages over the same components, and a Charts page that draws charts for the PDF with `useRenderedAssets`.
-- `npm run dev:pretext`: two [pretext](https://github.com/chenglou/pretext) demos rendered as PDFs; pretext lays out the text in the browser and Typst draws the result.
+- `npm run dev:pretext`: a Typfolio overview with links to the worker batch benchmark and two [pretext](https://github.com/chenglou/pretext) demos rendered as live PDFs; pretext lays out the text in the browser and Typst draws the result.
 - `npm run dev:capture`: browser smoke page for the SVG and DOM capture adapters.
 
 ## Status

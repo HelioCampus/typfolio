@@ -1,30 +1,28 @@
 import type { ReactNode } from 'react';
-import { NavLink } from 'react-router-dom';
+import { Link } from '@tanstack/react-router';
+import { Topbar } from './Topbar.tsx';
 
 interface ShellProps {
   readonly eyebrow: string;
   readonly title: string;
   readonly lede: string;
   readonly wide?: boolean;
+  readonly section?: 'pretext' | 'performance';
   readonly children: ReactNode;
 }
 
-export function Shell({ eyebrow, title, lede, wide = false, children }: ShellProps) {
+export function Shell({ eyebrow, title, lede, wide = false, section = 'pretext', children }: ShellProps) {
   return (
     <div className={wide ? 'shell shell--wide' : 'shell'}>
-      <header className="topbar">
-        <span className="brand"><i>T</i> Typfolio <small>× pretext</small></span>
-        <nav aria-label="Demos">
-          <NavLink className={({ isActive }) => (isActive ? 'active' : undefined)} end to="/">
-            Variable ASCII
-          </NavLink>
-          <NavLink className={({ isActive }) => (isActive ? 'active' : undefined)} to="/editorial">
-            Editorial engine
-          </NavLink>
-        </nav>
-      </header>
+      <Topbar section={section} />
       <main>
         <section className="intro">
+          {section === 'pretext' ? (
+            <nav className="pretext-nav" aria-label="Pretext examples">
+              <Link activeProps={{ className: 'active' }} to="/ascii">Variable ASCII</Link>
+              <Link activeProps={{ className: 'active' }} to="/editorial">Editorial engine</Link>
+            </nav>
+          ) : null}
           <p className="kicker">{eyebrow}</p>
           <h1>{title}</h1>
           <p className="lede">{lede}</p>
@@ -32,7 +30,9 @@ export function Shell({ eyebrow, title, lede, wide = false, children }: ShellPro
         {children}
       </main>
       <footer>
-        pretext (MIT) lays out · Typst renders · Libertinus Serif (OFL) on both sides
+        {section === 'pretext'
+          ? 'pretext (MIT) lays out · Typst renders · Libertinus Serif (OFL) on both sides'
+          : 'Typst renders · Web Workers compile · Synthetic data stays in your browser'}
       </footer>
     </div>
   );

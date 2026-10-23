@@ -1,0 +1,13 @@
+{
+  "$schema": "../../node_modules/wrangler/config-schema.json",
+  "name": "typfolio-demos",
+  "compatibility_date": "2026-10-23",
+  "dev": {
+    "ip": "127.0.0.1",
+    "port": 4190
+  },
+  "assets": {
+    "directory": "../../.build/pretext-hybrid/client",
+    "not_found_handling": "404-page"
+  }
+}

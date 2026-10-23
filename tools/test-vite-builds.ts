@@ -195,6 +195,7 @@ build('examples/vite-app/vite.config.ts');
 build('examples/vite-library/vite.config.ts');
 build('examples/vite-react/vite.config.ts');
 build('examples/pretext-hybrid/vite.config.ts');
+await import('./check-static-demo.ts');
 build('examples/vite-capture/vite.config.ts', '--mode', 'svg');
 build('examples/vite-capture/vite.config.ts', '--mode', 'dom');
 await verifyReactBoundary();
@@ -205,7 +206,7 @@ console.log(JSON.stringify({
   app: await verify('vite-app'),
   library: await verify('vite-library'),
   reactRouted: await verify('vite-react'),
-  pretextHybrid: await verify('pretext-hybrid', { largeScripts: [/pdf\.worker/] }),
+  pretextHybrid: await verify('pretext-hybrid/client', { largeScripts: [/pdf\.worker/] }),
   captureDom: captureBuilds,
   devTools: devToolsBuild,
   wasmExternal: true,

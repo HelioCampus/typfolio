@@ -1,7 +1,7 @@
 /**
  * Shared live PDF mode (used by both routes): continuously captures frames, compiles them on a pool of
  * `@typfolio/workers` compiler workers and paints the PDF with pdf.js, so the
- * PDF preview animates while the main thread stays free for the live DOM.
+ * PDF preview animates while the main thread stays free for layout and pointer input.
  *
  * Scheduling:
  * - The pool is `createWorkerClient({ workerCount })`. The session runs one
@@ -24,7 +24,7 @@ import { createWorkerClient, type PdfWorkerClient } from '@typfolio/workers';
 import * as pdfjs from 'pdfjs-dist';
 import pdfjsWorkerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
 import type { PdfDocument } from '@typfolio/core';
-import { wasmUrl } from '../assets.ts';
+import { loadWasm } from '../assets.ts';
 
 export interface LiveStats {
   readonly poolSize: number;
@@ -65,6 +65,7 @@ export interface LiveSessionOptions<T> {
   /** Resolves with the next frame to capture, or `undefined` once `signal` aborts. */
   readonly acquireFrame: (signal: AbortSignal) => Promise<Captured<T> | undefined>;
   readonly onStats: (stats: LiveStats) => void;
+  readonly onError: (error: unknown) => void;
 }
 
 /** The most recently presented frame: the exact bytes Typst produced. Only the latest is retained. */
@@ -104,13 +105,15 @@ interface Compiled {
 }
 
 export async function createLiveSession<T>(options: LiveSessionOptions<T>): Promise<LiveSession> {
+  const warmupStartedAt = performance.now();
+  const wasm = await loadWasm();
   // One shared pdf.js worker: without it every getDocument() spawns (and parses) a new 1.2 MB worker.
   const pdfWorker = new pdfjs.PDFWorker({
     // The shipped typings declare `port` as null although a Worker is accepted.
     port: new Worker(pdfjsWorkerUrl, { type: 'module' }) as unknown as null,
   });
   const client: PdfWorkerClient = createWorkerClient({
-    compiler: { wasm: wasmUrl, fonts: options.fonts },
+    compiler: { wasm, fonts: options.fonts },
     workerCount: options.poolSize,
     // One lane per worker, so a job never waits in the queue.
     queueLimit: options.poolSize,
@@ -118,13 +121,12 @@ export async function createLiveSession<T>(options: LiveSessionOptions<T>): Prom
   });
 
   const abort = new AbortController();
-  const warmupStartedAt = performance.now();
   try {
     // Workers start lazily: one concurrent warm-up compile per worker instantiates every WASM module.
     const warmFrame = await options.acquireFrame(abort.signal);
     if (warmFrame !== undefined) {
       const warmDocument = () => options.buildDocument(warmFrame.frame, options.burn);
-      await Promise.all(Array.from({ length: options.poolSize }, () => client.compile(warmDocument())));
+      await Promise.all(Array.from({ length: options.poolSize }, () => client.compile(warmDocument(), { validate: false })));
     }
   } catch (error) {
     pdfWorker.destroy();
@@ -146,6 +148,13 @@ export async function createLiveSession<T>(options: LiveSessionOptions<T>): Prom
   let running = false;
   let stopped = false;
   let lanes: Promise<void>[] = [];
+
+  const fail = (error: unknown): void => {
+    if (!running) return;
+    running = false;
+    abort.abort('live PDF pipeline failed');
+    options.onError(error);
+  };
 
   const layout: number[] = [];
   const compile: number[] = [];
@@ -257,7 +266,7 @@ export async function createLiveSession<T>(options: LiveSessionOptions<T>): Prom
       dropped++; // the pending PDF was superseded before it was painted
     }
     pending = item;
-    if (!presenting) void present();
+    if (!presenting) void present().catch(fail);
   };
 
   let nextSeq = 0;
@@ -274,7 +283,7 @@ export async function createLiveSession<T>(options: LiveSessionOptions<T>): Prom
       const compileStartedAt = performance.now();
       let bytes: Uint8Array;
       try {
-        bytes = (await client.compile(document, { signal: abort.signal })).bytes;
+        bytes = (await client.compile(document, { signal: abort.signal, validate: false })).bytes;
       } catch (error) {
         if (!running) return;
         throw error;
@@ -297,11 +306,7 @@ export async function createLiveSession<T>(options: LiveSessionOptions<T>): Prom
     start() {
       if (running || stopped) return;
       running = true;
-      lanes = Array.from({ length: options.poolSize }, () =>
-        lane().catch(error => {
-          if (running) console.error('Live PDF lane failed', error);
-        }),
-      );
+      lanes = Array.from({ length: options.poolSize }, () => lane().catch(fail));
     },
     async dispose() {
       if (stopped) return;

@@ -5,6 +5,7 @@ import { defineConfig, devices } from '@playwright/test';
 const smokePort = 4278;
 const reactPort = 4279;
 const capturePort = 4291;
+const pretextPort = 4293;
 const root = fileURLToPath(new URL('../../', import.meta.url));
 // A 32 MB WASM module is compiled once per realm, so a cold start is slow on a busy machine.
 const startTimeout = 180_000;
@@ -25,13 +26,22 @@ export default defineConfig({
     // The browsers see the same pages every run; keep their caches out of the timings.
     serviceWorkers: 'block',
   },
-  metadata: { smokePort, reactPort, capturePort },
+  metadata: { smokePort, reactPort, capturePort, pretextPort },
   projects: [
     { name: 'chromium', use: { ...devices['Desktop Chrome'] } },
     { name: 'firefox', use: { ...devices['Desktop Firefox'] } },
     { name: 'webkit', use: { ...devices['Desktop Safari'] } },
   ],
   webServer: [
+    {
+      // Cloudflare serves only client assets here; the Start server bundle is never loaded.
+      command: `npx wrangler dev --local --config examples/pretext-hybrid/wrangler.json --ip 127.0.0.1 --port ${pretextPort} --inspector-port 0 --show-interactive-dev-session=false`,
+      cwd: root,
+      env: { WRANGLER_SEND_METRICS: 'false', BROWSER: 'none' },
+      url: `http://127.0.0.1:${pretextPort}/`,
+      reuseExistingServer: false,
+      timeout: startTimeout,
+    },
     {
       // Serves fixtures/browser and the built examples/vite-app (.build/vite-app).
       command: 'node tools/serve-smoke.ts',

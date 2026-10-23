@@ -87,6 +87,8 @@ export function App({ profile, client }: AppProps) {
   const [durationMs, setDurationMs] = useState<number>();
   const pdf = usePdf(report(submitted as ReportInput), {
     client,
+    // Keep the direct/worker timing comparison free of runtime schema validation.
+    validate: false,
     // Disabled until the first submit: nothing is checked or compiled before there is a brief.
     enabled: submitted !== undefined,
     pdf: pdfOptions,

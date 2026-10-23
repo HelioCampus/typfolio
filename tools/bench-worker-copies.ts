@@ -72,8 +72,8 @@ function row(label: string, ms: number | undefined) {
 
 const assets = buildAssets();
 const document = bench({ title: 'Bench' });
-const resolved = resolveDocument(document, { assets }).request;
-const snapshotted = () => snapshotRequest(document, { assets });
+const resolved = resolveDocument(document, { assets, validate: false }).request;
+const snapshotted = () => snapshotRequest(document, { assets, validate: false });
 const transferList = (snapshot: ResolvedRequest) => typeof transferableBuffers === 'function'
   ? transferableBuffers(snapshot)
   : [...new Set(Object.values(snapshot.assets!).map(bytes => bytes.buffer as ArrayBuffer))];

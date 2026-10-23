@@ -8,6 +8,7 @@ interface StaticViewerProps {
   readonly name: string;
   readonly aspect: number;
   readonly maxWidth: number;
+  readonly initialZoom?: number;
   readonly onPages?: (pages: number) => void;
 }
 
@@ -15,10 +16,10 @@ interface StaticViewerProps {
  * Viewer chrome around a finished PDF: every page is rasterised by pdf.js and
  * stacked vertically on a gray backdrop (multi-page flipbooks scroll).
  */
-export default function StaticViewer({ bytes, name, aspect, maxWidth, onPages }: StaticViewerProps) {
+export default function StaticViewer({ bytes, name, aspect, maxWidth, initialZoom = 0.5, onPages }: StaticViewerProps) {
   const [pages, setPages] = useState(0);
   const [page, setPage] = useState(1);
-  const [zoom, setZoom] = useState(1);
+  const [zoom, setZoom] = useState(initialZoom);
   const [fitPx, setFitPx] = useState(0);
   const backdropRef = useRef<HTMLDivElement>(null);
   const canvases = useRef<(HTMLCanvasElement | null)[]>([]);
