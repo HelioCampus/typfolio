@@ -10,8 +10,12 @@ export default defineConfig({
     tanstackStart({
       spa: {
         enabled: true,
-        prerender: { outputPath: '/index.html' },
+        maskPath: '/ascii',
+        prerender: { outputPath: '/_shell.html' },
       },
+      // Keep the homepage as real HTML; browser-only demos use the separate SPA shell.
+      prerender: { autoStaticPathsDiscovery: false, crawlLinks: false },
+      pages: [{ path: '/', prerender: { enabled: true } }],
     }),
     react(),
   ],

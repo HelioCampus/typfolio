@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react';
 import { Link } from '@tanstack/react-router';
-import '../../../fixtures/browser/demo-header.css';
+import { Topbar } from './Topbar.tsx';
 
 interface ShellProps {
   readonly eyebrow: string;
@@ -14,28 +14,12 @@ interface ShellProps {
 export function Shell({ eyebrow, title, lede, wide = false, section = 'pretext', children }: ShellProps) {
   return (
     <div className={wide ? 'shell shell--wide' : 'shell'}>
-      <header className="topbar typfolio-header">
-        <Link className="typfolio-brand" to="/" aria-label="Typfolio home">
-          <span className="typfolio-mark" aria-hidden="true">T</span>
-          <span><strong>Typfolio</strong><small>Browser PDF demos</small></span>
-        </Link>
-        <div className="topbar-actions">
-          <nav aria-label="Demos">
-            <Link className={section === 'pretext' ? 'active' : undefined} aria-current={section === 'pretext' ? 'true' : undefined} to="/">
-              Pretext
-            </Link>
-            <Link activeProps={{ className: 'active' }} to="/performance">
-              Worker batch
-            </Link>
-          </nav>
-          <a className="typfolio-source" href="https://github.com/HelioCampus/typfolio" target="_blank" rel="noreferrer" aria-label="Typfolio on GitHub">GitHub ↗</a>
-        </div>
-      </header>
+      <Topbar section={section} />
       <main>
         <section className="intro">
           {section === 'pretext' ? (
             <nav className="pretext-nav" aria-label="Pretext examples">
-              <Link activeProps={{ className: 'active' }} activeOptions={{ exact: true }} to="/">Variable ASCII</Link>
+              <Link activeProps={{ className: 'active' }} to="/ascii">Variable ASCII</Link>
               <Link activeProps={{ className: 'active' }} to="/editorial">Editorial engine</Link>
             </nav>
           ) : null}

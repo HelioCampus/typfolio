@@ -10,12 +10,18 @@
 
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
+import { Route as AsciiRouteImport } from './routes/ascii'
 import { Route as EditorialRouteImport } from './routes/editorial'
 import { Route as PerformanceRouteImport } from './routes/performance'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const AsciiRoute = AsciiRouteImport.update({
+  id: '/ascii',
+  path: '/ascii',
   getParentRoute: () => rootRouteImport,
 } as any)
 const EditorialRoute = EditorialRouteImport.update({
@@ -31,30 +37,34 @@ const PerformanceRoute = PerformanceRouteImport.update({
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
+  '/ascii': typeof AsciiRoute
   '/editorial': typeof EditorialRoute
   '/performance': typeof PerformanceRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
+  '/ascii': typeof AsciiRoute
   '/editorial': typeof EditorialRoute
   '/performance': typeof PerformanceRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
+  '/ascii': typeof AsciiRoute
   '/editorial': typeof EditorialRoute
   '/performance': typeof PerformanceRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/editorial' | '/performance'
+  fullPaths: '/' | '/ascii' | '/editorial' | '/performance'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/editorial' | '/performance'
-  id: '__root__' | '/' | '/editorial' | '/performance'
+  to: '/' | '/ascii' | '/editorial' | '/performance'
+  id: '__root__' | '/' | '/ascii' | '/editorial' | '/performance'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
+  AsciiRoute: typeof AsciiRoute
   EditorialRoute: typeof EditorialRoute
   PerformanceRoute: typeof PerformanceRoute
 }
@@ -66,6 +76,13 @@ declare module '@tanstack/react-router' {
       path: '/'
       fullPath: '/'
       preLoaderRoute: typeof IndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/ascii': {
+      id: '/ascii'
+      path: '/ascii'
+      fullPath: '/ascii'
+      preLoaderRoute: typeof AsciiRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/editorial': {
@@ -87,6 +104,7 @@ declare module '@tanstack/react-router' {
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
+  AsciiRoute: AsciiRoute,
   EditorialRoute: EditorialRoute,
   PerformanceRoute: PerformanceRoute,
 }
