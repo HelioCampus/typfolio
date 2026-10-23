@@ -1,6 +1,6 @@
-# pretext × Typfolio: hybrid layout
+# Typfolio browser demos
 
-Two [pretext](https://github.com/chenglou/pretext) demos reproduced as Typst-rendered PDFs. This is a verification fixture and a showcase, not a Typfolio package.
+Two [pretext](https://github.com/chenglou/pretext) demos reproduced as Typst-rendered PDFs, alongside a worker batch performance demo. This is a verification fixture and a showcase, not a Typfolio package.
 
     npm run dev:pretext        # http://127.0.0.1:4190
 
@@ -8,6 +8,15 @@ Two [pretext](https://github.com/chenglou/pretext) demos reproduced as Typst-ren
 |---|---|---|
 | `/` | Variable typographic ASCII | One page (or an 8-page flipbook) of proportional ASCII art, glyph by glyph |
 | `/editorial` | The editorial engine | Headline, drop cap, three-column body flowing around five orbs, pull quotes |
+| `/performance` | 1000 PDFs on workers | A separate synthetic progress report for every document |
+
+The header groups ASCII and Editorial under **Pretext**, with **Worker batch** as a separate route. The original standalone worker-batch app remains available during review.
+
+## Worker batch performance
+
+`/performance` carries the batch controls, document heatmap, file list, PDF previews, run history and worker sweeps into the shared dark and gold layout. It uses the current callable-template API and explicitly sets `validate: false` on every batch job. PDF/UA-1 export is still selectable independently.
+
+Each run owns its worker pool and disposes it on completion or cancellation. Leaving the route cancels an active batch or sweep. Run history is stored locally under a separate key from the standalone app; retained PDFs live only in memory. Query parameters such as `/performance?workers=4&count=1000&autostart` support repeatable recordings. Charts use TanStack Charts 1.1.0, matching the standalone demo.
 
 ## The hybrid pipeline
 
@@ -27,7 +36,7 @@ Two [pretext](https://github.com/chenglou/pretext) demos reproduced as Typst-ren
 
 ## Live PDF mode
 
-Both routes open with **Live PDF mode** enabled and **Viewer** selected: ASCII at **100% zoom**, Editorial at **50% zoom**. Turning live mode off captures the current layout as a static PDF at the same route's default zoom. The machinery is shared (`src/live/`):
+Both Pretext routes open with **Live PDF mode** enabled and **Viewer** selected: ASCII at **100% zoom**, Editorial at **50% zoom**. Turning live mode off captures the current layout as a static PDF at the same route's default zoom. The machinery is shared (`src/live/`):
 
 The ASCII preview keeps a small live **Source field** thumbnail in the PDF view's upper-right corner. It reuses the simulation's existing canvas and stays out of the exported PDF.
 

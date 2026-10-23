@@ -5,6 +5,7 @@ import './styles.css';
 
 const AsciiPage = lazy(() => import('./routes/AsciiPage.tsx'));
 const EditorialPage = lazy(() => import('./routes/EditorialPage.tsx'));
+const PerformancePage = lazy(() => import('./routes/PerformancePage.tsx'));
 
 const rootElement = document.getElementById('root');
 if (rootElement === null) throw new Error('The React root element is missing');
@@ -23,6 +24,7 @@ createRoot(rootElement).render(
         <Routes>
           <Route index element={<AsciiPage />} />
           <Route path="editorial" element={<EditorialPage />} />
+          <Route path="performance" element={<PerformancePage />} />
           <Route path="*" element={<Navigate replace to="/" />} />
         </Routes>
       </Suspense>
