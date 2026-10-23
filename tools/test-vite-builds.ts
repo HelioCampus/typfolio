@@ -195,6 +195,7 @@ build('examples/vite-app/vite.config.ts');
 build('examples/vite-library/vite.config.ts');
 build('examples/vite-react/vite.config.ts');
 build('examples/pretext-hybrid/vite.config.ts');
+await import('./check-static-demo.ts');
 build('examples/vite-capture/vite.config.ts', '--mode', 'svg');
 build('examples/vite-capture/vite.config.ts', '--mode', 'dom');
 await verifyReactBoundary();

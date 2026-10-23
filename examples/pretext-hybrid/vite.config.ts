@@ -8,14 +8,13 @@ export default defineConfig({
   cacheDir: fileURLToPath(new URL('../../node_modules/.vite/pretext-hybrid', import.meta.url)),
   plugins: [
     tanstackStart({
-      spa: {
-        enabled: true,
-        maskPath: '/ascii',
-        prerender: { outputPath: '/_shell.html' },
-      },
-      // Keep the homepage as real HTML; browser-only demos use the separate SPA shell.
-      prerender: { autoStaticPathsDiscovery: false, crawlLinks: false },
-      pages: [{ path: '/', prerender: { enabled: true } }],
+      // Each URL gets static HTML with its own hydration state. Demo components
+      // have ssr: false, so only their loading shell is rendered during the build.
+      prerender: { enabled: true, autoStaticPathsDiscovery: false, crawlLinks: false },
+      pages: ['/', '/ascii', '/editorial', '/performance'].map(path => ({
+        path,
+        prerender: { enabled: true, outputPath: path === '/' ? '/index.html' : `${path}.html` },
+      })),
     }),
     react(),
   ],

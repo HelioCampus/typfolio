@@ -3,6 +3,8 @@ import { createRootRoute, HeadContent, Navigate, Outlet, Scripts } from '@tansta
 import stylesUrl from '../styles.css?url';
 
 export const Route = createRootRoute({
+  // The document shell is generated during the static build, alongside the homepage.
+  ssr: true,
   head: () => ({
     meta: [
       { charSet: 'utf-8' },

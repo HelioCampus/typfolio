@@ -24,7 +24,7 @@ import { createWorkerClient, type PdfWorkerClient } from '@typfolio/workers';
 import * as pdfjs from 'pdfjs-dist';
 import pdfjsWorkerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
 import type { PdfDocument } from '@typfolio/core';
-import { wasmUrl } from '../assets.ts';
+import { loadWasm } from '../assets.ts';
 
 export interface LiveStats {
   readonly poolSize: number;
@@ -105,13 +105,15 @@ interface Compiled {
 }
 
 export async function createLiveSession<T>(options: LiveSessionOptions<T>): Promise<LiveSession> {
+  const warmupStartedAt = performance.now();
+  const wasm = await loadWasm();
   // One shared pdf.js worker: without it every getDocument() spawns (and parses) a new 1.2 MB worker.
   const pdfWorker = new pdfjs.PDFWorker({
     // The shipped typings declare `port` as null although a Worker is accepted.
     port: new Worker(pdfjsWorkerUrl, { type: 'module' }) as unknown as null,
   });
   const client: PdfWorkerClient = createWorkerClient({
-    compiler: { wasm: wasmUrl, fonts: options.fonts },
+    compiler: { wasm, fonts: options.fonts },
     workerCount: options.poolSize,
     // One lane per worker, so a job never waits in the queue.
     queueLimit: options.poolSize,
@@ -119,7 +121,6 @@ export async function createLiveSession<T>(options: LiveSessionOptions<T>): Prom
   });
 
   const abort = new AbortController();
-  const warmupStartedAt = performance.now();
   try {
     // Workers start lazily: one concurrent warm-up compile per worker instantiates every WASM module.
     const warmFrame = await options.acquireFrame(abort.signal);

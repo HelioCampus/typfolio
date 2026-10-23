@@ -1,6 +1,6 @@
 import { defineTemplate, type TemplateDefinition } from '@typfolio/core';
 import { compileBatch, createWorkerClient, type PdfBatchJob, type PdfWorkerClient } from '@typfolio/workers';
-import { fontUrls, wasmUrl } from '../assets.ts';
+import { fontUrls, loadWasm } from '../assets.ts';
 import template from './report/main.typ?raw';
 import { fileName, reportInput, type ReportInput } from './data.ts';
 
@@ -111,17 +111,30 @@ export class BatchRun {
       pdf,
       validate: false,
     }));
-    const client = createWorkerClient({
-      compiler: { wasm: wasmUrl, fonts: fontUrls.slice(0, 2) },
-      workerCount: workers,
-      timeoutMs: 60_000,
-    });
+    let client: PdfWorkerClient | undefined;
+    // Cancelling this run must not cancel the shared module needed by other demos.
+    let cancelStartup!: () => void;
+    const cancelledStartup = new Promise<undefined>(resolve => { cancelStartup = () => resolve(undefined); });
+    this.controller.signal.addEventListener('abort', cancelStartup, { once: true });
     const onVisibility = (): void => { if (document.hidden) this.hidden = true; };
     onVisibility();
     document.addEventListener('visibilitychange', onVisibility);
     this.startedAt = performance.now();
     this.notify(true);
     try {
+      // Include the initial download/module compilation in the run's elapsed time.
+      const wasm = await Promise.race([loadWasm(), cancelledStartup]);
+      this.controller.signal.removeEventListener('abort', cancelStartup);
+      if (wasm === undefined || this.aborted) {
+        this.cancelled = this.rows.length;
+        for (const row of this.rows) this.rows[row.index] = { ...row, state: 'cancelled' };
+        return;
+      }
+      client = createWorkerClient({
+        compiler: { wasm, fonts: fontUrls.slice(0, 2) },
+        workerCount: workers,
+        timeoutMs: 60_000,
+      });
       for await (const outcome of compileBatch(this.tracked(client), jobs, { signal: this.controller.signal })) {
         const row = this.rows[outcome.index]!;
         if (outcome.status === 'success') {
@@ -144,8 +157,9 @@ export class BatchRun {
       this.error = String((error as Error).stack ?? error);
     } finally {
       this.endedAt = performance.now();
+      this.controller.signal.removeEventListener('abort', cancelStartup);
       document.removeEventListener('visibilitychange', onVisibility);
-      await client.dispose();
+      await client?.dispose();
       this.notify(true);
     }
   }

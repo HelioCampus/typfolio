@@ -23,8 +23,9 @@
     "build": "node tools/generate-typst-package.ts && tsc -p packages/core/tsconfig.json && tsc -p packages/dev-tools/tsconfig.json && tsc -p packages/workers/tsconfig.json && tsc -p packages/react/tsconfig.json && tsc -p examples/vite-react/tsconfig.app.json && tsc -p examples/vite-react/tsconfig.node.json && tsc -p examples/pretext-hybrid/tsconfig.app.json && tsc -p examples/pretext-hybrid/tsconfig.node.json && tsc -p tools/tsconfig.json && tsc -p examples/vite-app/tsconfig.app.json && tsc -p examples/vite-app/tsconfig.node.json && tsc -p examples/vite-capture/tsconfig.app.json && tsc -p examples/vite-capture/tsconfig.node.json && tsc -p examples/vite-library/tsconfig.app.json && tsc -p examples/vite-library/tsconfig.node.json && tsc -p tests/tsconfig.json && tsc -p tests/browser/tsconfig.json",
     "dev:react": "vite --config examples/vite-react/vite.config.ts",
     "dev:pretext": "vite --config examples/pretext-hybrid/vite.config.ts",
-    "build:pretext": "vite build --config examples/pretext-hybrid/vite.config.ts",
-    "preview:pretext": "vite preview --config examples/pretext-hybrid/vite.config.ts",
+    "build:pretext": "npm run build && vite build --config examples/pretext-hybrid/vite.config.ts && node tools/check-static-demo.ts",
+    "preview:pretext": "wrangler dev --local --config examples/pretext-hybrid/wrangler.json --show-interactive-dev-session=false",
+    "deploy:pretext": "npm run build:pretext && wrangler deploy --config examples/pretext-hybrid/wrangler.json",
     "dev:capture": "vite --config examples/vite-capture/vite.config.ts",
     "test": "npm run build && node --test \"packages/core/test/*.test.ts\" \"packages/dev-tools/test/*.test.ts\" \"packages/workers/test/*.test.ts\" \"packages/react/test/*.test.ts\"",
     "test:vite": "npm run build && node tools/test-vite-builds.ts",
@@ -60,6 +61,7 @@
     "react-router-dom": "^7.18.4",
     "typescript": "5.9.3",
     "vite": "8.3.5",
+    "wrangler": "4.152.0",
     "zod": "^4.6.7"
   }
 }

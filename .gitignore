@@ -2,6 +2,7 @@ node_modules/
 .repos/
 .build/
 .tanstack/
+.wrangler/
 packages/*/dist/
 packages/wasm/generated/*
 !packages/wasm/generated/.gitkeep

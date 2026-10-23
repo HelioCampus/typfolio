@@ -4,7 +4,21 @@ import boldUrl from '../../../fixtures/fonts/LibertinusSerif-Bold.otf?url';
 import italicUrl from '../../../fixtures/fonts/LibertinusSerif-Italic.otf?url';
 import boldItalicUrl from '../../../fixtures/fonts/LibertinusSerif-BoldItalic.otf?url';
 
-export { wasmUrl };
+let wasmPromise: Promise<WebAssembly.Module> | undefined;
+
+/** Share compiled code across realms; each compiler still owns its own WASM instance. */
+export function loadWasm(): Promise<WebAssembly.Module> {
+  // Concurrent worker fetches of this large cached response can fail in Chromium.
+  // Fetch and compile once, then structured-clone the module into each worker.
+  wasmPromise ??= WebAssembly.compileStreaming(fetch(wasmUrl).then(response => {
+    if (!response.ok) throw new Error(`Could not fetch the compiler: HTTP ${response.status}`);
+    return response;
+  })).catch(error => {
+    wasmPromise = undefined;
+    throw error;
+  });
+  return wasmPromise;
+}
 
 /** The family name used by canvas font strings, CSS, and the Typst template. */
 export const FONT_FAMILY = 'Libertinus Serif';
