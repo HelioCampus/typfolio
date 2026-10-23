@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react';
-import { Link, NavLink } from 'react-router-dom';
+import { Link } from '@tanstack/react-router';
 import '../../../fixtures/browser/demo-header.css';
 
 interface ShellProps {
@@ -24,9 +24,9 @@ export function Shell({ eyebrow, title, lede, wide = false, section = 'pretext',
             <Link className={section === 'pretext' ? 'active' : undefined} aria-current={section === 'pretext' ? 'true' : undefined} to="/">
               Pretext
             </Link>
-            <NavLink className={({ isActive }) => (isActive ? 'active' : undefined)} to="/performance">
+            <Link activeProps={{ className: 'active' }} to="/performance">
               Worker batch
-            </NavLink>
+            </Link>
           </nav>
           <a className="typfolio-source" href="https://github.com/HelioCampus/typfolio" target="_blank" rel="noreferrer" aria-label="Typfolio on GitHub">GitHub ↗</a>
         </div>
@@ -35,8 +35,8 @@ export function Shell({ eyebrow, title, lede, wide = false, section = 'pretext',
         <section className="intro">
           {section === 'pretext' ? (
             <nav className="pretext-nav" aria-label="Pretext examples">
-              <NavLink className={({ isActive }) => (isActive ? 'active' : undefined)} end to="/">Variable ASCII</NavLink>
-              <NavLink className={({ isActive }) => (isActive ? 'active' : undefined)} to="/editorial">Editorial engine</NavLink>
+              <Link activeProps={{ className: 'active' }} activeOptions={{ exact: true }} to="/">Variable ASCII</Link>
+              <Link activeProps={{ className: 'active' }} to="/editorial">Editorial engine</Link>
             </nav>
           ) : null}
           <p className="kicker">{eyebrow}</p>

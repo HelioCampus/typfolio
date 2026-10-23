@@ -205,7 +205,7 @@ console.log(JSON.stringify({
   app: await verify('vite-app'),
   library: await verify('vite-library'),
   reactRouted: await verify('vite-react'),
-  pretextHybrid: await verify('pretext-hybrid', { largeScripts: [/pdf\.worker/] }),
+  pretextHybrid: await verify('pretext-hybrid/client', { largeScripts: [/pdf\.worker/] }),
   captureDom: captureBuilds,
   devTools: devToolsBuild,
   wasmExternal: true,
