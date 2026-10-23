@@ -24,13 +24,13 @@ To deploy on a static host, publish **`.build/pretext-hybrid/client`** and confi
 | `/editorial` | The editorial engine | Headline, drop cap, three-column body flowing around five orbs, pull quotes |
 | `/performance` | 1000 PDFs on workers | A separate synthetic progress report for every document |
 
-The header groups ASCII and Editorial under **Pretext**, with **Worker batch** as a separate route. The original standalone worker-batch app remains available during review.
+The header groups ASCII and Editorial under **Pretext**, with **Worker batch** as a separate route.
 
 ## Worker batch performance
 
 `/performance` carries the batch controls, document heatmap, file list, PDF previews, run history and worker sweeps into the shared dark and gold layout. It uses the current callable-template API and explicitly sets `validate: false` on every batch job. PDF/UA-1 export is still selectable independently.
 
-Each run owns its worker pool and disposes it on completion or cancellation. Leaving the route cancels an active batch or sweep. Run history is stored locally under a separate key from the standalone app; retained PDFs live only in memory. Query parameters such as `/performance?workers=4&count=1000&autostart` support repeatable recordings. Charts use TanStack Charts 1.1.0, matching the standalone demo.
+Each run owns its worker pool and disposes it on completion or cancellation. Leaving the route cancels an active batch or sweep. Run history is stored locally; retained PDFs live only in memory. Query parameters such as `/performance?workers=4&count=1000&autostart` support repeatable recordings. Charts use TanStack Charts 1.1.0.
 
 ## The hybrid pipeline
 
