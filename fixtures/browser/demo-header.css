@@ -1,0 +1,60 @@
+/* Shared branding for the browser examples; colors follow each demo's theme. */
+.typfolio-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px 24px;
+  border-bottom: 1px solid var(--line, #d4dbd5);
+}
+.typfolio-brand {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 12px;
+  color: var(--ink, #17211b);
+  text-decoration: none;
+}
+.typfolio-mark {
+  display: grid;
+  width: 38px;
+  height: 38px;
+  place-items: center;
+  border-radius: 10px;
+  background: var(--typfolio-mark-bg, var(--ink, #17211b));
+  color: var(--typfolio-mark-ink, #fff);
+  font: 700 22px Georgia, serif;
+}
+.typfolio-brand strong { display: block; font: 700 20px Georgia, serif; }
+.typfolio-brand small {
+  display: block;
+  margin-top: 3px;
+  color: var(--muted, #69756d);
+  font: 400 11px/1.4 system-ui, sans-serif;
+  letter-spacing: 0.04em;
+}
+.typfolio-source {
+  flex: none;
+  padding: 7px 12px;
+  border: 1px solid var(--line, #d4dbd5);
+  border-radius: 8px;
+  color: var(--ink, #17211b);
+  font: 600 12px/1.4 system-ui, sans-serif;
+  text-decoration: none;
+}
+.typfolio-source:hover { background: var(--line, #e9ede7); }
+.typfolio-brand:focus-visible, .typfolio-source:focus-visible {
+  outline: 2px solid currentColor;
+  outline-offset: 4px;
+}
+.typfolio-demo-page {
+  box-sizing: border-box;
+  max-width: 1180px;
+  margin: 0 auto;
+  padding: 0 24px 32px;
+  color: #17211b;
+  background: #f9faf7;
+  font: 16px/1.5 system-ui, sans-serif;
+}
+.typfolio-demo-page > .typfolio-header { padding: 20px 0; margin-bottom: 28px; }
+.typfolio-demo-page pre { overflow: auto; padding: 16px; border-radius: 8px; background: #eef2ed; }

@@ -15,17 +15,18 @@ interface StaticPreviewProps {
   readonly error: unknown;
   readonly aspect: number;
   readonly maxWidth: number;
+  readonly initialZoom?: number;
   readonly documentName: string;
   readonly downloadName: string;
   readonly pages?: number | undefined;
 }
 
 /**
- * The non-live result view: Native (Chrome's viewer, the original behaviour) or
- * Viewer (pdf.js pages stacked with our own chrome). Both show the same bytes.
+ * The non-live result view: Viewer (pdf.js pages stacked with our own chrome)
+ * or Native (the browser's PDF viewer). Both show the same bytes.
  */
 export function StaticPreview(props: StaticPreviewProps) {
-  const [mode, setMode] = useState<PreviewMode>('native');
+  const [mode, setMode] = useState<PreviewMode>('viewer');
   const [counted, setCounted] = useState<{ bytes: Uint8Array; pages: number }>();
   const { bytes } = props;
   const onPages = useCallback((pages: number) => {
@@ -41,7 +42,7 @@ export function StaticPreview(props: StaticPreviewProps) {
       <ModeSwitch modes={['viewer', 'native']} onChange={setMode} value={mode} />
       {mode === 'viewer' && bytes !== undefined ? (
         <Suspense fallback={<div className="pdf-empty"><span className="spinner" aria-hidden="true" /></div>}>
-          <StaticViewer aspect={props.aspect} bytes={bytes} maxWidth={props.maxWidth} name={props.documentName} onPages={onPages} />
+          <StaticViewer aspect={props.aspect} bytes={bytes} initialZoom={props.initialZoom} maxWidth={props.maxWidth} name={props.documentName} onPages={onPages} />
         </Suspense>
       ) : (
         <>

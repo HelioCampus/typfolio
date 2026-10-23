@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { extname, resolve, sep } from 'node:path';
 const root = fileURLToPath(new URL('../', import.meta.url));
 const builtApp = resolve(root, '.build/vite-app');
-const types: Record<string, string> = { '.js': 'text/javascript', '.html': 'text/html', '.wasm': 'application/wasm', '.json': 'application/json', '.typ': 'text/plain', '.svg': 'image/svg+xml' };
+const types: Record<string, string> = { '.js': 'text/javascript', '.html': 'text/html', '.css': 'text/css', '.wasm': 'application/wasm', '.json': 'application/json', '.typ': 'text/plain', '.svg': 'image/svg+xml' };
 // The smoke page loads unbundled core output. Browsers cannot resolve the bare
 // `@typfolio/wasm` import there (and import maps do not apply inside module workers),
 // so the server maps it to the generated bindings it already serves.

@@ -20,9 +20,8 @@ button { font: inherit; }
 .shell { width: min(1180px, calc(100% - 32px)); margin: 0 auto; padding: 18px 0 40px; }
 
 .topbar { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding-bottom: 16px; border-bottom: 1px solid var(--line); }
-.brand { display: inline-flex; align-items: center; gap: 10px; font: 600 17px Georgia, serif; }
-.brand i { display: grid; width: 30px; height: 30px; place-items: center; border-radius: 8px; background: var(--gold); color: var(--stage); font-style: normal; font-weight: 700; }
-.brand small { color: var(--muted); font: 500 12px Inter, sans-serif; letter-spacing: 0.04em; }
+.topbar { --typfolio-mark-bg: var(--gold); --typfolio-mark-ink: var(--stage); }
+.topbar-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
 nav { display: inline-flex; gap: 4px; padding: 3px; border: 1px solid var(--line); border-radius: 999px; }
 nav a { padding: 6px 14px; border-radius: 999px; color: var(--muted); font-size: 13px; text-decoration: none; }
 nav a.active { background: rgba(196, 163, 90, 0.16); color: var(--gold); }
@@ -32,7 +31,7 @@ nav a.active { background: rgba(196, 163, 90, 0.16); color: var(--gold); }
 h1 { margin: 0 0 12px; font: 600 clamp(26px, 4vw, 38px)/1.15 Georgia, serif; letter-spacing: -0.01em; }
 .lede { margin: 0; color: var(--muted); font-size: 15px; line-height: 1.6; }
 
-.workbench { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 520px), 1fr)); gap: 20px; align-items: start; }
+.workbench { width: min(100%, 860px); margin: 0 auto; }
 .card { padding: 18px; border: 1px solid var(--line); border-radius: 14px; background: var(--panel); }
 .card-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 14px; }
 .card-head h2 { margin: 0; font: 600 18px Georgia, serif; }
@@ -42,37 +41,11 @@ h1 { margin: 0 0 12px; font: 600 clamp(26px, 4vw, 38px)/1.15 Georgia, serif; let
 .pill--hold, .pill--success { border-color: rgba(196, 163, 90, 0.5); color: var(--gold); }
 .pill--error { border-color: rgba(240, 100, 80, 0.6); color: #f08a78; }
 
-/* Live stage: same pixel size as the PDF page (px == pt, 1:1). */
-.stage { max-width: 100%; margin: 0 auto; overflow: hidden; border-radius: 4px; box-shadow: 0 0 0 1px var(--line); }
-.art-row {
-  display: block;
-  width: fit-content;
-  white-space: pre;
-  font-family: "Libertinus Serif", serif;
-  font-size: 14px;
-  line-height: 16px;
-  color: transparent;
-  /* Cell advances are summed from independent measurements: no kerning, no ligatures. */
-  font-kerning: none;
-  font-variant-ligatures: none;
-  letter-spacing: 0;
-}
-.art-row .probe { display: inline-block; width: 0; height: 0; }
-.art-row span { font-style: normal; }
-.w400 { font-weight: 400; } .w700 { font-weight: 700; }
-.a1 { color: rgba(196,163,90,0.10); } .a2 { color: rgba(196,163,90,0.20); }
-.a3 { color: rgba(196,163,90,0.30); } .a4 { color: rgba(196,163,90,0.40); }
-.a5 { color: rgba(196,163,90,0.50); } .a6 { color: rgba(196,163,90,0.60); }
-.a7 { color: rgba(196,163,90,0.70); } .a8 { color: rgba(196,163,90,0.80); }
-.a9 { color: rgba(196,163,90,0.90); } .a10 { color: rgba(196,163,90,1.0); }
-
 .card-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-top: 16px; }
 .button { padding: 9px 16px; border: 1px solid var(--line); border-radius: 9px; background: transparent; color: var(--ink); cursor: pointer; font-size: 13px; }
 .button:hover:not(:disabled) { border-color: rgba(255, 255, 255, 0.25); }
 .button:disabled { opacity: 0.4; cursor: default; }
 .button--primary { border-color: var(--gold); background: var(--gold); color: #1a1408; font-weight: 600; }
-.source { margin-left: auto; }
-.source-canvas canvas { display: block; width: 84px; height: auto; border-radius: 4px; opacity: 0.85; }
 
 .pdf-frame { position: relative; width: 100%; max-width: 468px; margin: 0 auto; overflow: hidden; border-radius: 4px; background: #1a1a24; box-shadow: 0 0 0 1px var(--line); }
 .pdf-frame iframe { display: block; width: 100%; height: 100%; border: 0; }
@@ -96,23 +69,13 @@ footer { margin-top: 32px; padding-top: 14px; border-top: 1px solid var(--line);
 /* --- editorial route --- */
 .shell--wide { width: min(1320px, calc(100% - 32px)); }
 .ed-workbench { display: grid; gap: 20px; }
-.ed-viewport { position: relative; width: 100%; max-width: var(--stage-w); margin: 0 auto; overflow: hidden; border-radius: 4px; box-shadow: 0 0 0 1px var(--line); }
-.ed-stage { position: relative; transform-origin: top left; overflow: hidden; touch-action: pan-y; }
-.ed-line { position: absolute; white-space: pre; font-kerning: auto; }
-.ed-probe { display: inline-block; width: 0; height: 0; }
-.ed-body { z-index: 1; color: #e8e4dc; }
-.ed-headline { z-index: 2; color: #fff; }
-.ed-dropcap { position: absolute; z-index: 2; color: #c4a35a; pointer-events: none; white-space: pre; }
-.ed-quote-box { position: absolute; z-index: 3; border-left: 3px solid #6b5a3d; pointer-events: none; }
-.ed-quote { z-index: 3; color: #b8a070; }
-.ed-orb { position: absolute; z-index: 10; border-radius: 50%; pointer-events: none; }
 .hint { color: var(--muted); font-size: 12px; }
 .segmented { display: inline-flex; gap: 2px; padding: 2px; border: 1px solid var(--line); border-radius: 999px; }
 .segmented button { padding: 5px 12px; border: 0; border-radius: 999px; background: transparent; color: var(--muted); cursor: pointer; font-size: 12px; }
 .segmented button.on { background: rgba(196, 163, 90, 0.16); color: var(--gold); }
 
 /* --- live PDF mode --- */
-.head-controls { display: flex; align-items: center; gap: 12px; }
+.head-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
 .switch { display: inline-flex; align-items: center; gap: 8px; color: var(--ink); cursor: pointer; font-size: 12px; user-select: none; }
 .switch input { position: absolute; opacity: 0; pointer-events: none; }
 .switch-track { position: relative; width: 30px; height: 17px; border: 1px solid var(--line); border-radius: 999px; background: rgba(255, 255, 255, 0.05); transition: background 0.15s; }
@@ -126,6 +89,9 @@ footer { margin-top: 32px; padding-top: 14px; border-top: 1px solid var(--line);
 .live-controls { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; margin-top: 14px; }
 .segmented-label { padding: 5px 4px 5px 10px; color: var(--muted); font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase; }
 .live-canvas--interactive { touch-action: none; }
+.source-field { position: absolute; top: 8px; right: 8px; width: 84px; max-width: 24%; margin: 0; overflow: hidden; border: 1px solid rgba(196, 163, 90, 0.35); border-radius: 6px; background: rgba(7, 7, 12, 0.9); box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3); pointer-events: none; }
+.source-field canvas { display: block; width: 100%; height: auto; }
+.source-field figcaption { padding: 4px 2px; color: var(--gold); font-size: 9px; text-align: center; }
 
 /* --- preview modes, viewer chrome, proof --- */
 .card .segmented { margin: 0 0 12px; }
@@ -144,9 +110,13 @@ footer { margin-top: 32px; padding-top: 14px; border-top: 1px solid var(--line);
 .viewer-zoom button:disabled { opacity: 0.35; cursor: default; }
 .viewer-fit { margin-left: 4px; font-size: 11px !important; }
 .native-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 14px; margin-bottom: 10px; }
-.native-frame { width: 100%; max-width: 1200px; height: min(70vh, 760px); margin: 0 auto; overflow: hidden; border-radius: 4px; background: #1a1a24; box-shadow: 0 0 0 1px var(--line); }
+.native-frame { position: relative; width: 100%; max-width: 1200px; height: min(70vh, 760px); margin: 0 auto; overflow: hidden; border-radius: 4px; background: #1a1a24; box-shadow: 0 0 0 1px var(--line); }
 .native-frame iframe { display: block; width: 100%; height: 100%; border: 0; }
 .native-caption { margin: 10px 0 0; color: var(--muted); font-size: 12px; line-height: 1.5; }
 .proof { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; margin-top: 12px; padding: 8px 12px; border: 1px dashed rgba(196, 163, 90, 0.35); border-radius: 8px; }
 .proof-info { margin: 0; color: var(--ink); font-size: 12px; font-variant-numeric: tabular-nums; }
 .proof-actions { display: flex; gap: 8px; }
+
+@media (max-width: 600px) {
+  .card-head { flex-wrap: wrap; }
+}

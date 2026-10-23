@@ -22,6 +22,7 @@ export async function runSmoke() {
     });
     const input = JSON.parse(await resource('../basic/input.json', true));
     const options = {
+      validate: false,
       assets: { 'assets/chart.svg': await resource('../basic/chart.svg') },
       pdf: { standards: ['ua-1'], tags: true, creationTimestamp: 1700000000 },
     };

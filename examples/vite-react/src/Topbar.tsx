@@ -1,4 +1,5 @@
 import { Link, NavLink } from 'react-router-dom';
+import '../../../fixtures/browser/demo-header.css';
 
 interface TopbarProps {
   readonly clientBadge: string;
@@ -7,12 +8,12 @@ interface TopbarProps {
 
 export function Topbar({ clientBadge, executionBadge }: TopbarProps) {
   return (
-    <header className="topbar">
-      <Link className="brand" to="/" aria-label="Typfolio home">
-        <span className="brand-mark">T</span>
+    <header className="topbar typfolio-header">
+      <Link className="typfolio-brand" to="/" aria-label="Typfolio home">
+        <span className="typfolio-mark" aria-hidden="true">T</span>
         <span>
           <strong>Typfolio</strong>
-          <small>Document workspace</small>
+          <small>Browser PDF demos</small>
         </span>
       </Link>
       <div className="topbar-actions">
@@ -32,6 +33,7 @@ export function Topbar({ clientBadge, executionBadge }: TopbarProps) {
           <span className="badge">{clientBadge}</span>
           <span className="badge">{executionBadge}</span>
         </div>
+        <a className="typfolio-source" href="https://github.com/HelioCampus/typfolio" target="_blank" rel="noreferrer" aria-label="Typfolio on GitHub">GitHub ↗</a>
       </div>
     </header>
   );

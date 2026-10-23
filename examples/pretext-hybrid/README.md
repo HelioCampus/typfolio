@@ -12,40 +12,47 @@ Two [pretext](https://github.com/chenglou/pretext) demos reproduced as Typst-ren
 ## The hybrid pipeline
 
 ```
- browser                                              WASM (same thread)
+ browser                                              Typst WASM
  ┌───────────────────────────────┐   JSON input   ┌─────────────────────────┐
  │ pretext: measure + line-break │ ─────────────▶ │ Typst: place() + draw   │ ─▶ PDF bytes
  │ (canvas, Libertinus Serif)    │  positioned    │ (no line breaking, no   │
  │ obstacles, columns, rows      │  lines, glyphs │  centering, no flow)    │
  └───────────────────────────────┘  orbs, colours └─────────────────────────┘
-        live DOM frame  ◀── same layout object ──▶  captured JSON
 ```
 
 - **Layout is JavaScript.** pretext decides where every line breaks, how wide it is and where it sits. `src/editorial/engine.ts` and `src/ascii/engine.ts` are pure: they return plain data.
 - **Rendering is Typst.** Each template (`asciiTemplate` in `src/ascii/capture.ts`, `editorialTemplate` in `src/editorial/capture.ts`) is a loop of absolutely positioned `place(top + left, dx:, dy:, ...)` calls. Typst never breaks a line or centres a row.
-- **One layout object feeds both sides.** The live DOM renderer and the JSON capture read the same frame, so the PDF is exactly the frozen live panel. "Capture" freezes the animation on the frame it serialised.
+- **PDF-only previews.** Both routes start in live PDF mode. There is no DOM art or editorial renderer. "Capture" freezes the current layout, stops the live pool and displays a static PDF; "Resume live PDF" restarts the animation. The ASCII flipbook records eight layouts into an eight-page PDF.
 - Both templates are inline Typst strings, each the one file of a `defineTemplate` without a schema: `asciiTemplate(framesToInput(...))` and `editorialTemplate(layoutToInput(...))` are the documents to compile, typed by the TypeScript input types and not checked at runtime. Not being editor-authored files, they read their data with plain `json()` at their `schemaPath` (`/frames.json`, `/layout.json`) and need no JSON Schema file. The compiler has no remote package imports.
 
 ## Live PDF mode
 
-Both routes have a **Live PDF mode** switch that makes the PDF preview itself animate. The machinery is shared (`src/live/`):
+Both routes open with **Live PDF mode** enabled and **Viewer** selected: ASCII at **100% zoom**, Editorial at **50% zoom**. Turning live mode off captures the current layout as a static PDF at the same route's default zoom. The machinery is shared (`src/live/`):
+
+The ASCII preview keeps a small live **Source field** thumbnail in the PDF view's upper-right corner. It reuses the simulation's existing canvas and stays out of the exported PDF.
+
+A thin gold border inside each ASCII PDF page marks the 440 × 448 pt artwork area, inset 14 pt from the page edge. It appears in live frames, captures and flipbooks.
+
+Pointer coordinates are relative to the displayed PDF canvas, including its current zoom and scroll position. The ASCII grid spans the full artwork rectangle: all 50 columns reserve 8.8 pt, including empty cells. Pretext measures each proportional glyph to center it within its slot. Pointer input maps directly to the source field, so changing brightness cannot shrink or shift the interactive area.
+
+Captures, flipbooks, worker warm-up and live compiles explicitly use `validate: false`, keeping runtime schema validation out of the performance measurements.
 
 ```
  route (rAF + pointer input)          src/live/session.ts                         browser
  ┌────────────────────────┐   frame   ┌────────────────────────────────┐   ┌──────────────────────┐
  │ pretext layout of the  │ ────────▶ │ one lane per pool worker:      │   │ pdf.js worker        │
  │ newest animated frame  │  (slot    │ acquire frame → seq → compile  │──▶│ latest-wins presenter│─▶ <canvas>
- │ (DOM keeps animating)  │   free)   │ on @typfolio/workers pool      │   │ (drops stale frames) │
+ │ (no DOM rendering)    │   free)   │ on @typfolio/workers pool      │   │ (drops stale frames) │
  └────────────────────────┘           └────────────────────────────────┘   └──────────────────────┘
 ```
 
-- **Workers, not the main thread.** Frames compile on `createWorkerClient({ workerCount })`, so the live DOM never janks. The pool size (1-4) is a control.
+- **Workers, not the main thread.** Frames compile on `createWorkerClient({ workerCount })`, keeping compilation off the main thread. The pool size (1-4) is a control.
 - **Demand-driven.** A lane captures the newest frame only when its pool slot is free (capture → compile → hand over → capture again). There is no rAF-driven flooding and never more compiles in flight than workers. Frames produced while all slots are busy are simply never submitted.
 - **Latest wins, in order.** Every captured frame gets a sequence number. Compiles finish out of order; the presenter keeps one pending PDF, paints one at a time, and drops any PDF older than the newest one already shown or being painted (the *dropped* counter).
 - **pdf.js to a canvas**, double-buffered (paint offscreen, one `drawImage`), instead of re-instantiating an `<iframe>` viewer per frame. One shared pdf.js worker; `disableFontFace` so each frame's fonts are glyph outlines rather than new `FontFace`s.
 - **Stale work is skipped, not aborted.** Aborting an active job terminates its worker (hard cancellation of synchronous WASM) and a fresh worker re-instantiates the WASM, so the abort signal is used only at shutdown.
 - **Controls and stats.** Pool size, *Extra load* (a pure Typst script loop added to every frame so pool scaling is visible when a frame compiles in milliseconds), and *Uncapped* (advance the simulation whenever a slot frees instead of once per display frame). Stats: pretext layout ms, Typst compile ms (worker round trip), pdf.js render ms, painted fps, compile throughput, dropped frames, pool warm-up.
-- **Dragging inside the PDF.** On the editorial route you can drag (and click to pause) the orbs directly on the live PDF canvas, and the text reflows around them as you move. On the ASCII route the pointer over the canvas acts as a particle attractor. This interaction layer is ordinary page-level pointer handling over the pdf.js canvas (pointer capture, coordinates mapped from canvas CSS size to stage units, hit-testing against the *current* engine state): the PDF itself is static for each frame and is simply re-typeset about 20-60 times per second. Exported PDF files are not interactive. The rasterisation scale drops to 0.6x while an orb is held, for a higher interactive frame rate. The DOM-stage drag keeps working as before.
+- **Dragging inside the PDF.** On the editorial route you can drag (and click to pause) the orbs directly on the live PDF canvas, and the text reflows around them as you move. On the ASCII route the pointer over the canvas acts as a particle attractor. This interaction layer is ordinary page-level pointer handling over the pdf.js canvas (pointer capture, coordinates mapped from canvas CSS size to stage units, hit-testing against the *current* engine state): the PDF itself is static for each frame and is simply re-typeset about 20-60 times per second. Exported PDF files are not interactive. The rasterisation scale drops to 0.6x while an orb is held, for a higher interactive frame rate.
 
 ### Three ways to view the same bytes
 
@@ -68,18 +75,17 @@ The live panel's **View** switch shows the PDF Typst just produced in three ways
 - The info line reads `PDF · 48 KB · 1 page · compiled 4 ms ago`: size from the byte array's length, page count from pdf.js, age since the compile finished.
 - Only the latest frame's bytes are retained (one buffer, replaced each frame); downloads and Native snapshots copy from it on demand.
 
-The single "Capture frame as PDF" button still compiles on the main thread through `@typfolio/react` and shows the result in an `<iframe>`.
+The "Capture frame as PDF" button compiles on the main thread through `@typfolio/react` and shows the static result in Viewer or Native mode.
 
 ## Font parity
 
 pretext measures through canvas with the fonts the browser has; Typst lays out with the font files the compiler was given. `src/assets.ts` names each Libertinus Serif face by URL and uses the **same files twice**: `new FontFace('Libertinus Serif', 'url(...)', { weight, style })` registered (and awaited) before any `prepare*` call, and `createCompiler({ fonts })` / `createWorkerClient({ compiler: { fonts } })`, which fetch those URLs themselves (inside each worker for the live pool). Demo `px` are `pt` 1:1 in the PDF, and the page is the stage size.
 
-Other details that keep the two renderers identical:
+Details that keep measured geometry aligned with the PDF:
 
-- **Baselines come from the DOM.** A zero-size inline-block probe styled like each text style reports where the browser puts the baseline (half-leading included). Templates use `top-edge/bottom-edge: "baseline"` and place at `y + baseline`.
-- **ASCII art disables kerning and ligatures on both sides** (`font-kerning: none` / `kerning: false`) because every cell advance is an independently measured glyph width. The editorial body text keeps default kerning and ligatures on both sides.
-- The ASCII rows report the row width the browser actually laid out next to pretext's predicted sum; it agrees to about 0.15 px (sub-pixel layout rounding in the browser).
-- Spaces in the ASCII art are `h(width)` gaps, not literal spaces: Typst markup would collapse them.
+- **Baselines use a cached font probe.** `src/measureBaseline.ts` briefly mounts a hidden line with a zero-size inline-block to measure its baseline (half-leading included), then removes it. Each font/line-height/letter-spacing combination is measured once, independently of the PDF preview. Templates use `top-edge/bottom-edge: "baseline"` and place at `y + baseline`.
+- **ASCII art disables kerning and ligatures in the PDF** to preserve independently measured glyph widths. The editorial body text keeps default kerning and ligatures.
+- ASCII glyph positions use measured `h(width)` gaps, including empty grid cells, rather than literal spaces. This preserves the grid's width without stretching the proportional glyphs.
 
 Fonts: `fixtures/fonts/LibertinusSerif-{Regular,Bold}.otf` come from `typst-assets`; `-Italic.otf` and `-BoldItalic.otf` (used by the pull quotes) were added from the official Libertinus v7.051 release. The first two are byte-identical to the release.
 
@@ -88,6 +94,7 @@ Fonts: `fixtures/fonts/LibertinusSerif-{Regular,Bold}.otf` come from `typst-asse
 - The stage is a fixed logical size (1200x760 or 860x760) instead of the browser viewport, so it can size a PDF page. The narrow-viewport mode and text-selection handling from the original are omitted.
 - The orbs' CSS `box-shadow` glow has no Typst equivalent; it is approximated by a radial gradient sampled from the same Gaussian falloff.
 - Body text is 19 px Libertinus Serif (the original uses an 18 px Iowan/Palatino stack).
+- ASCII glyphs sit in a fixed grid rather than packing each row by natural advances, keeping the PDF aligned with its source field and pointer at both horizontal edges.
 - The mid-word breaks ("docum / ents") in narrow slots come from the original algorithm.
 
 ## Credits

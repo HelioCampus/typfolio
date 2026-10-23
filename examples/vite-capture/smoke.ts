@@ -1,6 +1,7 @@
 // Manual browser smoke test: runs both capture adapters for real (including the
 // html2canvas default rasterizer) and compiles the captured assets into a PDF.
 import { createCompiler, defineTemplate } from '@typfolio/core';
+import '../../fixtures/browser/demo-header.css';
 import type { PdfResult } from '@typfolio/core';
 import { captureAssets, captureProps, type CaptureMarker } from '@typfolio/core/capture';
 import { svgCapture } from '@typfolio/core/capture/svg';

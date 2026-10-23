@@ -1,7 +1,7 @@
 /**
  * Shared live PDF mode (used by both routes): continuously captures frames, compiles them on a pool of
  * `@typfolio/workers` compiler workers and paints the PDF with pdf.js, so the
- * PDF preview animates while the main thread stays free for the live DOM.
+ * PDF preview animates while the main thread stays free for layout and pointer input.
  *
  * Scheduling:
  * - The pool is `createWorkerClient({ workerCount })`. The session runs one
@@ -65,6 +65,7 @@ export interface LiveSessionOptions<T> {
   /** Resolves with the next frame to capture, or `undefined` once `signal` aborts. */
   readonly acquireFrame: (signal: AbortSignal) => Promise<Captured<T> | undefined>;
   readonly onStats: (stats: LiveStats) => void;
+  readonly onError: (error: unknown) => void;
 }
 
 /** The most recently presented frame: the exact bytes Typst produced. Only the latest is retained. */
@@ -124,7 +125,7 @@ export async function createLiveSession<T>(options: LiveSessionOptions<T>): Prom
     const warmFrame = await options.acquireFrame(abort.signal);
     if (warmFrame !== undefined) {
       const warmDocument = () => options.buildDocument(warmFrame.frame, options.burn);
-      await Promise.all(Array.from({ length: options.poolSize }, () => client.compile(warmDocument())));
+      await Promise.all(Array.from({ length: options.poolSize }, () => client.compile(warmDocument(), { validate: false })));
     }
   } catch (error) {
     pdfWorker.destroy();
@@ -146,6 +147,13 @@ export async function createLiveSession<T>(options: LiveSessionOptions<T>): Prom
   let running = false;
   let stopped = false;
   let lanes: Promise<void>[] = [];
+
+  const fail = (error: unknown): void => {
+    if (!running) return;
+    running = false;
+    abort.abort('live PDF pipeline failed');
+    options.onError(error);
+  };
 
   const layout: number[] = [];
   const compile: number[] = [];
@@ -257,7 +265,7 @@ export async function createLiveSession<T>(options: LiveSessionOptions<T>): Prom
       dropped++; // the pending PDF was superseded before it was painted
     }
     pending = item;
-    if (!presenting) void present();
+    if (!presenting) void present().catch(fail);
   };
 
   let nextSeq = 0;
@@ -274,7 +282,7 @@ export async function createLiveSession<T>(options: LiveSessionOptions<T>): Prom
       const compileStartedAt = performance.now();
       let bytes: Uint8Array;
       try {
-        bytes = (await client.compile(document, { signal: abort.signal })).bytes;
+        bytes = (await client.compile(document, { signal: abort.signal, validate: false })).bytes;
       } catch (error) {
         if (!running) return;
         throw error;
@@ -297,11 +305,7 @@ export async function createLiveSession<T>(options: LiveSessionOptions<T>): Prom
     start() {
       if (running || stopped) return;
       running = true;
-      lanes = Array.from({ length: options.poolSize }, () =>
-        lane().catch(error => {
-          if (running) console.error('Live PDF lane failed', error);
-        }),
-      );
+      lanes = Array.from({ length: options.poolSize }, () => lane().catch(fail));
     },
     async dispose() {
       if (stopped) return;

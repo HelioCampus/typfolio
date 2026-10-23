@@ -1,4 +1,5 @@
 import { defineTemplate, type PdfOptions } from '@typfolio/core';
+import '../../fixtures/browser/demo-header.css';
 import { createWorkerClient } from '@typfolio/workers';
 import wasmUrl from '@typfolio/wasm/compiler.wasm?url';
 import fontUrl from '../../fixtures/fonts/LibertinusSerif-Regular.otf?url';

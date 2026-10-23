@@ -49,15 +49,7 @@ button, a { -webkit-tap-highlight-color: transparent; }
   border-bottom: 1px solid var(--line);
 }
 
-.brand {
-  display: inline-flex;
-  align-items: center;
-  gap: 12px;
-  color: inherit;
-  text-decoration: none;
-}
-
-.brand-mark, .boot-mark {
+.boot-mark {
   display: grid;
   width: 38px;
   height: 38px;
@@ -70,11 +62,7 @@ button, a { -webkit-tap-highlight-color: transparent; }
   font-weight: 700;
 }
 
-.brand strong, .brand small { display: block; }
-.brand strong { font-family: Georgia, serif; font-size: 18px; }
-.brand small { margin-top: 1px; color: var(--muted); font-size: 11px; letter-spacing: 0.04em; }
-
-.topbar-actions { display: flex; align-items: center; justify-content: flex-end; gap: 14px; }
+.topbar-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 14px; }
 .runtime-nav {
   display: inline-flex;
   padding: 3px;

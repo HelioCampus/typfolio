@@ -1,18 +1,18 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { PdfClient } from '@typfolio/core';
 import { usePdf } from '@typfolio/react';
 import { CompilerBoundary } from '../CompilerBoundary.tsx';
 import { FONT_FAMILY, type FontUrls } from '../assets.ts';
 import { StaticPreview } from '../live/StaticPreview.tsx';
 import { Shell } from '../Shell.tsx';
-import { STAGE_BACKGROUND, editorialTemplate, layoutToInput, type Baselines, type EditorialInput } from '../editorial/capture.ts';
+import { editorialTemplate, layoutToInput, type Baselines, type EditorialInput } from '../editorial/capture.ts';
 import {
   STAGE_PRESETS,
   createEditorialEngine,
   type EditorialLayout,
   type StagePresetId,
 } from '../editorial/engine.ts';
-import { EditorialView } from '../editorial/view.ts';
+import { measureBaseline } from '../measureBaseline.ts';
 import { LivePanel, LiveSwitch, type LiveStatus } from '../live/LivePanel.tsx';
 import type { Captured } from '../live/session.ts';
 
@@ -23,12 +23,12 @@ interface WorkbenchProps {
   readonly onPreset: (preset: StagePresetId) => void;
 }
 
-function baselinesFor(view: EditorialView, layout: EditorialLayout): Baselines {
+function baselinesFor(layout: EditorialLayout): Baselines {
   return {
-    headline: view.baseline(layout.headline.font, layout.headline.lineHeight, layout.headline.letterSpacing),
-    body: view.baseline(layout.body.font, layout.body.lineHeight),
-    dropCap: view.baseline(layout.dropCap.font, layout.dropCap.fontSize),
-    quote: view.baseline(layout.pullquotes.font, layout.pullquotes.lineHeight),
+    headline: measureBaseline(layout.headline.font, layout.headline.lineHeight, layout.headline.letterSpacing),
+    body: measureBaseline(layout.body.font, layout.body.lineHeight),
+    dropCap: measureBaseline(layout.dropCap.font, layout.dropCap.fontSize),
+    quote: measureBaseline(layout.pullquotes.font, layout.pullquotes.lineHeight),
   };
 }
 
@@ -40,20 +40,14 @@ function Workbench({ fonts, client, preset, onPreset }: WorkbenchProps) {
   const [engine] = useState(() => createEditorialEngine(FONT_FAMILY, STAGE_PRESETS[preset]));
   const { width, height } = engine.stage;
 
-  const viewportRef = useRef<HTMLDivElement>(null);
-  const stageRef = useRef<HTMLDivElement>(null);
-  const viewRef = useRef<EditorialView | undefined>(undefined);
   const layoutRef = useRef<EditorialLayout | undefined>(undefined);
   const frozenRef = useRef(false);
   const demandRef = useRef(false);
   const layoutMsRef = useRef(0);
   const lastAcquiredRef = useRef<EditorialLayout | undefined>(undefined);
-  const scaleRef = useRef(1);
-  const [scale, setScale] = useState(1);
-  const [frozen, setFrozen] = useState(false);
   const [captured, setCaptured] = useState<{ ms?: number; bytes: number; layout: EditorialLayout }>();
 
-  const [live, setLive] = useState(false);
+  const [live, setLive] = useState(true);
   const [liveStatus, setLiveStatus] = useState<LiveStatus>('starting');
 
   // The frame captured last: usePdf compiles it, and again on the next capture. Each capture is a
@@ -64,6 +58,7 @@ function Workbench({ fonts, client, preset, onPreset }: WorkbenchProps) {
   // Disabled until the first capture: nothing is checked or compiled before there is a layout.
   const pdf = usePdf(() => editorialTemplate(capturedInput as EditorialInput), {
     client,
+    validate: false,
     deps: [capturedInput],
     enabled: capturedInput !== undefined,
     onSuccess: () => {
@@ -73,26 +68,8 @@ function Workbench({ fonts, client, preset, onPreset }: WorkbenchProps) {
   });
   const pdfUrl = pdf.url;
 
-  // Fit the fixed logical stage to the available width; the PDF page keeps the logical size.
   useEffect(() => {
-    const viewport = viewportRef.current;
-    if (viewport === null) return;
-    const observer = new ResizeObserver(() => {
-      const next = Math.min(1, viewport.clientWidth / width);
-      scaleRef.current = next;
-      setScale(next);
-    });
-    observer.observe(viewport);
-    return () => observer.disconnect();
-  }, [width]);
-
-  useEffect(() => {
-    const stage = stageRef.current;
-    if (stage === null) return;
-    const view = new EditorialView(stage);
-    viewRef.current = view;
     let handle = 0;
-    let drawn: EditorialLayout | undefined;
     const frame = (now: number): void => {
       // In demand-driven live mode the PDF pipeline steps the engine itself.
       if (!frozenRef.current && !demandRef.current) {
@@ -101,55 +78,19 @@ function Workbench({ fonts, client, preset, onPreset }: WorkbenchProps) {
         layoutRef.current = engine.layout();
         layoutMsRef.current = performance.now() - startedAt;
       }
-      const layout = layoutRef.current;
-      if (layout !== undefined && layout !== drawn) {
-        drawn = layout;
-        view.render(layout);
-      }
       handle = requestAnimationFrame(frame);
     };
     handle = requestAnimationFrame(frame);
-    return () => {
-      cancelAnimationFrame(handle);
-      stage.replaceChildren();
-      viewRef.current = undefined;
-    };
+    return () => cancelAnimationFrame(handle);
   }, [engine]);
 
-  const toStage = (event: ReactPointerEvent<HTMLDivElement>): { x: number; y: number } => {
-    const rect = event.currentTarget.getBoundingClientRect();
-    const factor = rect.width / width;
-    return { x: (event.clientX - rect.left) / factor, y: (event.clientY - rect.top) / factor };
-  };
-
-  const onPointerDown = (event: ReactPointerEvent<HTMLDivElement>): void => {
-    if (frozenRef.current) return;
-    const { x, y } = toStage(event);
-    if (engine.pointerDown(x, y)) {
-      event.currentTarget.setPointerCapture(event.pointerId);
-      event.preventDefault();
-    }
-  };
-  const onPointerMove = (event: ReactPointerEvent<HTMLDivElement>): void => {
-    if (frozenRef.current) return;
-    const { x, y } = toStage(event);
-    engine.pointerMove(x, y);
-    event.currentTarget.style.cursor = engine.hoveredOrb(x, y) ? 'grab' : '';
-  };
-  const onPointerUp = (event: ReactPointerEvent<HTMLDivElement>): void => {
-    if (frozenRef.current) return;
-    const { x, y } = toStage(event);
-    engine.pointerUp(x, y);
-  };
-
-  const capture = useCallback(async () => {
-    const view = viewRef.current;
+  const capture = useCallback(() => {
     const layout = layoutRef.current;
-    if (view === undefined || layout === undefined) return;
+    if (layout === undefined) return;
     // Freeze the orb configuration: the PDF is built from exactly this layout object.
     frozenRef.current = true;
-    setFrozen(true);
-    const input = layoutToInput(layout, baselinesFor(view, layout));
+    setLive(false);
+    const input = layoutToInput(layout, baselinesFor(layout));
     const bytes = JSON.stringify(input).length;
     setCaptured({ bytes, layout });
     startedAtRef.current = performance.now();
@@ -180,20 +121,17 @@ function Workbench({ fonts, client, preset, onPreset }: WorkbenchProps) {
     [engine],
   );
   const buildLiveDocument = useCallback((layout: EditorialLayout, burn: number) => {
-    const view = viewRef.current;
-    if (view === undefined) throw new Error('The live stage is not mounted');
-    return editorialTemplate(layoutToInput(layout, baselinesFor(view, layout), burn));
+    return editorialTemplate(layoutToInput(layout, baselinesFor(layout), burn));
   }, []);
   const onLiveActive = useCallback((state: { demand: boolean } | undefined) => {
     demandRef.current = state?.demand ?? false;
     lastAcquiredRef.current = undefined;
     if (state !== undefined) {
       frozenRef.current = false;
-      setFrozen(false);
     }
   }, []);
 
-  // Dragging orbs directly on the live PDF canvas: same engine calls as the DOM stage.
+  // Drag or pause the orbs directly on the live PDF canvas.
   const canvasInteraction = useMemo(
     () => ({
       stageWidth: width,
@@ -205,53 +143,8 @@ function Workbench({ fonts, client, preset, onPreset }: WorkbenchProps) {
     [engine, width],
   );
 
-  const resume = (): void => {
-    frozenRef.current = false;
-    setFrozen(false);
-  };
-
   return (
     <div className="ed-workbench">
-      <section className="card">
-        <header className="card-head">
-          <div>
-            <p className="kicker">Live · DOM</p>
-            <h2>Orbs, columns and a pull quote</h2>
-          </div>
-          <div className="segmented" role="group" aria-label="Stage size">
-            {(Object.keys(STAGE_PRESETS) as StagePresetId[]).map(id => (
-              <button
-                aria-pressed={preset === id}
-                className={preset === id ? 'on' : undefined}
-                key={id}
-                onClick={() => onPreset(id)}
-                type="button"
-              >
-                {STAGE_PRESETS[id].label}
-              </button>
-            ))}
-          </div>
-        </header>
-        <div className="ed-viewport" ref={viewportRef} style={{ height: height * scale, '--stage-w': `${width}px` } as CSSProperties}>
-          <div
-            className="ed-stage"
-            onPointerCancel={onPointerUp}
-            onPointerDown={onPointerDown}
-            onPointerMove={onPointerMove}
-            onPointerUp={onPointerUp}
-            ref={stageRef}
-            style={{ width, height, background: STAGE_BACKGROUND, transform: `scale(${scale})` }}
-          />
-        </div>
-        <div className="card-actions">
-          <button className="button button--primary" disabled={pdf.isFetching || live} onClick={() => void capture()} type="button">
-            {pdf.isFetching ? 'Compiling…' : 'Capture frame as PDF'}
-          </button>
-          <button className="button" disabled={!frozen || live} onClick={resume} type="button">Resume</button>
-          <span className="hint">Drag an orb · click to pause it · {frozen ? 'frozen on the captured frame' : 'running'}</span>
-        </div>
-      </section>
-
       <section className="card" aria-live="polite">
         <header className="card-head">
           <div>
@@ -259,12 +152,25 @@ function Workbench({ fonts, client, preset, onPreset }: WorkbenchProps) {
             <h2>Rendered PDF</h2>
           </div>
           <div className="head-controls">
-            <LiveSwitch checked={live} onChange={setLive} />
+            <LiveSwitch checked={live} disabled={pdf.isFetching} onChange={enabled => enabled ? setLive(true) : capture()} />
             <span className={`pill pill--${live ? (liveStatus === 'error' ? 'error' : 'success') : pdf.status}`}>
               {live ? liveStatus : pdf.status}
             </span>
           </div>
         </header>
+        <div className="segmented" role="group" aria-label="Stage size">
+          {(Object.keys(STAGE_PRESETS) as StagePresetId[]).map(id => (
+            <button
+              aria-pressed={preset === id}
+              className={preset === id ? 'on' : undefined}
+              key={id}
+              onClick={() => onPreset(id)}
+              type="button"
+            >
+              {STAGE_PRESETS[id].label}
+            </button>
+          ))}
+        </div>
         {live ? (
           <LivePanel
             acquireFrame={acquireFrame}
@@ -290,6 +196,13 @@ function Workbench({ fonts, client, preset, onPreset }: WorkbenchProps) {
             url={pdfUrl}
           />
         )}
+        <div className="card-actions">
+          <button className="button button--primary" disabled={pdf.isFetching} onClick={capture} type="button">
+            {pdf.isFetching ? 'Compiling…' : 'Capture frame as PDF'}
+          </button>
+          <button className="button" disabled={live || pdf.isFetching} onClick={() => setLive(true)} type="button">Resume live PDF</button>
+          <span className="hint">{live ? 'Drag an orb in the PDF · click to pause it' : 'Frozen on the captured frame.'}</span>
+        </div>
         {live ? null : (
         <dl className="facts">
           <div><dt>Compile</dt><dd>{formatMs(captured?.ms)}</dd></div>

@@ -8,8 +8,8 @@
  * - the font is the registered Libertinus Serif FontFace (weights 400 and 700,
  *   normal style) instead of Georgia at three weights plus italics, so the
  *   measurements match the font bytes that Typst receives;
- * - nothing here touches the DOM except offscreen canvases: rendering the grid
- *   and capturing it are separate steps that both consume the same `Frame`.
+ * - nothing here touches the DOM except offscreen canvases: the live PDF
+ *   pipeline and static captures consume the same `Frame` data.
  */
 import { prepareWithSegments } from '@chenglou/pretext';
 
@@ -18,6 +18,7 @@ export const ROWS = 28;
 export const FONT_SIZE = 14;
 export const LINE_HEIGHT = 16;
 export const TARGET_ROW_W = 440;
+export const CELL_WIDTH = TARGET_ROW_W / COLS;
 export const ART_PADDING = 14;
 export const STAGE_W = TARGET_ROW_W + ART_PADDING * 2;
 export const STAGE_H = ROWS * LINE_HEIGHT + ART_PADDING * 2;
@@ -57,7 +58,7 @@ export interface GlyphCell {
   readonly alphaIndex: number;
 }
 
-/** A grid cell below the brightness threshold renders as a space. */
+/** A grid cell below the brightness threshold leaves its full grid slot empty. */
 export type Cell = GlyphCell | null;
 
 export interface Frame {
@@ -66,15 +67,24 @@ export interface Frame {
   readonly layoutMs: number;
 }
 
+/** Map the full artwork rectangle to the uniformly sampled source field. */
+export function pointerToSource(
+  position: { x: number; y: number },
+): { x: number; y: number } {
+  return {
+    x: Math.max(0, Math.min(1, (position.x - ART_PADDING) / TARGET_ROW_W)) * CANVAS_W,
+    y: Math.max(0, Math.min(1, (position.y - ART_PADDING) / (ROWS * LINE_HEIGHT))) * CANVAS_H,
+  };
+}
+
 export interface PaletteInfo {
   readonly entries: number;
-  readonly spaceWidth: number;
   readonly distinctGlyphs: number;
 }
 
 export interface AsciiEngine {
+  /** Live particle field used as the ASCII reference thumbnail. */
   readonly sourceCanvas: HTMLCanvasElement;
-  readonly spaceWidth: number;
   readonly paletteInfo: PaletteInfo;
   /** Pointer position in stage px (or `null`): acts as an extra particle attractor. */
   setPointer(position: { x: number; y: number } | null): void;
@@ -158,11 +168,6 @@ export function createAsciiEngine(family: string): AsciiEngine {
     return prepared.widths.length > 0 ? prepared.widths[0]! : 0;
   };
 
-  const regularFont = fontString(400, family);
-  // pretext collapses whitespace, so a lone space is measured with canvas instead.
-  bCtx.font = regularFont;
-  const spaceWidth = bCtx.measureText(' ').width;
-
   const unsorted: PaletteEntry[] = [];
   for (const weight of WEIGHTS) {
     const font = fontString(weight, family);
@@ -177,8 +182,6 @@ export function createAsciiEngine(family: string): AsciiEngine {
   const palette: PaletteEntry[] = unsorted
     .map(entry => ({ ...entry, brightness: maxBrightness > 0 ? entry.brightness / maxBrightness : 0 }))
     .sort((a, b) => a.brightness - b.brightness);
-
-  const targetCellW = TARGET_ROW_W / COLS;
 
   const findBest = (targetBrightness: number): PaletteEntry => {
     let lo = 0;
@@ -195,7 +198,7 @@ export function createAsciiEngine(family: string): AsciiEngine {
     for (let index = start; index < end; index++) {
       const entry = palette[index]!;
       const brightnessError = Math.abs(entry.brightness - targetBrightness) * 2.5;
-      const widthError = Math.abs(entry.width - targetCellW) / targetCellW;
+      const widthError = Math.abs(entry.width - CELL_WIDTH) / CELL_WIDTH;
       const score = brightnessError + widthError;
       if (score < bestScore) {
         bestScore = score;
@@ -287,9 +290,10 @@ export function createAsciiEngine(family: string): AsciiEngine {
     const attractor2X = Math.cos(now * 0.0013 + Math.PI) * CANVAS_W * 0.2 + CANVAS_W / 2;
     const attractor2Y = Math.sin(now * 0.0009 + Math.PI) * CANVAS_H * 0.25 + CANVAS_H / 2;
 
-    // The pointer (when over the live PDF) is mapped from stage px into particle-canvas px.
-    const pointerX = pointer === null ? NaN : ((pointer.x - ART_PADDING) * CANVAS_W) / TARGET_ROW_W;
-    const pointerY = pointer === null ? NaN : ((pointer.y - ART_PADDING) * CANVAS_H) / (ROWS * LINE_HEIGHT);
+    // Empty and filled cells occupy the same fixed grid in the PDF and source.
+    const sourcePointer = pointer === null ? undefined : pointerToSource(pointer);
+    const pointerX = sourcePointer?.x ?? NaN;
+    const pointerY = sourcePointer?.y ?? NaN;
 
     for (const particle of particles) {
       const d1x = attractor1X - particle.x;
@@ -372,10 +376,8 @@ export function createAsciiEngine(family: string): AsciiEngine {
 
   return {
     sourceCanvas,
-    spaceWidth,
     paletteInfo: {
       entries: palette.length,
-      spaceWidth,
       distinctGlyphs: new Set(palette.map(entry => entry.char)).size,
     },
     setPointer(position) {
@@ -383,11 +385,4 @@ export function createAsciiEngine(family: string): AsciiEngine {
     },
     step,
   };
-}
-
-/** Width of a row as the sum of its cells' measured advances. */
-export function rowWidth(cells: readonly Cell[], spaceWidth: number): number {
-  let width = 0;
-  for (const cell of cells) width += cell === null ? spaceWidth : cell.entry.width;
-  return width;
 }
