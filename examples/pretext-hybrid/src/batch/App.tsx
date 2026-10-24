@@ -1,5 +1,5 @@
 import { lazy, memo, Suspense, useCallback, useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
-import { BatchRun, percentile, type BatchSettings, type DocRow } from './batch.ts';
+import { BatchRun, percentile, type BatchSettings, type DocRow, type Engine } from './batch.ts';
 import { DocumentHeatmap, legends, ProgressChart, type ColorBy } from './charts.tsx';
 import { loadRuns, recordRun, saveRuns, sweepWorkers, type RunRecord } from './runs.ts';
 import { RunsPanel } from './RunsPanel.tsx';
@@ -7,7 +7,7 @@ import './styles.css';
 
 const StaticViewer = lazy(() => import('../live/StaticViewer.tsx'));
 
-// Settings can come from the URL, for recordings and automated runs: ?workers=4&count=1000&autostart
+// Settings can come from the URL, for recordings and automated runs: ?workers=4&count=1000&engine=paramdoc&autostart
 const cores = navigator.hardwareConcurrency || 4;
 const maxWorkers = Math.min(16, cores);
 const maxCount = 5000;
@@ -21,10 +21,11 @@ export function BatchWorkbench() {
   const [workers, setWorkers] = useState(() => Math.max(1, Math.min(maxWorkers,
     Math.floor(Number(params.get('workers'))) || Math.min(4, cores - 1))));
   const [count, setCount] = useState(() => clampCount(Number(params.get('count') ?? 1000)));
+  const [engine, setEngine] = useState<Engine>(() => params.get('engine') === 'paramdoc' ? 'paramdoc' : 'typst');
   const [ua, setUa] = useState(true);
   const [keep, setKeep] = useState(true);
   const [follow, setFollow] = useState(true);
-  const [run, setRun] = useState(() => new BatchRun({ total: count, workers, ua, keep }));
+  const [run, setRun] = useState(() => new BatchRun({ total: count, workers, ua, keep, engine }));
   const [preview, setPreview] = useState<number | null>(null);
   const version = useSyncExternalStore(run.subscribe, run.getVersion);
   // Status while a batch runs, speed once it is over. The toggle works at any time; once it is used during a
@@ -85,7 +86,8 @@ export function BatchWorkbench() {
         if (controller.signal.aborted) break;
         if (compare) setSweep({ at, counts });
         setWorkers(counts[at]!);
-        const finished = await runBatch({ total, workers: counts[at]!, ua, keep }, controller.signal);
+        // The paramdoc runtime always writes tagged PDF/UA-1.
+        const finished = await runBatch({ total, workers: counts[at]!, ua: ua || engine === 'paramdoc', keep, engine }, controller.signal);
         if (finished.aborted || finished.error || finished.failed) break;
         // Let the previous pool and retained PDFs be collected between sweep runs.
         if (at + 1 < counts.length) await new Promise(resolve => setTimeout(resolve, 400));
@@ -94,7 +96,7 @@ export function BatchWorkbench() {
       operation.current = undefined;
       if (mounted.current) setSweep(undefined);
     }
-  }, [count, workers, ua, keep, runBatch]);
+  }, [count, workers, ua, keep, engine, runBatch]);
   const start = useCallback(() => { void launch(false); }, [launch]);
 
   const clearRuns = useCallback(() => { setRuns([]); saveRuns([]); }, []);
@@ -111,10 +113,22 @@ export function BatchWorkbench() {
   const open = useCallback((index: number) => { if (run.pdfs[index]) setPreview(index); }, [run]);
   // A sweep is busy between its runs too.
   const running = run.running || sweep !== undefined;
+  const paramdoc = engine === 'paramdoc';
 
   return (
     <div className="batch-demo">
       <section className="panel controls" aria-label="Batch settings">
+        <div className="engine" role="group" aria-label="Engine">
+          <span>Engine</span>
+          <div className="toggle">
+            {(['typst', 'paramdoc'] as const).map(choice => (
+              <button key={choice} type="button" aria-pressed={engine === choice} disabled={running} onClick={() => setEngine(choice)}
+                title={choice === 'paramdoc' ? 'Experimental: the report typeset once by Typst, filled in the browser without the compiler' : 'The Typst compiler in Web Workers'}>
+                {choice === 'typst' ? 'Typst compiler' : 'paramdoc runtime'}
+              </button>
+            ))}
+          </div>
+        </div>
         <label>Workers
           <input type="range" min={1} max={maxWorkers} value={workers} disabled={running}
             onChange={event => setWorkers(Number(event.target.value))} />
@@ -124,13 +138,23 @@ export function BatchWorkbench() {
           <input type="number" min={1} max={maxCount} step={1} value={count} disabled={running}
             onChange={event => setCount(Number(event.target.value))} />
         </label>
-        <label><input type="checkbox" checked={ua} disabled={running} onChange={event => setUa(event.target.checked)} /> PDF/UA-1</label>
+        <label title={paramdoc ? 'The paramdoc runtime always writes tagged PDF/UA-1' : undefined}>
+          <input type="checkbox" checked={paramdoc || ua} disabled={running || paramdoc} onChange={event => setUa(event.target.checked)} /> PDF/UA-1
+        </label>
         <label><input type="checkbox" checked={keep} disabled={running} onChange={event => setKeep(event.target.checked)} /> Keep PDFs to open</label>
         <div className="buttons">
           <button id="start" type="button" disabled={running} onClick={start}>Render</button>
           <button id="cancel" type="button" disabled={!running} onClick={() => operation.current?.abort('Cancelled by the user')}>Cancel</button>
         </div>
       </section>
+      {paramdoc && (
+        <p className="note engine-note">
+          Experimental, from <code>experiments/paramdoc</code>: Typst typeset this report once at export time into a document
+          with slots. Each worker fills the slots and writes the PDF with a 16 kB runtime and no compiler, from a 150 kB document
+          with two subset fonts; the output is tagged PDF/UA-1. The layout is the slot dialect's version of the report: a static
+          title, a one-line tutor comment, no score bars and no row stripes.
+        </p>
+      )}
 
       <Metrics run={run} version={version} />
 
@@ -161,7 +185,7 @@ export function BatchWorkbench() {
       </div>
 
       <Status run={run} version={version} />
-      <RunsPanel runs={runs} running={running} sweep={sweep} onSweep={() => void launch(true)} onClear={clearRuns} />
+      <RunsPanel runs={runs} engine={engine} running={running} sweep={sweep} onSweep={() => void launch(true)} onClear={clearRuns} />
       <Preview run={run} index={preview} onChange={setPreview} />
     </div>
   );
@@ -201,7 +225,7 @@ function Metrics({ run, version }: { readonly run: BatchRun; readonly version: n
         sub={run.running && run.done ? `about ${Math.ceil((total - run.settled) / rate)} s left` : ' '} />
       <Metric label="Throughput" value={run.done ? rate.toFixed(1) : '–'}
         sub={run.done ? `PDFs per second · ${(rate / run.settings.workers).toFixed(1)} per worker` : 'PDFs per second'} />
-      <Metric label="Compile time" value={p50 === undefined ? '–' : `${Math.round(p50)} ms`}
+      <Metric label={run.settings.engine === 'paramdoc' ? 'Fill time' : 'Compile time'} value={p50 === undefined ? '–' : `${Math.round(p50)} ms`}
         sub={p95 === undefined ? 'median, per PDF' : `median per PDF · p95 ${Math.round(p95)} ms`} />
       <Metric label="Cold start" value={coldMedian === undefined ? '–' : `${Math.round(coldMedian)} ms`}
         sub={coldMedian !== undefined && warmMedian ? `first job per worker · ${(coldMedian / warmMedian).toFixed(0)}× a warm one` : 'first job per worker'} />
@@ -288,6 +312,7 @@ function Status({ run, version }: { readonly run: BatchRun; readonly version: nu
   void version;
   const { workers } = run.settings;
   const plural = workers === 1 ? '' : 's';
+  const engine = run.settings.engine === 'paramdoc' ? 'the paramdoc runtime' : 'the Typst compiler';
   let status = 'idle';
   let text = 'Ready.';
   if (run.error) {
@@ -295,13 +320,13 @@ function Status({ run, version }: { readonly run: BatchRun; readonly version: nu
     text = run.error;
   } else if (run.running) {
     status = 'running';
-    text = `Rendering ${run.settings.total} PDFs on ${workers} worker${plural}…`;
+    text = `Rendering ${run.settings.total} PDFs on ${workers} worker${plural} with ${engine}…`;
   } else if (run.endedAt !== undefined) {
     const seconds = run.elapsed();
     status = run.failed ? 'failed' : run.aborted ? 'cancelled' : 'passed';
     text = run.aborted
       ? `Cancelled after ${run.done} PDFs in ${seconds.toFixed(1)} s.`
-      : `${run.done} PDFs in ${seconds.toFixed(1)} s on ${workers} worker${plural} (${(run.done / seconds).toFixed(1)} per second)` +
+      : `${run.done} PDFs in ${seconds.toFixed(1)} s on ${workers} worker${plural} with ${engine} (${(run.done / seconds).toFixed(1)} per second)` +
         `${run.failed ? `, ${run.failed} failed` : ''}.`;
   }
   return <p id="status" role="status" data-status={status}>{text}</p>;

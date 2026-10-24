@@ -57,6 +57,8 @@ The header links back to the **Overview** and groups ASCII and Editorial under *
 
 Each run owns its worker pool and disposes it on completion or cancellation. Leaving the route cancels an active batch or sweep. Run history is stored locally; retained PDFs live only in memory. Query parameters such as `/performance?workers=4&count=1000&autostart` support repeatable recordings. Charts use TanStack Charts 1.1.0.
 
+The **Engine** switch (`?engine=paramdoc`) renders the same batch with the experimental paramdoc runtime from `experiments/paramdoc`: Typst typesets the report once at export time into a document with slots, and a 16 kB runtime fills the slots in Web Workers and writes tagged PDF/UA-1 without the compiler. The exported document and its two subset fonts are checked in under `experiments/paramdoc/documents/report/`; the layout is the slot dialect's version of the report (static title, one-line tutor comment, no score bars, no row stripes). The runs panel lists one engine's runs at a time, because the two rates are an order of magnitude apart.
+
 The app downloads and compiles the WASM module once per page lifetime, then shares that module with each compiler through the existing worker API. Workers still own separate WASM instances and compile the PDFs themselves. This avoids concurrent large cached downloads failing in Chromium while preserving normal immutable asset caching. The first batch's elapsed time includes module download and compilation; later runs reuse that module. Per-document cold timings cover worker startup and instance initialization.
 
 ## The hybrid pipeline

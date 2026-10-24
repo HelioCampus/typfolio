@@ -13,8 +13,9 @@ and fixed-height repeating rows (forms, certificates, statements, transcripts, r
 flowing narrative documents. The boundary is precise and enforced by a build-time check.
 
 It is an experiment: nothing here is wired into the Typfolio packages, no API is public, and `AGENTS.md`'s rule
-that the compiler contract lives in `README.md` is untouched. The repository's own code is unchanged except for
-nothing: every commit of this work only adds files under `experiments/paramdoc/`.
+that the compiler contract lives in `README.md` is untouched. The packages are unchanged. The one place outside
+this folder that knows about it is the performance demo page in `examples/pretext-hybrid`, whose engine switch
+imports the TypeScript runtime and the exported report from here (see "The demo page" below).
 
 ## The branch
 
@@ -35,6 +36,7 @@ Commits, oldest first:
 7. `paramdoc: export-time font subsetting; runtimes parse no fonts` (M6)
 8. this handover
 9. `paramdoc: PDF/UA-1 validated with veraPDF; check.sh runs the whole proof` (see the status log in `PLAN.md`)
+10. `paramdoc: engine switch on the performance demo page; 1000 reports without the compiler`
 
 ## Layout of the folder
 
@@ -42,6 +44,8 @@ Commits, oldest first:
 |---|---|
 | `PLAN.md` | Principle, architecture, milestones, findings, measurements, re-evaluations. Read it first. |
 | `check.sh` | The whole proof below as one script: build, exports with fuzzing, both runtimes against Typst and each other, pixels, text, structure, veraPDF. 40 checks, about 30 s. |
+| `export-documents.sh` | Exports a fixture and copies what a browser runtime needs, `doc.json` and the subset fonts, into `documents/<fixture>/`. |
+| `documents/report/` | The report fixture exported, checked in (152 kB) because the demo page cannot run the exporter at build time. Regenerate after changing the fixture, the dialect or the exporter. |
 | `Cargo.toml`, `Cargo.lock`, `.cargo/config.toml` | Rust workspace; build output goes to `../../.build/paramdoc-target` (gitignored), never in-tree. |
 | `ir/` | The parametric document format (`doc.json`), serde types, version 4. |
 | `export/` | `paramdoc-export`: links Typst 0.15.1 as a library (crates.io), compiles a fixture with sample data, walks the frames, exports the document, subsets fonts, dumps Typst's layout as a reference, fuzzes the data and diffs the contract. |
@@ -113,6 +117,29 @@ geometry or picks among things Typst already produced. Bands must use `table`, n
 semantics in the structure tree. Slot text may only contain characters in the slot's repertoire (`charset:` or
 the default Latin set); the exporter subsets fonts to exactly that plus the static glyphs.
 
+## The demo page
+
+The performance page of `examples/pretext-hybrid` (`/performance`, "1000 PDFs in the browser, on workers") has an
+**Engine** switch since 2026-10-24: *Typst compiler* is the page as it was, *paramdoc runtime (experimental)* renders
+the same synthetic batch through this experiment. `?engine=paramdoc&count=1000&autostart` starts it from the URL.
+
+- `examples/pretext-hybrid/src/batch/paramdoc.ts` downloads `documents/report/doc.json` and its fonts once per page
+  (`?url` imports and an `import.meta.glob` over the fonts folder, so Vite bundles them; the static build and
+  `tools/check-static-demo.ts` pass), maps the page's `ReportInput` to the slot names the way `notes/bench/gen-inputs.mjs`
+  does, and wraps one Web Worker per runtime.
+- `examples/pretext-hybrid/src/batch/paramdoc.worker.ts` imports `ts/runtime.ts` from this folder by relative path,
+  creates the runtime on `init` and transfers one PDF back per `fill`.
+- `examples/pretext-hybrid/src/batch/batch.ts` runs the pool like the compiler pool: each worker takes the next
+  document until none is left, a worker's first job is its cold one, the PDF/UA-1 box is forced on (the runtime always
+  tags), and the runs panel shows one engine's runs at a time because the rates are an order of magnitude apart.
+
+On a 10-core M-series Mac, 1000 reports, 4 workers: the paramdoc engine takes 0.2 s (4237 PDFs/s, median 1 ms per
+fill, cold start 9 ms, 61 kB per PDF); the Typst compiler takes 12.8 s (78 PDFs/s, median 21 ms, cold start 329 ms,
+26 kB per PDF). With the tab hidden the paramdoc runs drop to 2100–2300 PDFs/s, so compare runs made with the tab in
+view. The first synthetic report from the same data path passes veraPDF PDF/UA-1. The exported report is the slot
+dialect's version of the page's template, so the PDFs differ from the compiler's: a static title, a one-line tutor
+comment, no score bars and no row stripes; the page says so next to the switch.
+
 ## Open items, in the order I would do them
 
 veraPDF, the first item at handover, is done (2026-10-24, veraPDF 1.30.0): every runtime PDF passes PDF/UA-1
@@ -128,8 +155,9 @@ UA-1 on two rules (no `DisplayDocTitle`, no `pdfuaid:part`), as expected for a p
    artifacts), and links bring annotations, `/Tabs /S` and the Link structure rules with them.
 2. **Variable-height rows.** Rows are one fixed height. The plan is variants laid out at export time (a band
    declared for 1..n lines) with the runtime measuring and picking.
-3. **A Worker wrapper** for the TypeScript runtime, and a compact binary form of `doc.json` if its 87 kB raw
-   (6.5 kB gzip) ever matters.
+3. **A Worker wrapper** for the TypeScript runtime as something reusable: the demo page has one (`paramdoc.worker.ts`
+   and the pool in `batch.ts`), written for that page; moving it under `ts/` with a small API would let other pages
+   use it. A compact binary form of `doc.json` if its 87 kB raw (6.5 kB gzip) ever matters.
 4. **Export as a Vite plugin** fed by `defineTemplate`, with the schema's `maxLength` and `pattern` sizing
    slots and setting repertoires. This is where the experiment would meet the real packages; design it with the
    repository's maintainers before writing it.

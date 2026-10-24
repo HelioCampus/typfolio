@@ -86,6 +86,25 @@ Defaults: fonts from `../../fixtures/fonts`, output under `../../.build/paramdoc
 
 ## Status log
 
+- **Demo page (2026-10-24).** The performance page of `examples/pretext-hybrid` has an engine switch: the
+  TypeScript runtime runs in a pool of Web Workers (one runtime each, `src/batch/paramdoc.worker.ts`), fed by
+  the page's own synthetic inputs mapped to the slot names, from `documents/report/` (the report fixture exported
+  and checked in, 152 kB). Same machine, same page, 1000 reports, 4 workers, 10-core M-series Mac:
+
+  | Engine | total | PDFs/s | median per PDF | cold start | PDF |
+  |---|---:|---:|---:|---:|---:|
+  | Typst compiler in workers (tab hidden) | 12.8 s | 78 | 21 ms | 329 ms | 26 kB |
+  | paramdoc runtime in workers | 0.2 s | 4237 | 1 ms | 9 ms | 61 kB |
+  | paramdoc runtime in workers, tab hidden | 0.4–0.5 s | 2100–2300 | 1 ms | 35–59 ms | 61 kB |
+  | paramdoc runtime in Node, one thread | 0.23 s | 4327 | 0.21 ms | setup 13 ms | 62 kB |
+
+  The first synthetic report passes veraPDF PDF/UA-1 like the fixtures. The median per fill on the page is the
+  round trip through `postMessage`; the runtime itself takes 0.2 ms. The runtime's PDFs are larger than the
+  compiler's because each embeds the two repertoire subsets (35 kB compressed) instead of a per-document subset,
+  the M6 trade-off. The static build of the demo bundles the worker, `doc.json` and the fonts, and
+  `tools/check-static-demo.ts` passes. Finding: running `vite build` while the dev server is up makes both
+  regenerate `routeTree.gen.ts` and the page reloads in a loop until the build ends.
+
 - **veraPDF done (2026-10-24, on a Mac, from the bundle).** veraPDF 1.30.0 validates every runtime PDF of every
   fixture (Rust and TypeScript, single and multi-page, ten files) as PDF/UA-1: 106 rules, 1904 checks, no
   failures, with no change to either runtime. The gaps M4 expected did not apply: `/Tabs` is only required on

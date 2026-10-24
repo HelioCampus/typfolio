@@ -3,6 +3,7 @@ import { compileBatch, createWorkerClient, type PdfBatchJob, type PdfWorkerClien
 import { fontUrls, loadWasm } from '../assets.ts';
 import template from './report/main.typ?raw';
 import { fileName, reportInput, type ReportInput } from './data.ts';
+import { loadParamdocDocument, paramdocData, ParamdocWorker } from './paramdoc.ts';
 
 const report: TemplateDefinition<ReportInput> = defineTemplate({
   files: { 'main.typ': template },
@@ -25,11 +26,15 @@ export interface DocRow {
   readonly error?: string;
 }
 
+/** What renders the documents: the Typst compiler in workers, or the experimental paramdoc runtime (see ./paramdoc.ts). */
+export type Engine = 'typst' | 'paramdoc';
+
 export interface BatchSettings {
   readonly total: number;
   readonly workers: number;
   readonly ua: boolean;
   readonly keep: boolean;
+  readonly engine: Engine;
 }
 
 /** How often a running batch tells its views to redraw. Charts rebuild their scene on every notification. */
@@ -63,6 +68,8 @@ export class BatchRun {
   private readonly controller = new AbortController();
   private readonly listeners = new Set<() => void>();
   private timer: ReturnType<typeof setTimeout> | undefined;
+  /** Releases the engine's workers once the run has ended; set by the engine that started them. */
+  private cleanup: (() => void | Promise<void>) | undefined;
 
   constructor(settings: BatchSettings) {
     this.settings = settings;
@@ -102,16 +109,6 @@ export class BatchRun {
 
   async start(): Promise<void> {
     if (this.startedAt > 0 || this.aborted) return;
-    const { workers, ua, keep } = this.settings;
-    const pdf = ua ? { standards: ['ua-1' as const] } : undefined;
-    // Keep runtime schema validation outside the performance measurement.
-    const jobs: PdfBatchJob<number>[] = this.inputs.map((input, index) => ({
-      id: index,
-      document: report(input),
-      pdf,
-      validate: false,
-    }));
-    let client: PdfWorkerClient | undefined;
     // Cancelling this run must not cancel the shared module needed by other demos.
     let cancelStartup!: () => void;
     const cancelledStartup = new Promise<undefined>(resolve => { cancelStartup = () => resolve(undefined); });
@@ -122,46 +119,114 @@ export class BatchRun {
     this.startedAt = performance.now();
     this.notify(true);
     try {
-      // Include the initial download/module compilation in the run's elapsed time.
-      const wasm = await Promise.race([loadWasm(), cancelledStartup]);
-      this.controller.signal.removeEventListener('abort', cancelStartup);
-      if (wasm === undefined || this.aborted) {
-        this.cancelled = this.rows.length;
-        for (const row of this.rows) this.rows[row.index] = { ...row, state: 'cancelled' };
-        return;
-      }
-      client = createWorkerClient({
-        compiler: { wasm, fonts: fontUrls.slice(0, 2) },
-        workerCount: workers,
-        timeoutMs: 60_000,
-      });
-      for await (const outcome of compileBatch(this.tracked(client), jobs, { signal: this.controller.signal })) {
-        const row = this.rows[outcome.index]!;
-        if (outcome.status === 'success') {
-          this.firstAt ??= performance.now();
-          this.done++;
-          this.bytes += outcome.result.bytes.length;
-          if (keep) this.pdfs[outcome.index] = outcome.result.bytes;
-          this.rows[outcome.index] = { ...row, state: 'done', bytes: outcome.result.bytes.length };
-        } else if (outcome.status === 'error') {
-          this.failed++;
-          this.rows[outcome.index] = { ...row, state: 'error', error: outcome.error.message };
-          console.error(row.file, outcome.error);
-        } else {
-          this.cancelled++;
-          this.rows[outcome.index] = { ...row, state: 'cancelled' };
-        }
-        this.notify();
-      }
+      if (this.settings.engine === 'paramdoc') await this.runParamdoc(cancelledStartup);
+      else await this.runTypst(cancelledStartup);
     } catch (error) {
       this.error = String((error as Error).stack ?? error);
     } finally {
       this.endedAt = performance.now();
       this.controller.signal.removeEventListener('abort', cancelStartup);
       document.removeEventListener('visibilitychange', onVisibility);
-      await client?.dispose();
+      await this.cleanup?.();
       this.notify(true);
     }
+  }
+
+  /** Every document that never started is cancelled. */
+  private cancelRest(): void {
+    for (const row of this.rows) {
+      if (row.state !== 'queued') continue;
+      this.cancelled++;
+      this.rows[row.index] = { ...row, state: 'cancelled' };
+    }
+  }
+
+  /** The Typst compiler in a worker pool from `@typfolio/workers`: one compile per document. */
+  private async runTypst(cancelledStartup: Promise<undefined>): Promise<void> {
+    const { workers, ua, keep } = this.settings;
+    const pdf = ua ? { standards: ['ua-1' as const] } : undefined;
+    // Keep runtime schema validation outside the performance measurement.
+    const jobs: PdfBatchJob<number>[] = this.inputs.map((input, index) => ({
+      id: index,
+      document: report(input),
+      pdf,
+      validate: false,
+    }));
+    // Include the initial download/module compilation in the run's elapsed time.
+    const wasm = await Promise.race([loadWasm(), cancelledStartup]);
+    if (wasm === undefined || this.aborted) {
+      this.cancelRest();
+      return;
+    }
+    const client = createWorkerClient({
+      compiler: { wasm, fonts: fontUrls.slice(0, 2) },
+      workerCount: workers,
+      timeoutMs: 60_000,
+    });
+    this.cleanup = () => client.dispose();
+    for await (const outcome of compileBatch(this.tracked(client), jobs, { signal: this.controller.signal })) {
+      const row = this.rows[outcome.index]!;
+      if (outcome.status === 'success') {
+        this.firstAt ??= performance.now();
+        this.done++;
+        this.bytes += outcome.result.bytes.length;
+        if (keep) this.pdfs[outcome.index] = outcome.result.bytes;
+        this.rows[outcome.index] = { ...row, state: 'done', bytes: outcome.result.bytes.length };
+      } else if (outcome.status === 'error') {
+        this.failed++;
+        this.rows[outcome.index] = { ...row, state: 'error', error: outcome.error.message };
+        console.error(row.file, outcome.error);
+      } else {
+        this.cancelled++;
+        this.rows[outcome.index] = { ...row, state: 'cancelled' };
+      }
+      this.notify();
+    }
+  }
+
+  /**
+   * The paramdoc runtime in its own workers, one runtime each: every worker takes the next document until
+   * none is left. A worker's first job waits for its start (the worker, then the runtime with its fonts), so
+   * it is the cold one, as with the compiler pool. The document and fonts download once per page, like the
+   * compiler module; that time counts too.
+   */
+  private async runParamdoc(cancelledStartup: Promise<undefined>): Promise<void> {
+    const { workers, keep } = this.settings;
+    const exported = await Promise.race([loadParamdocDocument(), cancelledStartup]);
+    if (exported === undefined || this.aborted) {
+      this.cancelRest();
+      return;
+    }
+    const pool = Array.from({ length: workers }, () => new ParamdocWorker(exported));
+    this.cleanup = () => { for (const worker of pool) worker.terminate(); };
+    let next = 0;
+    await Promise.all(pool.map(async worker => {
+      let cold = true;
+      while (!this.aborted) {
+        const index = next++;
+        if (index >= this.inputs.length) return;
+        const at = performance.now();
+        this.rows[index] = { ...this.rows[index]!, state: 'rendering', cold };
+        cold = false;
+        this.notify();
+        try {
+          const pdf = await worker.fill(paramdocData(this.inputs[index]!));
+          const ms = performance.now() - at;
+          this.durations.push(ms);
+          this.firstAt ??= performance.now();
+          this.done++;
+          this.bytes += pdf.length;
+          if (keep) this.pdfs[index] = pdf;
+          this.rows[index] = { ...this.rows[index]!, state: 'done', ms, bytes: pdf.length };
+        } catch (error) {
+          this.failed++;
+          this.rows[index] = { ...this.rows[index]!, state: 'error', error: (error as Error).message };
+          console.error(this.rows[index]!.file, error);
+        }
+        this.notify();
+      }
+    }));
+    this.cancelRest();
   }
 
   /**
