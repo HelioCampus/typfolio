@@ -5,6 +5,7 @@ import type { RuntimeProfile } from '../App.tsx';
 import { ClientPage } from '../ClientPage.tsx';
 import { ChartGoalColor, LevelsChart, type Level } from '../LevelsChart.tsx';
 import { Topbar } from '../Topbar.tsx';
+import { useStructureDevtools } from '../structureDevtools.ts';
 import { fontUrl, wasmUrl } from '../assets.ts';
 import logoSvg from '../common/logo.svg?raw';
 import { outcomesTemplate } from '../outcomes/template.ts';
@@ -101,6 +102,7 @@ function ChartsApp({ client }: { readonly client: PdfClient }) {
       enabled: requested,
     },
   );
+  useStructureDevtools(pdf.result?.bytes);
 
   return (
     <div className="app-shell">

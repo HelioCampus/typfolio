@@ -4,6 +4,7 @@ import { usePdf, type PdfStatus } from '@typfolio/react';
 import type { ReportInput } from './report/input.ts';
 import reportSource from './report/main.typ?raw';
 import { Topbar } from './Topbar.tsx';
+import { useStructureDevtools } from './structureDevtools.ts';
 
 export interface RuntimeProfile {
   readonly eyebrow: string;
@@ -94,6 +95,7 @@ export function App({ profile, client }: AppProps) {
     pdf: pdfOptions,
     onSuccess: () => setDurationMs(performance.now() - startedAt.current),
   });
+  useStructureDevtools(pdf.result?.bytes);
 
   const compile = (event: FormEvent<HTMLFormElement>): void => {
     event.preventDefault();

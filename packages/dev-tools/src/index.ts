@@ -8,6 +8,7 @@ import {
   type Diagnostic,
   type PartialDefinition,
   type PdfOptions,
+  type PdfResult,
   type StandardSchemaV1,
 } from '@typfolio/core';
 import {
@@ -21,6 +22,8 @@ import {
   resolveFonts,
 } from '@typfolio/core/internal';
 import { sampleFile, sampleSource } from './sample-source.generated.js';
+// Types only, erased from the compiled file: the main entry never loads the pdf module or pdfjs-dist.
+import type { PdfStructureWarning } from './pdf.js';
 
 /** Which sample `@local/typfolio`'s `input()` builds: every property, or only what the schema requires. */
 export type SampleMode = 'minimal' | 'full';
@@ -107,21 +110,30 @@ export interface TemplateCheckOptions extends JSONSchemaOptions {
    * file given here at a data path is used as it is, instead of one made from the schema.
    */
   assets?: Assets;
+  /**
+   * Reads the PDF of each mode that compiled and fails the mode on any warning it returns: `checkStructure` from
+   * `@typfolio/dev-tools/pdf` (which needs pdfjs-dist), or a function of your own, such as one that filters its
+   * warnings. A function that rejects rejects the check.
+   */
+  structure?: (bytes: Uint8Array) => Promise<readonly PdfStructureWarning[]>;
 }
 
 export interface TemplateCheckResult {
   mode: SampleMode;
+  /** The mode compiled and, with `structure`, its PDF has no structure warnings. */
   ok: boolean;
-  /** Warnings when `ok`; the compile errors otherwise. */
+  /** The compile's warnings when it compiled; its errors otherwise. */
   diagnostics: readonly Diagnostic[];
-  /** The `COMPILATION` error of a failed mode. */
+  /** The `COMPILATION` error of a mode that did not compile. */
   error?: TypstPdfError;
-  /** The PDF of a successful mode. Held in memory only; nothing is written anywhere. */
+  /** The PDF of a mode that compiled. Held in memory only; nothing is written anywhere. */
   bytes?: Uint8Array;
+  /** With `structure`: what it found in the PDF of a mode that compiled. */
+  structure?: readonly PdfStructureWarning[];
 }
 
 export interface TemplateCheckReport {
-  /** True only if every requested mode compiled. */
+  /** True only if every requested mode is `ok`. */
   ok: boolean;
   results: TemplateCheckResult[];
 }
@@ -142,13 +154,16 @@ export interface TemplateChecker {
 function parseOptions(options: unknown): Omit<TemplateCheckOptions, 'modes'> & { modes: readonly SampleMode[] } {
   if (options === undefined) return { modes: sampleModes };
   if (!options || typeof options !== 'object' || Array.isArray(options)) throw new TypstPdfError('INVALID_REQUEST', 'check options must be a plain object');
-  const { modes = sampleModes, pdf, assets, toJSONSchema, ...rest } = options as TemplateCheckOptions;
+  const { modes = sampleModes, pdf, assets, toJSONSchema, structure, ...rest } = options as TemplateCheckOptions;
   for (const key of Object.keys(rest)) throw new TypstPdfError('UNSUPPORTED_OPTION', `Unsupported check option ${key}`);
   if (!Array.isArray(modes) || !modes.length) throw new TypstPdfError('INVALID_REQUEST', 'modes must be a non-empty array');
   for (const mode of modes) if (!sampleModes.includes(mode)) throw new TypstPdfError('UNSUPPORTED_OPTION', `Unsupported sample mode ${String(mode)}`);
   if (new Set(modes).size !== modes.length) throw new TypstPdfError('INVALID_REQUEST', 'modes must not repeat');
   if (toJSONSchema !== undefined && typeof toJSONSchema !== 'function') throw new TypstPdfError('INVALID_REQUEST', 'toJSONSchema must be a function');
-  return { modes, pdf, assets, ...(toJSONSchema === undefined ? {} : { toJSONSchema }) };
+  if (structure !== undefined && typeof structure !== 'function') {
+    throw new TypstPdfError('INVALID_REQUEST', 'structure must be a function that reads the PDF bytes, such as checkStructure from @typfolio/dev-tools/pdf');
+  }
+  return { modes, pdf, assets, structure, ...(toJSONSchema === undefined ? {} : { toJSONSchema }) };
 }
 
 // A template as the editor sees it: its declared files, and each input's JSON Schema at the path its data is read.
@@ -190,7 +205,7 @@ export async function createTemplateChecker(options: CompilerOptions): Promise<T
     async check(template, checkOptions) {
       if (closed) throw new TypstPdfError('DISPOSED', 'The template checker is disposed');
       if (busy) throw new TypstPdfError('BUSY', 'The template checker already has an active check');
-      const { modes, ...rest } = parseOptions(checkOptions);
+      const { modes, structure, ...rest } = parseOptions(checkOptions);
       const prepared = prepareRequest(editorRequest(template, rest));
       busy = true;
       let release!: () => void;
@@ -199,14 +214,22 @@ export async function createTemplateChecker(options: CompilerOptions): Promise<T
         const results: TemplateCheckResult[] = [];
         for (const mode of modes) {
           await Promise.resolve();
+          let compiled: PdfResult;
           try {
-            const compiled = engine.compile(prepared, { mounts, inputs: [['typfolio-sample', mode]] });
-            results.push({ mode, ok: true, diagnostics: compiled.diagnostics, bytes: compiled.bytes });
+            compiled = engine.compile(prepared, { mounts, inputs: [['typfolio-sample', mode]] });
           } catch (error) {
             if (!(error instanceof TypstPdfError) || error.code !== 'COMPILATION') throw error;
             const explained = explainCompileError(error, prepared.files) as TypstPdfError;
             results.push({ mode, ok: false, diagnostics: explained.diagnostics, error: explained });
+            continue;
           }
+          if (structure === undefined) {
+            results.push({ mode, ok: true, diagnostics: compiled.diagnostics, bytes: compiled.bytes });
+            continue;
+          }
+          const warnings = await structure(compiled.bytes);
+          if (!Array.isArray(warnings)) throw new TypstPdfError('INVALID_REQUEST', 'structure must resolve to an array of warnings');
+          results.push({ mode, ok: warnings.length === 0, diagnostics: compiled.diagnostics, bytes: compiled.bytes, structure: warnings });
         }
         return { ok: results.every(result => result.ok), results };
       } finally { busy = false; release(); }

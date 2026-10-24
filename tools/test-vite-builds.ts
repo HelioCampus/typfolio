@@ -85,6 +85,11 @@ async function verifyReactBoundary() {
   for (const marker of sampleBuilderMarkers) {
     assert.ok(!allSource.includes(marker), 'React build contains the dev-tools sample builder: ' + marker);
   }
+  // The example shows the PDF tags panel in development only: its production build has neither the panel nor pdf.js.
+  for (const marker of [...panelMarkers, ...pdfjsMarkers]) {
+    assert.ok(!allSource.includes(marker), 'React build contains development-only code: ' + marker);
+  }
+  assert.ok(!output.some(path => /pdf\.worker/.test(path)), 'React build emits the pdf.js worker');
 }
 
 // Strings from sample.typ that survive minification and do not occur in lib.typ. (`sample-from-schema`
@@ -111,7 +116,7 @@ async function verifyDevToolsBuild() {
   for (const marker of pdfjsMarkers) {
     assert.ok(!all.includes(marker), 'the dev-tools main entry bundle contains pdfjs-dist code: ' + marker);
   }
-  return { devToolsBytes: all.length, ...await verifyDevToolsPdfBuild() };
+  return { devToolsBytes: all.length, ...await verifyDevToolsPdfBuild(), ...await verifyDevToolsPanelBuild() };
 }
 
 // Strings from inside pdfjs-dist that survive minification. The app's own text (the install hint) also says
@@ -143,6 +148,29 @@ async function verifyDevToolsPdfBuild() {
     assert.ok(!entry.source.includes(marker), 'the entry chunk contains pdfjs-dist code: ' + marker);
   }
   return { devToolsPdfEntryBytes: entry.source.length, pdfjsBytes: holders[0].source.length };
+}
+
+// Strings from the structure panel that survive minification. verifyDevToolsPanelBuild proves they match its build.
+const panelMarkers = ['PDF tags panel', 'with no text on this page'];
+
+// Positive control for the panel markers, and the panel's own boundary: it brings React with it, and no pdf.js.
+async function verifyDevToolsPanelBuild() {
+  const entryDirectory = root + '.build/vite-devtools-panel-entry';
+  const outDir = root + '.build/vite-devtools-panel';
+  await mkdir(entryDirectory, { recursive: true });
+  await writeFile(entryDirectory + '/entry.js', "import { mountStructureDevtools } from '@typfolio/dev-tools/panel';\nconsole.log(mountStructureDevtools);\n");
+  await viteBuild({
+    configFile: false, root, logLevel: 'warn',
+    build: { outDir, emptyOutDir: true, rollupOptions: { input: entryDirectory + '/entry.js', output: { entryFileNames: 'entry.js' } } },
+  });
+  const all = (await Promise.all((await files(outDir)).filter(path => /\.m?js$/.test(path)).map(path => readFile(path, 'utf8')))).join('\n');
+  for (const marker of [...panelMarkers, 'react.transitional.element']) {
+    assert.ok(all.includes(marker), 'positive control: the panel bundle is missing ' + marker);
+  }
+  for (const marker of pdfjsMarkers) {
+    assert.ok(!all.includes(marker), 'the panel bundle contains pdfjs-dist code: ' + marker);
+  }
+  return { panelBytes: all.length };
 }
 
 // Strings from inside html2canvas that survive minification. The app's own text
