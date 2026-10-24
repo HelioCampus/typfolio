@@ -1,5 +1,5 @@
 {
-  "version": 4,
+  "version": 5,
   "title": "Progress report",
   "lang": "en",
   "fonts": [
@@ -2357,7 +2357,7 @@
           "x": 0.0,
           "y": 0.0,
           "width": 595.2755905511812,
-          "height": 44.771999999999935,
+          "height": 69.17399999999998,
           "items": [
             {
               "kind": "text",
@@ -2485,14 +2485,14 @@
                   "op": "line",
                   "to": [
                     470.5511811023622,
-                    13.65
+                    38.05199999999999
                   ]
                 },
                 {
                   "op": "line",
                   "to": [
                     0.0,
-                    13.65
+                    38.05199999999999
                   ]
                 },
                 {
@@ -2509,8 +2509,8 @@
               "x": 62.36220472440945,
               "y": 31.121999999999957,
               "width": 470.5511811023622,
-              "height": 13.65,
-              "baseline": 42.146999999999935,
+              "height": 38.05199999999999,
+              "baseline": 38.03099999999995,
               "descent": 2.625,
               "pen_x": 62.36220472440945,
               "font": 0,
@@ -2523,9 +2523,11 @@
               },
               "align": "left",
               "overflow": "ellipsis",
-              "max_length": 200,
+              "max_length": 300,
               "sample": "Consistent effort across the term. More regular practice with problem sets would lift the lower scores.",
-              "node": 1
+              "node": 1,
+              "lines": 3,
+              "pitch": 14.259
             }
           ],
           "nodes": [

@@ -1,0 +1,6 @@
+{
+  "left": "First line\n\nThird line after an empty one",
+  "center": "Trailing newline at the end\n",
+  "right": "Space before the break \nthen more",
+  "note": "One\ntwo"
+}

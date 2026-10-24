@@ -58,14 +58,16 @@ Commits, oldest first:
 ## How to prove it still works (do this first after any change)
 
 ```sh
-cd experiments/paramdoc && ./check.sh      # 42 checks, under a minute after the first build; FUZZ=20 ./check.sh is quicker
+cd experiments/paramdoc && ./check.sh      # 74 checks, about two minutes after the first build; FUZZ=20 ./check.sh is quicker
 DEMO_URL=http://127.0.0.1:4190 ./check.sh  # also drives the performance page of a running pretext-hybrid dev server
 ```
 
 It builds, exports every fixture with fuzzing and a Typst reference, runs both runtimes against Typst and
 against each other, rasterises and compares pixels, compares text extraction, inspects the structure and
 validates every runtime PDF with veraPDF as PDF/UA-1; it also fails when `documents/<fixture>` no longer equals a
-fresh export (the export is byte-deterministic, so this is a plain comparison). Tools it cannot find (poppler,
+fresh export (the export is byte-deterministic, so this is a plain comparison). For the wrapping slots it exports a
+Typst reference per data case of `fixtures/wrap` and for 40 random samples of `fixtures/wrapfuzz` (the exporter's
+`--fuzz-references`), and checks both runtimes against every one of them, glyph for glyph and pixel for pixel. Tools it cannot find (poppler,
 veraPDF, the dev-tools build, Playwright) are reported as SKIP; anything else that fails fails the script.
 
 Prerequisites: Rust stable (1.97 on Linux and 1.99 on macOS have been used; crates pin Typst 0.15.1 which needs
@@ -110,7 +112,10 @@ the repo's `examples/pretext-hybrid/src/batch/data.ts`).
 ## The contract in one paragraph
 
 A **slot** is a fixed-size clipped box with a pinned baseline (`box(baseline: bottom)` shifted by a descent),
-kerning, ligatures and punctuation overhang off, text aligned to its bottom. A **band** is a clipped block;
+kerning, ligatures, contextual alternates and punctuation overhang off, text aligned to its bottom. A **wrapping
+slot** (`lines: n`, since 2026-10-25) is the same box made exactly `n` lines tall, the paragraph aligned to its top,
+justification and hyphenation off, so Typst breaks it with its simple breaker and the runtimes reproduce the
+breaks from advance widths; the first baseline is one line height below the box top. A **band** is a clipped block;
 instances of one name are the rows of a repeat region; `repeat-on-break: true` marks a header band. `paged`
 records the margins; `overlay` marks per-page content with `page-number`/`page-count` counter slots. Everything
 outside slots must lay out identically for every valid input; the exporter proves it by fuzzing. Slots bind to
@@ -150,8 +155,8 @@ Per report the compiler needs about 5 ms on a warm worker (the same template com
 hidden pane, gave 12.8 s, ten times its real figure, so never compare runs from a hidden tab. All 1000 synthetic
 reports from the same data path, written by the TypeScript runtime (`notes/bench/write-all.mjs`), pass veraPDF
 PDF/UA-1. The exported report is the slot dialect's version of the page's template, so the PDFs differ from the
-compiler's: a static title, a one-line tutor comment, no score bars and no row stripes; the page says so next to the
-switch. The compiler's PDFs are 26 kB, the runtime's 61 kB (the two repertoire subsets embedded whole).
+compiler's: a static title, a tutor comment of at most three ragged-right lines, no score bars and no row stripes;
+the page says so next to the switch. The compiler's PDFs are 26 kB, the runtime's 61 kB (the two repertoire subsets embedded whole).
 
 ## Open items, in the order I would do them
 
@@ -163,11 +168,18 @@ profiles (1724 rules) only the PDF 2.0 rules fail: file version 2.0, `pdfuaid:pa
 rule passes, so UA-2 is a metadata change away if it is ever wanted. Typst's own PDFs of the same fixtures fail
 UA-1 on two rules (no `DisplayDocTitle`, no `pdfuaid:part`), as expected for a plain export.
 
-1. **Images and links.** Both are recorded in the IR and skipped by the runtimes. When they land, run
-   `./check.sh` again: the UA-1 pass covers what the fixtures contain today (headings, paragraphs, tables,
-   artifacts), and links bring annotations, `/Tabs /S` and the Link structure rules with them.
-2. **Variable-height rows.** Rows are one fixed height. The plan is variants laid out at export time (a band
-   declared for 1..n lines) with the runtime measuring and picking.
+Wrapping text (M7 in `PLAN.md`) is done (2026-10-25): multi-line slots break lines exactly as Typst does,
+checked on every data case of `fixtures/wrap` and on 300 random texts of `fixtures/wrapfuzz`, both runtimes, glyph
+positions and pixels. Ragged right only; see the status log in `PLAN.md` for what had to be copied from Typst.
+
+1. **Variants (M8 in `PLAN.md`).** Variable-height rows, optional blocks and row stripes as layouts made once per
+   variant at export time, picked by the runtime: a band declared for 1..n lines of a wrapping slot, a parity or
+   a flag in the data. The plan is written; rows are one fixed height until then.
+2. **Parametric geometry and image slots (M9).** A bar whose length is a value, so the report gets its score bars
+   back, and a box the data fills with a PNG or JPEG, which is how charts arrive (`examples/vite-react` renders
+   them to PNG in the application). Images are otherwise recorded in the IR and not drawn; links (Typst's link
+   items) are dropped at export today; they bring annotations, `/Tabs /S` and the Link structure rules, so run
+   `./check.sh` with veraPDF when they land.
 3. **A Worker wrapper** for the TypeScript runtime as something reusable: the demo page has one (`paramdoc.worker.ts`
    and the pool in `batch.ts`), written for that page; moving it under `ts/` with a small API would let other pages
    use it. A compact binary form of `doc.json` if its 87 kB raw (6.5 kB gzip) ever matters.
@@ -176,6 +188,10 @@ UA-1 on two rules (no `DisplayDocTitle`, no `pdfuaid:part`), as expected for a p
    repository's maintainers before writing it.
 5. The Rust runtime still deflates every stream per document, which is why it is slower than the TypeScript
    one; writing small streams uncompressed and caching the font streams would even them out.
+6. **Justified wrapping slots.** Every template in this repository justifies its paragraphs; wrapping slots are
+   ragged right because justification means porting Typst's optimized breaker and its justification arithmetic.
+   Web addresses (`://`, `www.`) are refused in wrapping slots for the same reason: Typst breaks links by rules
+   of its own (`linebreak_link`).
 
 ## Things that will bite you
 
@@ -189,6 +205,22 @@ UA-1 on two rules (no `DisplayDocTitle`, no `pdfuaid:part`), as expected for a p
   content. Do not reintroduce geometric hit-testing.
 - **`CompressionStream` in browsers costs milliseconds per call**; the TypeScript runtime compresses only the
   font programs, once per runtime.
+- **Contextual alternates.** `ligatures: false` does not stop Libertinus from swapping in a short f before i
+  (the `calt` feature); slots set `features: (calt: 0)` as well, since 2026-10-25. Before that, no fixture
+  sample happened to contain "fi". A font feature that changes glyph choice shows up as a glyph id the
+  subset does not have, in the Typst reference.
+- **Typst 0.15's line breaking is not plain Unicode 15.1.** icu4x's default segmenter, checked against Typst on
+  300 random texts: LB15a and LB15b apply (no break after an opening quote plus spaces, none before a closing
+  quote that is followed by space or punctuation), LB15c and LB20a do not, and LB25 is the pair-table form (no
+  break between a slash and a digit, or between a currency sign and an opening bracket, whatever follows). Both
+  runtimes encode exactly that, rule by rule, in `breakpoints`; `fixtures/wrapfuzz` is the check that keeps them
+  honest when Typst or icu4x move.
+- **Two line-layout details without which wrapped text is a few points off.** A line of nothing but whitespace
+  has no height in Typst (all its glyphs are trimmed), so the line after it sits one leading, not one pitch,
+  below the box top. And a line that does not fit has its spaces shrunk by up to a third of their width before
+  it overflows, ragged or justified (`par.justification-limits`). Trailing spaces are glyphs: at a normal break
+  they are drawn at zero advance at the line end; before a hard newline and at the end of the text they keep
+  their advance. The traces include them, so the comparison with Typst sees all of this.
 - **Running the repo's dev server regenerates `examples/pretext-hybrid/src/routeTree.gen.ts`**; revert it
   before committing.
 - **`pkill -f` with a pattern that appears in your own shell command kills the shell.** Track server PIDs.

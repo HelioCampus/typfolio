@@ -1,0 +1,6 @@
+{
+  "left": "This paragraph is written to fill all three of the lines the slot offers, with the final word landing on the third line and nothing left over after it, hopefully.",
+  "center": "Centred text over exactly three lines, each one shorter than the box so the centring is visible in the output of both engines.",
+  "right": "Right-aligned text that fills both of the two lines available to it.",
+  "note": "Two full lines of note text in the smaller size, long enough to wrap but not long enough to overflow the cell."
+}

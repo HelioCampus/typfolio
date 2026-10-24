@@ -2,25 +2,43 @@
 // A slot is a fixed-size, clipped box whose content comes from data. Everything outside slots must lay out
 // identically for every valid input; the exporter checks that by fuzzing the data and diffing the frames.
 // Lengths in `em` are relative to the slot's own text size (after `text-args`).
+// Inside a slot, kerning, ligatures and contextual alternates (`calt`: Libertinus swaps in a short f before i) are
+// off, so the runtime can place glyphs from advance widths alone.
 #let slot(
   name,               // slot name in the manifest
   value,              // the sample or current value (string or content)
   width: auto,        // fixed width; `auto` leaks the content width into the layout (the check catches it)
-  height: 1.2em,      // fixed height, descent included
+  height: 1.2em,      // fixed height, descent included; a wrapping slot (`lines` > 1) sizes itself instead
   descent: 0.25em,    // room below the baseline for descenders; the baseline sits this far above the box bottom
   align: left,        // left | center | right
   overflow: "error",  // error | clip | shrink | ellipsis: what the runtime does when the text does not fit
   max-length: none,   // the schema's maxLength, informative for now
   charset: none,      // the characters the slot may contain; none means the exporter's default repertoire
+  lines: 1,           // more than 1: a wrapping slot of exactly this many ragged-right lines, aligned to the top
   ..text-args,        // text arguments applied inside the slot: size, weight, style, fill
 ) = text(..text-args.named(), context {
   let d = descent.to-absolute()
-  // The box baseline is pinned (`at: bottom`, shifted up by the descent) so content cannot move the line.
-  box(width: width, height: height, clip: true, inset: (bottom: d), baseline: (at: bottom, shift: d))[
-    #metadata((name: name, align: repr(align), overflow: overflow, max-length: max-length, charset: charset, descent: d.pt())) <paramdoc-slot>
-    #set text(kerning: false, ligatures: false, overhang: false, bottom-edge: "baseline")
-    #std.align(align + bottom, value)
-  ]
+  let meta = (name: name, align: repr(align), overflow: overflow, max-length: max-length, charset: charset, descent: d.pt())
+  if lines == 1 {
+    // The box baseline is pinned (`at: bottom`, shifted up by the descent) so content cannot move the line.
+    box(width: width, height: height, clip: true, inset: (bottom: d), baseline: (at: bottom, shift: d))[
+      #metadata(meta) <paramdoc-slot>
+      #set text(kerning: false, ligatures: false, features: (calt: 0), overhang: false, bottom-edge: "baseline")
+      #std.align(align + bottom, value)
+    ]
+  } else {
+    // Lines break as Typst's simple breaker does, without hyphenation or justification, so the runtime can
+    // reproduce them from advance widths alone. The box is exactly `lines` lines tall under these rules; the
+    // first baseline sits one line height below the box top.
+    let line-height = measure({ set text(bottom-edge: "baseline"); [x] }).height
+    let leading = par.leading.to-absolute()
+    box(width: width, height: lines * line-height + (lines - 1) * leading + d, clip: true, inset: (bottom: d))[
+      #metadata(meta + (lines: lines, line-height: line-height.pt(), pitch: (line-height + leading).pt())) <paramdoc-slot>
+      #set par(justify: false, linebreaks: "simple", first-line-indent: 0pt, hanging-indent: 0pt)
+      #set text(hyphenate: false, kerning: false, ligatures: false, features: (calt: 0), overhang: false, bottom-edge: "baseline")
+      #std.align(align + top, value)
+    ]
+  }
 })
 
 // ---- Flow documents (M3) -------------------------------------------------------------------------------

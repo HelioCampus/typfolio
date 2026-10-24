@@ -41,8 +41,99 @@ labelled `metadata`; the exporter finds it through the frame's tags and the encl
 4. **Tagging.** Structure tree assembly; checked with the repo's `inspectPdf` and, since 2026-10-24, with veraPDF: PDF/UA-1 passes on every runtime PDF. ✅
 5. **TypeScript port** of the runtime against the Rust implementation as oracle. ✅
 6. **Export-time font subsetting.** Fonts subset to the static glyphs plus a declared slot repertoire; runtimes parse no fonts. ✅
+7. **Wrapping text.** Multi-line slots that break lines the way Typst does. Exit: the report's tutor comment
+   as a three-line slot and a `wrap` fixture match Typst glyph for glyph on every data file, pixels included. ✅
+   (2026-10-25; also 300 random texts, both runtimes.)
+8. **Variants.** Bands and blocks laid out once per variant at export time, picked by the runtime: variable-height
+   rows, optional blocks, row stripes. Exit: a transcript with one-to-three-line titles paginates and matches Typst per variant.
+9. **Parametric geometry and image slots.** A bar whose length is a value; a box the data fills with an image.
+   Exit: the report's score bars are back and match Typst; an image fixture passes veraPDF's Figure rules.
 
 Re-evaluate after each milestone; stop and discuss on critical findings.
+
+## Expressiveness plan (M7–M9)
+
+Written 2026-10-25 from the ranked list of unknowns. The three items below are the ones that decide whether the
+approach covers real documents; everything after them is known work. What the repository's own templates ask
+for, counted before planning (`examples/pretext-hybrid/src/batch/report`, `examples/vite-react/src/{outcomes,report,common}`):
+wrapping paragraphs from data in every template, all justified; images (a logo; charts the application renders
+to PNG at 480 × 160 px with `render()` and passes as data, in `outcomes`); a bulleted list; document titles from
+data; one repeat of variable-height sections; a score bar and alternating row fill; values computed in the
+template. No conditionals. So charts already arrive as images in this repository, and the first cut of wrapping
+text is ragged right: justification needs Typst's optimized breaker, which is a later milestone if ragged slots
+are not acceptable.
+
+### M7: wrapping text
+
+Result (2026-10-25): built as designed below, with three corrections the oracle forced; see the status log. The
+rule set icu4x applies is not the one planned here, the line heights of whitespace-only lines and the shrinking
+of spaces on overlong lines had to be copied too, and `calt` had to be switched off along with ligatures.
+
+What Typst does, read from `typst-layout 0.15.1` (`inline/linebreak.rs`, `line.rs`, `shaping.rs`, `flow/collect.rs`):
+
+- `par.linebreaks: auto` resolves to the simple breaker when `justify` is off. The simple breaker is greedy
+  first fit: for each break opportunity it measures the line from the current start, with trailing whitespace
+  and default-ignorables excluded from the width; when the line no longer fits (`Abs::fits`, an epsilon of slack)
+  and an earlier opportunity fitted, that one becomes the line and measuring restarts after it; a mandatory
+  break (`\n`, end of text) or a line that does not fit even as the first candidate is committed as it is. An
+  overlong word is therefore placed uncut and overflows.
+- Break opportunities come from icu4x's UAX #14 segmenter, plus hyphenation candidates when `hyphenate` is on
+  (`auto` means on only when justified), plus special breaking inside text that contains `://` or starts with
+  `www.`.
+- Trailing whitespace glyphs are shaped and emitted with zero advance and offset at the end of the line
+  (`Glyphs::trim`, `ShapedText::build`), so they are in the frame and in the PDF for copy and paste.
+- Lines are frames of height top-edge + bottom-edge metric (cap height with the dialect's edges), stacked with
+  `par.leading` between them; each line is aligned inside the paragraph width by `align`.
+
+Design:
+
+- Dialect: `slot(..., lines: n)`. `lines: 1` is today's bottom-pinned single line. `lines: n > 1` makes a box of
+  height `n · lh + (n − 1) · leading + descent`, with the paragraph aligned to the top and these rules inside:
+  `par(justify: false, linebreaks: "simple", first-line-indent: 0pt, hanging-indent: 0pt)`,
+  `text(hyphenate: false, kerning: false, ligatures: false, overhang: false, bottom-edge: "baseline")`. The
+  metadata carries `lines` and `pitch` (`lh + leading`), both measured in Typst with `measure` and `par.leading`.
+- IR v5: `Slot.lines`, `Slot.pitch`; for a multi-line slot `baseline` is the first line's. Reference glyphs
+  carry `y` (their line's baseline) and the comparison checks it.
+- Exporter: records the sample's lines (one baseline per line, glyph x and y), checks the baselines sit at
+  `first + k · pitch`, and rejects `overflow: "shrink"` on multi-line slots. `--reference` becomes repeatable so
+  one export checks several data files (`reference.json` for the first, `reference-<stem>.json` after).
+- Runtime: break opportunities for the repertoire: mandatory after `\n`; a UAX #14 pair table for the classes
+  the Latin repertoires contain (space, hyphen, dashes, slash, quotes, brackets, punctuation, digits, letters,
+  zero-width space); text containing `://` or `www.` is refused in multi-line slots until link breaking is
+  ported. Greedy first fit as above, trailing spaces at zero advance, per-line alignment on the trimmed width.
+  Over `lines`: `error`, `clip` (drop the rest), `ellipsis` (truncate the last line). The structure node is one
+  P or TD as today; marked content covers all lines.
+- Both runtimes; TypeScript first because the design may still move, Rust once it holds.
+
+Exit: `fixtures/wrap` (left, centre and right slots; data files with a newline, a hyphen, an en dash, a long
+word, double and trailing spaces, an empty value, exactly `lines` lines, one line too many under each overflow
+policy) and the report's three-line tutor comment match Typst's layout of every data file glyph for glyph and
+pixel for pixel; fuzz 0 leaks; the two runtimes agree; veraPDF PDF/UA-1 still passes.
+
+### M8: variants
+
+A band or static block declared with variants is laid out once per variant at export time; the runtime only
+picks. The exporter compiles the fixture once per variant value with `sys.inputs` carrying
+`paramdoc-variant=<block>=<k>`; the dialect's `variant(block, default: 1)` reads it, so a template writes
+`slot("title", row.title, lines: variant("courses"))` or `fill: if calc.even(variant("courses")) {...}`. The IR
+band holds one fragment per variant value plus a selector: `lines(slot)` (the runtime measures how many lines
+the slot's text needs and picks that variant), `parity` (row index), `flag(path)` (a boolean in the data; an
+absent block is a zero-height variant). The fuzz-and-diff runs per variant; pagination already measures per
+instance. Exit: transcript rows with one-to-three-line titles, report rows with stripes, an optional block in the
+certificate, each matching Typst for its variant's sample; long data paginates; veraPDF passes.
+
+### M9: parametric geometry and image slots
+
+- `bar(name, value, max: 100, width, height, fill, track, radius)`: a slot whose content is a track rectangle and
+  a bar rectangle; the exporter records both and that the bar's width is `value / max` of the track's; the
+  runtime draws them. The report gets its score bars back.
+- `image-slot(name, width, height, alt)`: a fixed box the data fills with a PNG or JPEG (bytes or a data URL),
+  tagged Figure with the alt text; charts arrive this way, as `examples/vite-react` already does. This is the
+  first half of the images-and-links item.
+- Real charts drawn by the runtime are out: that is a chart engine, and the application already has one.
+
+Exit: the report with bars matches Typst for the sample; an outcomes-like fixture with image slots passes veraPDF;
+fuzz 0 leaks.
 
 ## Running
 
@@ -86,6 +177,29 @@ Defaults: fonts from `../../fixtures/fonts`, output under `../../.build/paramdoc
 
 ## Status log
 
+- **M7 wrapping text (2026-10-25).** The dialect's `slot` takes `lines: n`; the box is exactly `n` lines tall
+  (`n · line-height + (n − 1) · leading + descent`, measured in Typst), the paragraph is top-aligned with
+  `justify: false, linebreaks: "simple", hyphenate: false`, and the metadata carries `lines`, `line-height` and
+  `pitch`. IR v5 adds `lines` and `pitch` to slots; the first baseline is the box top plus the line height.
+  Reference glyphs carry `y`; `--reference` is repeatable; `--fuzz-references K` writes K fuzz samples with
+  Typst's layout of them, so the runtimes are checked on random data too. Both runtimes break lines with Typst's
+  simple breaker over UAX #14 opportunities (greedy first fit; trailing whitespace outside the width, drawn at
+  zero advance; an overlong word placed uncut), place lines as Typst stacks them, and apply `error`, `clip` and
+  `ellipsis` to lines that do not fit (`shrink` is refused). The report's tutor comment is a three-line slot;
+  `documents/report` is re-exported.
+  Checked: `fixtures/wrap` (left, centre, right and a table-cell slot; cases for newlines, punctuation, spaces,
+  an overlong word, empty values, exactly full slots) and the report match Typst glyph for glyph and pixel for
+  pixel in both runtimes; `fixtures/wrapfuzz` (all slots `clip`, so random text compares cleanly): 300 of 300
+  random texts drawn from letters, digits, spaces and the repertoire's punctuation match Typst in both runtimes,
+  glyph positions and pixels; the TypeScript trace equals the Rust trace on all of them; veraPDF PDF/UA-1 passes
+  on the new PDFs; `check.sh` runs 74 checks. The answer to the unknown: yes, ragged wrapped text keeps the
+  exactness guarantee, but only after copying four things the plan did not have. (1) Libertinus substitutes a
+  short f before i through `calt`, which `ligatures: false` leaves on; slots now set `features: (calt: 0)`.
+  (2) icu4x's default segmenter in Typst 0.15 applies LB15a/LB15b but neither LB15c nor LB20a, and LB25 in the
+  pair-table form; each rule was found by a diverging random sample, fixed, and re-checked. (3) A whitespace-only
+  line has zero height, so the following line sits one leading below the box top. (4) A line that does not fit
+  has its spaces shrunk by a third before it overflows. Not covered: justified text, hyphenation, links (refused),
+  East Asian and Hebrew rules, digits outside ASCII (letters to the breaker in both runtimes).
 - **Demo page (2026-10-24).** The performance page of `examples/pretext-hybrid` has an engine switch: the
   TypeScript runtime runs in a pool of Web Workers (one runtime each, `src/batch/paramdoc.worker.ts`), fed by
   the page's own synthetic inputs mapped to the slot names, from `documents/report/` (the report fixture exported
@@ -236,7 +350,7 @@ Same machine for every row: this 4-core container. The Typst rows are the repo's
 whose elapsed time includes the compiler download, module compilation and worker start, as the page states.
 The paramdoc rows render the same 1000 synthetic inputs (generated by the benchmark's own `data.ts`) through
 `fixtures/report`, which is that report in the slot dialect: the same text, boxes and table, but a static title,
-a one-line tutor comment, no score bars and no alternating row fill (the dialect cannot express those), with
+a tutor comment of up to three lines, no score bars and no alternating row fill (the dialect cannot express those), with
 tagged output. So the documents are close, not identical.
 
 | | documents/s | per document | notes |

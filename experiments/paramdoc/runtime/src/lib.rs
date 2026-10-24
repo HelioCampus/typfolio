@@ -77,7 +77,7 @@ fn load_fonts<'a>(doc: &ir::Document, data: &[&'a [u8]]) -> Result<Vec<LoadedFon
 // Slot filling
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct ReferenceGlyph { pub id: u16, pub x: f64 }
+pub struct ReferenceGlyph { pub id: u16, pub x: f64, #[serde(default)] pub y: f64 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct ReferenceSlot { pub name: String, pub baseline: f64, pub size: f64, pub glyphs: Vec<ReferenceGlyph> }
@@ -92,7 +92,7 @@ fn text_of(value: &serde_json::Value) -> Result<String> {
 }
 
 /// A filled slot: the text item to draw (clipped to the slot's box) and what was drawn, for the reference check.
-struct Filled { slot: ir::Slot, item: ir::Item, trace: ReferenceSlot, node: Option<usize> }
+struct Filled { slot: ir::Slot, items: Vec<ir::Item>, trace: ReferenceSlot, node: Option<usize> }
 
 /// Lays out one line of slot text: glyphs from the cmap, advances from hmtx, alignment from the slot,
 /// and the slot's overflow policy when the line is wider than the box. `slot` is in absolute coordinates.
@@ -100,6 +100,7 @@ fn fill_slot(slot: &ir::Slot, text: &str, font: &LoadedFont, trace_name: String)
     if let Some(max) = slot.max_length && text.chars().count() > max as usize {
         bail!("slot `{trace_name}`: {text:?} has {} characters, max-length is {max}", text.chars().count());
     }
+    if slot.lines > 1 { return fill_lines(slot, text, font, trace_name); }
     let shape = |text: &str, size: f64| -> Result<(Vec<ir::Glyph>, f64)> {
         let mut glyphs = Vec::new();
         let mut width = 0.0;
@@ -144,13 +145,247 @@ fn fill_slot(slot: &ir::Slot, text: &str, font: &LoadedFont, trace_name: String)
         other => bail!("slot `{trace_name}`: unknown alignment {other:?}"),
     };
     let mut pen = x;
-    let trace_glyphs = glyphs.iter().map(|g| { let at = pen; pen += g.x_advance; ReferenceGlyph { id: g.id, x: at } }).collect();
+    let trace_glyphs = glyphs.iter().map(|g| { let at = pen; pen += g.x_advance; ReferenceGlyph { id: g.id, x: at, y: slot.baseline } }).collect();
     Ok(Filled {
         slot: slot.clone(),
-        item: ir::Item::Text { x, y: slot.baseline, font: slot.font, size, fill: slot.fill, text: shown, glyphs, node: None },
+        items: vec![ir::Item::Text { x, y: slot.baseline, font: slot.font, size, fill: slot.fill, text: shown, glyphs, node: None }],
         trace: ReferenceSlot { name: trace_name, baseline: slot.baseline, size, glyphs: trace_glyphs },
         node: None,
     })
+}
+
+// ---------------------------------------------------------------------------------------------------------
+// Wrapping slots: Typst's simple line breaker (typst-layout 0.15, inline/linebreak.rs) over UAX #14 break
+// opportunities, for the character classes a Latin repertoire contains. The dialect switches hyphenation and
+// justification off inside wrapping slots, so greedy first fit over advance widths reproduces Typst's lines.
+// ts/runtime.ts has the same code and the notes on which rules icu4x applies; keep the two in step.
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Lb { Al, Nu, Sp, Ba, Bb, B2, Hy, Cl, Cp, Op, Qu, Ex, Is, Sy, Pr, Po, In, Gl, Zw, Wj, Bk, Cm, Ns }
+
+fn lb_class(c: char) -> Lb {
+    use Lb::*;
+    match c {
+        '\n' | '\r' | '\u{0b}' | '\u{0c}' | '\u{85}' | '\u{2028}' | '\u{2029}' => Bk,
+        ' ' => Sp,
+        '\t' | '|' | '\u{ad}' | '\u{2000}'..='\u{2006}' | '\u{2008}'..='\u{200a}' | '\u{2010}' | '\u{2012}' | '\u{2013}' => Ba,
+        '!' | '?' => Ex,
+        '"' | '\'' | '«' | '»' | '\u{2018}' | '\u{2019}' | '\u{201b}' | '\u{201c}' | '\u{201d}' | '\u{201f}' | '\u{2039}' | '\u{203a}' => Qu,
+        '$' | '+' | '\\' | '£' | '¤' | '¥' | '±' | '\u{20ac}' | '\u{2212}' => Pr,
+        '%' | '¢' | '°' | '\u{2032}' | '\u{2033}' => Po,
+        '(' | '[' | '{' | '¡' | '¿' | '\u{201a}' | '\u{201e}' => Op,
+        ')' | ']' => Cp,
+        '}' => Cl,
+        ',' | '.' | ':' | ';' | '\u{2044}' => Is,
+        '-' => Hy,
+        '/' => Sy,
+        '\u{a0}' | '\u{2007}' | '\u{2011}' | '\u{202f}' => Gl,
+        '\u{200b}' => Zw,
+        '\u{2060}' => Wj,
+        '\u{2014}' => B2,
+        '´' => Bb,
+        '\u{2026}' => In,
+        '0'..='9' => Nu,
+        '\u{300}'..='\u{36f}' | '\u{1ab0}'..='\u{1aff}' | '\u{1dc0}'..='\u{1dff}' | '\u{20d0}'..='\u{20ff}' | '\u{fe20}'..='\u{fe2f}' => Cm,
+        _ => Al,
+    }
+}
+
+fn is_initial_quote(c: char) -> bool { matches!(c, '«' | '\u{2018}' | '\u{201c}' | '\u{2039}' | '\u{201b}' | '\u{201f}') }
+fn is_final_quote(c: char) -> bool { matches!(c, '»' | '\u{2019}' | '\u{201d}' | '\u{203a}') }
+fn is_mandatory_break(c: char) -> bool { lb_class(c) == Lb::Bk }
+fn is_space_glyph(c: char) -> bool { matches!(c, ' ' | '\u{a0}' | '\u{3000}') }
+/// Unicode Default_Ignorable_Code_Point, which Typst trims at a line end as it trims spaces.
+fn is_default_ignorable(c: char) -> bool {
+    matches!(c, '\u{ad}' | '\u{34f}' | '\u{61c}' | '\u{115f}' | '\u{1160}' | '\u{17b4}' | '\u{17b5}' | '\u{180b}'..='\u{180f}' | '\u{200b}'..='\u{200f}'
+        | '\u{202a}'..='\u{202e}' | '\u{2060}'..='\u{206f}' | '\u{3164}' | '\u{fe00}'..='\u{fe0f}' | '\u{feff}' | '\u{ffa0}' | '\u{fff0}'..='\u{fff8}'
+        | '\u{1bca0}'..='\u{1bca3}' | '\u{1d173}'..='\u{1d17a}' | '\u{e0000}'..='\u{e0fff}')
+}
+
+/// UAX #14 break opportunities as Typst 0.15 gets them from icu4x's default line segmenter: the Unicode 15.1
+/// rules with LB15a and LB15b, but without LB15c and LB20a and with the pair-table form of LB25 (each checked
+/// against Typst on random data), East Asian and Hebrew cases left out. Each entry is where the next line would
+/// start and whether the break is mandatory (after a hard break and at the end).
+fn breakpoints(chars: &[char]) -> Vec<(usize, bool)> {
+    use Lb::*;
+    let n = chars.len();
+    if n == 0 { return vec![(0, true)]; }
+    let raw: Vec<Lb> = chars.iter().map(|&c| lb_class(c)).collect();
+    // LB9, LB10: a combining mark takes its base's class and never separates from it; after a space, a break
+    // or at the start it is a letter.
+    let mut eff: Vec<Lb> = Vec::with_capacity(n);
+    let mut attached = vec![false; n];
+    for i in 0..n {
+        if raw[i] == Cm && i > 0 && !matches!(eff[i - 1], Bk | Sp | Zw) { eff.push(eff[i - 1]); attached[i] = true; }
+        else { eff.push(if raw[i] == Cm { Al } else { raw[i] }); }
+    }
+    let is = |k: isize, classes: &[Lb]| k >= 0 && (k as usize) < n && classes.contains(&eff[k as usize]);
+    let allow = |i: usize| -> bool {
+        let (b, a) = (eff[i - 1], eff[i]);
+        let at = i as isize;
+        if attached[i] { return false; }                                                             // LB9
+        if b == Bk { return !(chars[i - 1] == '\r' && chars[i] == '\n'); }                            // LB4, LB5
+        if matches!(a, Bk | Sp | Zw) { return false; }                                               // LB6, LB7
+        let mut p = at - 1;
+        while p >= 0 && eff[p as usize] == Sp { p -= 1; }                                            // the last non-space before i
+        if is(p, &[Zw]) { return true; }                                                             // LB8
+        if a == Wj || b == Wj || b == Gl { return false; }                                           // LB11, LB12
+        if a == Gl && !matches!(b, Sp | Ba | Hy) { return false; }                                   // LB12a
+        if matches!(a, Cl | Cp | Ex | Is | Sy) { return false; }                                     // LB13
+        if is(p, &[Op]) { return false; }                                                            // LB14
+        if is(p, &[Qu]) && is_initial_quote(chars[p as usize]) && (p == 0 || is(p - 1, &[Bk, Op, Qu, Gl, Sp, Zw])) { return false; } // LB15a
+        if a == Qu && is_final_quote(chars[i]) && (i + 1 == n || is(at + 1, &[Sp, Gl, Wj, Cl, Qu, Cp, Ex, Is, Sy, Bk])) { return false; } // LB15b
+        if is(p, &[Cl, Cp]) && a == Ns { return false; }                                             // LB16
+        if is(p, &[B2]) && a == B2 { return false; }                                                 // LB17
+        if b == Sp { return true; }                                                                  // LB18
+        if a == Qu || b == Qu { return false; }                                                      // LB19, LB19a without East Asian text
+        if matches!(a, Ba | Hy | Ns) || b == Bb { return false; }                                    // LB21
+        if a == In { return false; }                                                                 // LB22
+        if (b == Al && a == Nu) || (b == Nu && a == Al) { return false; }                            // LB23
+        if (matches!(b, Pr | Po) && a == Al) || (b == Al && matches!(a, Pr | Po)) { return false; }  // LB24
+        if matches!(b, Cl | Cp | Nu) && matches!(a, Po | Pr) { return false; }                       // LB25, pair-table form
+        if matches!(b, Po | Pr) && matches!(a, Op | Nu) { return false; }
+        if matches!(b, Hy | Is | Nu | Sy) && a == Nu { return false; }
+        if b == Al && a == Al { return false; }                                                      // LB28
+        if b == Is && a == Al { return false; }                                                      // LB29
+        if matches!(b, Al | Nu) && a == Op { return false; }                                         // LB30
+        if b == Cp && matches!(a, Al | Nu) { return false; }
+        true                                                                                         // LB31
+    };
+    let mut out: Vec<(usize, bool)> = (1..n).filter(|&i| allow(i)).map(|i| (i, raw[i - 1] == Bk)).collect();
+    out.push((n, true));
+    out
+}
+
+/// A line of a wrapping slot: `layout_end` excludes the trailing whitespace that does not count for the width;
+/// `shaping_end` includes it (Typst draws those glyphs at zero advance).
+struct BrokenLine { start: usize, layout_end: usize, shaping_end: usize, width: f64 }
+/// A line as drawn: the first `kept` glyphs count for the width, the rest are trimmed trailing whitespace.
+struct LineRun { ids: Vec<u16>, advances: Vec<f64>, text: String, width: f64, kept: usize }
+
+/// Typst's simple breaker: greedy first fit, a mandatory break or a line that does not fit even on its own
+/// committed as it is (an overlong word overflows, as in Typst).
+fn break_lines(chars: &[char], width_of: &dyn Fn(usize, usize) -> f64, fits: &dyn Fn(f64) -> bool) -> Vec<BrokenLine> {
+    let line = |start: usize, end: usize, mandatory: bool| -> BrokenLine {
+        let (mut shaping_end, mut layout_end) = (end, end);
+        if mandatory {
+            while shaping_end > start && is_mandatory_break(chars[shaping_end - 1]) { shaping_end -= 1; }
+            layout_end = shaping_end;
+        } else {
+            while layout_end > start && (chars[layout_end - 1].is_whitespace() || is_default_ignorable(chars[layout_end - 1])) { layout_end -= 1; }
+        }
+        BrokenLine { start, layout_end, shaping_end, width: width_of(start, layout_end) }
+    };
+    let mut lines = Vec::new();
+    let mut start = 0;
+    let mut last: Option<(BrokenLine, usize)> = None;
+    for (end, mandatory) in breakpoints(chars) {
+        let mut attempt = line(start, end, mandatory);
+        if !fits(attempt.width) && let Some((last_line, last_end)) = last.take() {
+            lines.push(last_line);
+            start = last_end;
+            attempt = line(start, end, mandatory);
+        }
+        if mandatory || !fits(attempt.width) { lines.push(attempt); start = end; last = None; } else { last = Some((attempt, end)); }
+    }
+    if let Some((line, _)) = last { lines.push(line); }
+    lines
+}
+
+fn fill_lines(slot: &ir::Slot, text: &str, font: &LoadedFont, trace_name: String) -> Result<Filled> {
+    let (lines, pitch, size) = (slot.lines, slot.pitch, slot.size);
+    if !(pitch > 0.0) { bail!("slot `{trace_name}`: a wrapping slot without a line pitch; export the document again"); }
+    if slot.overflow == "shrink" { bail!("slot `{trace_name}`: `shrink` is not an overflow policy for a wrapping slot"); }
+    if text.contains("://") || text.contains("www.") { bail!("slot `{trace_name}`: {text:?} contains a web address, which Typst breaks by rules this runtime does not have yet"); }
+    let chars: Vec<char> = text.chars().collect();
+    let name = trace_name.clone();
+    let glyph_of = |c: char| -> Result<u16> {
+        font.glyph(c).ok_or_else(|| anyhow!("slot `{name}`: {c:?} (U+{:04X}) is not in the slot's repertoire; declare it with `charset:` in the template", c as u32))
+    };
+    // Every character but a hard break is drawn, trailing whitespace included (at zero advance).
+    let ids: Vec<u16> = chars.iter().map(|&c| if is_mandatory_break(c) { Ok(0) } else { glyph_of(c) }).collect::<Result<_>>()?;
+    let width_of = |from: usize, to: usize| -> f64 { ids[from..to].iter().map(|&id| font.advance(id) * size).sum() };
+    let fits = |width: f64| slot.width + 1e-4 >= width; // Typst's `Abs::fits`
+    let run = |cs: &[char], kept: usize| -> Result<LineRun> {
+        let ids: Vec<u16> = cs.iter().map(|&c| glyph_of(c)).collect::<Result<_>>()?;
+        let mut advances: Vec<f64> = ids.iter().enumerate().map(|(i, &id)| if i < kept { font.advance(id) * size } else { 0.0 }).collect();
+        let mut width: f64 = advances.iter().sum();
+        if !fits(width) {
+            // Typst shrinks the spaces of a line that does not fit by up to a third of their width
+            // (`par.justification-limits`, spacing min 2/3) before letting it overflow; ragged lines too.
+            let shrinkable: Vec<f64> = advances.iter().enumerate().map(|(i, &a)| if i < kept && is_space_glyph(cs[i]) { (a / 3.0).min(a * 0.75) } else { 0.0 }).collect();
+            let shrinkability: f64 = shrinkable.iter().sum();
+            if shrinkability > 0.0 {
+                let ratio = ((slot.width - width) / shrinkability).max(-1.0);
+                for (advance, shrink) in advances.iter_mut().zip(&shrinkable) { *advance += ratio * shrink; }
+                width = advances.iter().sum();
+            }
+        }
+        Ok(LineRun { ids, advances, text: cs.iter().collect(), width, kept })
+    };
+    let render = |l: &BrokenLine| run(&chars[l.start..l.shaping_end], l.layout_end - l.start);
+    let ellipsize = |l: &BrokenLine| -> Result<LineRun> {
+        let ellipsis: Vec<char> = if font.glyph('…').is_some() { vec!['…'] } else { vec!['.', '.', '.'] };
+        let mut kept: Vec<char> = chars[l.start..l.layout_end].to_vec();
+        let trim = |kept: &mut Vec<char>| while kept.last().is_some_and(|c| c.is_whitespace()) { kept.pop(); };
+        let shape = |kept: &[char]| -> Result<LineRun> { let cs: Vec<char> = kept.iter().chain(&ellipsis).copied().collect(); run(&cs, cs.len()) };
+        trim(&mut kept);
+        let mut shown = shape(&kept)?;
+        while !fits(shown.width) && !kept.is_empty() { kept.pop(); trim(&mut kept); shown = shape(&kept)?; }
+        Ok(shown)
+    };
+
+    let broken = break_lines(&chars, &width_of, &fits);
+    let mut runs: Vec<LineRun> = broken.iter().map(render).collect::<Result<_>>()?;
+    // Lines stack as Typst stacks them: a line is as tall as the line height, except that a line of nothing but
+    // trimmed whitespace has no height; `leading` separates lines. The first baseline is the slot's.
+    let line_height = slot.baseline - slot.y;
+    let leading = pitch - line_height;
+    let baselines = |rs: &[LineRun]| -> Vec<f64> {
+        let mut y = slot.y;
+        rs.iter().enumerate().map(|(k, r)| { let h = if !r.ids.is_empty() && r.kept == 0 { 0.0 } else { line_height }; if k > 0 { y += leading; } y += h; y }).collect()
+    };
+    let bottom = slot.y + slot.height + 1e-6;
+    let visible = baselines(&runs).iter().filter(|&&b| b <= bottom).count();
+    let overlong = runs.iter().position(|r| !fits(r.width));
+    if overlong.is_some() || visible < runs.len() {
+        match slot.overflow.as_str() {
+            "error" => {
+                if let Some(k) = overlong { bail!("slot `{trace_name}`: {:?} is {:.2} pt wide but the slot is {:.2} pt; declare an overflow policy or a smaller max-length", runs[k].text, runs[k].width, slot.width); }
+                bail!("slot `{trace_name}`: {text:?} needs {} lines but the slot holds {lines}; declare an overflow policy or a smaller max-length", runs.len());
+            }
+            "clip" => runs.truncate(visible), // overlong lines stay, clipped by the box as in Typst
+            "ellipsis" => {
+                let cut = overlong.unwrap_or(visible - 1).min(visible - 1);
+                runs.truncate(cut + 1);
+                runs[cut] = ellipsize(&broken[cut])?;
+            }
+            other => bail!("slot `{trace_name}`: unknown overflow policy {other:?}"),
+        }
+    }
+
+    let ys = baselines(&runs);
+    let mut items = Vec::new();
+    let mut trace_glyphs = Vec::new();
+    for (k, line) in runs.iter().enumerate() {
+        let y = ys[k];
+        let x = match slot.align.as_str() {
+            "left" => slot.x,
+            "center" => slot.x + (slot.width - line.width) / 2.0,
+            "right" => slot.x + slot.width - line.width,
+            other => bail!("slot `{trace_name}`: unknown alignment {other:?}"),
+        };
+        let mut pen = x;
+        let glyphs: Vec<ir::Glyph> = line.ids.iter().zip(&line.advances).map(|(&id, &advance)| {
+            trace_glyphs.push(ReferenceGlyph { id, x: pen, y });
+            pen += advance;
+            ir::Glyph { id, x_advance: advance, x_offset: 0.0, y_offset: 0.0, chars: None }
+        }).collect();
+        if !glyphs.is_empty() { items.push(ir::Item::Text { x, y, font: slot.font, size, fill: slot.fill, text: line.text.clone(), glyphs, node: None }); }
+    }
+    // The trace reports the first line's baseline as Typst's frame has it: at the box top when that line is whitespace.
+    let baseline = ys.first().copied().unwrap_or(slot.baseline);
+    Ok(Filled { slot: slot.clone(), items, trace: ReferenceSlot { name: trace_name, baseline, size, glyphs: trace_glyphs }, node: None })
 }
 
 // ---------------------------------------------------------------------------------------------------------
@@ -555,7 +790,7 @@ fn write_pdf(doc: &ir::Document, fonts: &[LoadedFont], pages: &[Composed], struc
     let mut multi: HashMap<(usize, u16), String> = HashMap::new();
     for page in pages {
         collect_glyphs(&page.items, &mut used, &mut multi);
-        for fill in &page.fills { collect_glyphs(std::slice::from_ref(&fill.item), &mut used, &mut multi); }
+        for fill in &page.fills { collect_glyphs(&fill.items, &mut used, &mut multi); }
     }
 
     for (i, font) in fonts.iter().enumerate() {
@@ -622,9 +857,9 @@ fn write_pdf(doc: &ir::Document, fonts: &[LoadedFont], pages: &[Composed], struc
             content.rect(fill.slot.x as f32, fill.slot.y as f32, fill.slot.width as f32, fill.slot.height as f32);
             content.clip_nonzero();
             content.end_path();
-            let mut item = fill.item.clone();
-            if let ir::Item::Text { node, .. } = &mut item { *node = fill.node; }
-            writer.emit(&mut content, std::slice::from_ref(&item));
+            let mut items = fill.items.clone();
+            for item in &mut items { if let ir::Item::Text { node, .. } = item { *node = fill.node; } }
+            writer.emit(&mut content, &items);
             writer.close(&mut content);
             content.restore_state();
         }
@@ -728,12 +963,13 @@ pub fn compare(trace: &[ReferenceSlot], reference: &[ReferenceSlot]) -> Vec<Stri
     for slot in trace {
         let Some(expected) = by_name.get(slot.name.as_str()) else { problems.push(format!("{}: not in the reference", slot.name)); continue };
         if (slot.baseline - expected.baseline).abs() > 1e-3 { problems.push(format!("{}: baseline {:.3} vs Typst {:.3}", slot.name, slot.baseline, expected.baseline)); }
-        if (slot.size - expected.size).abs() > 1e-3 { problems.push(format!("{}: size {:.3} vs Typst {:.3}", slot.name, slot.size, expected.size)); }
+        if !expected.glyphs.is_empty() && (slot.size - expected.size).abs() > 1e-3 { problems.push(format!("{}: size {:.3} vs Typst {:.3}", slot.name, slot.size, expected.size)); } // an empty value shows no size
         let ours: Vec<u16> = slot.glyphs.iter().map(|g| g.id).collect();
         let theirs: Vec<u16> = expected.glyphs.iter().map(|g| g.id).collect();
         if ours != theirs { problems.push(format!("{}: glyphs {ours:?} vs Typst {theirs:?}", slot.name)); continue; }
         for (i, (a, b)) in slot.glyphs.iter().zip(&expected.glyphs).enumerate() {
             if (a.x - b.x).abs() > 1e-3 { problems.push(format!("{}: glyph {i} (id {}) at x {:.4} vs Typst {:.4}", slot.name, a.id, a.x, b.x)); break; }
+            if (a.y - b.y).abs() > 1e-3 { problems.push(format!("{}: glyph {i} (id {}) at y {:.4} vs Typst {:.4}", slot.name, a.id, a.y, b.y)); break; }
         }
     }
     for expected in reference {

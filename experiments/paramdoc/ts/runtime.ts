@@ -7,7 +7,7 @@
 // because CompressionStream costs milliseconds per call in browsers. Erasable TypeScript only, so Node can run it
 // with `--experimental-strip-types` and a bundler can ship it to a browser unchanged.
 
-export const IR_VERSION = 4;
+export const IR_VERSION = 5;
 
 // ---------------------------------------------------------------------------------------------------------
 // IR (mirrors ../ir/src/lib.rs; serde writes `None` as null unless skipped)
@@ -28,7 +28,7 @@ export type Item =
 export interface Node { role: string; parent: number | null; alt?: string; scope?: string }
 export interface Slot {
   name: string; page: number; x: number; y: number; width: number; height: number; baseline: number; descent: number;
-  pen_x: number; font: number; size: number; fill: Color; align: string; overflow: string; max_length?: number | null;
+  pen_x: number; font: number; size: number; fill: Color; align: string; overflow: string; max_length?: number | null; lines?: number; pitch?: number;
   sample: string; node?: number;
 }
 export interface Fragment { x: number; y: number; width: number; height: number; items: Item[]; slots: Slot[]; nodes: Node[] }
@@ -85,9 +85,9 @@ export class Font {
 // ---------------------------------------------------------------------------------------------------------
 // Slot filling
 
-export interface ReferenceGlyph { id: number; x: number }
+export interface ReferenceGlyph { id: number; x: number; y?: number }
 export interface ReferenceSlot { name: string; baseline: number; size: number; glyphs: ReferenceGlyph[] }
-interface Filled { slot: Slot; item: Item & { kind: 'text' }; trace: ReferenceSlot; node?: number }
+interface Filled { slot: Slot; items: (Item & { kind: 'text' })[]; trace: ReferenceSlot; node?: number }
 
 function textOf(value: unknown): string {
   if (typeof value === 'string') return value;
@@ -98,6 +98,7 @@ function textOf(value: unknown): string {
 function fillSlot(slot: Slot, text: string, font: Font, traceName: string): Filled {
   const length = [...text].length;
   if (slot.max_length != null && length > slot.max_length) throw new Error(`slot \`${traceName}\`: ${JSON.stringify(text)} has ${length} characters, max-length is ${slot.max_length}`);
+  if ((slot.lines ?? 1) > 1) return fillLines(slot, text, font, traceName);
   const shape = (s: string, size: number): [Glyph[], number] => {
     const glyphs: Glyph[] = [];
     let width = 0;
@@ -145,12 +146,207 @@ function fillSlot(slot: Slot, text: string, font: Font, traceName: string): Fill
     default: throw new Error(`slot \`${traceName}\`: unknown alignment ${JSON.stringify(slot.align)}`);
   }
   let pen = x;
-  const traceGlyphs = glyphs.map(g => { const at = pen; pen += g.x_advance; return { id: g.id, x: at }; });
+  const traceGlyphs = glyphs.map(g => { const at = pen; pen += g.x_advance; return { id: g.id, x: at, y: slot.baseline }; });
   return {
     slot,
-    item: { kind: 'text', x, y: slot.baseline, font: slot.font, size, fill: slot.fill, text: shown, glyphs },
+    items: [{ kind: 'text', x, y: slot.baseline, font: slot.font, size, fill: slot.fill, text: shown, glyphs }],
     trace: { name: traceName, baseline: slot.baseline, size, glyphs: traceGlyphs },
   };
+}
+
+// ---------------------------------------------------------------------------------------------------------
+// Wrapping slots: Typst's simple line breaker (typst-layout 0.15, inline/linebreak.rs) over UAX #14 break
+// opportunities, for the character classes a Latin repertoire contains. The dialect switches hyphenation and
+// justification off inside wrapping slots, so greedy first fit over advance widths reproduces Typst's lines.
+
+type LB = 'AL' | 'NU' | 'SP' | 'BA' | 'BB' | 'B2' | 'HY' | 'CL' | 'CP' | 'OP' | 'QU' | 'EX' | 'IS' | 'SY' | 'PR' | 'PO' | 'IN' | 'GL' | 'ZW' | 'WJ' | 'BK' | 'CM' | 'NS';
+
+const LB_CLASS: Record<string, LB> = {
+  '\n': 'BK', '\r': 'BK', '\v': 'BK', '\f': 'BK', '\u0085': 'BK', '\u2028': 'BK', '\u2029': 'BK',
+  '\t': 'BA', ' ': 'SP', '!': 'EX', '"': 'QU', '$': 'PR', '%': 'PO', "'": 'QU', '(': 'OP', ')': 'CP', '+': 'PR', ',': 'IS', '-': 'HY',
+  '.': 'IS', '/': 'SY', ':': 'IS', ';': 'IS', '?': 'EX', '[': 'OP', '\\': 'PR', ']': 'CP', '{': 'OP', '|': 'BA', '}': 'CL',
+  '\u00a0': 'GL', '¡': 'OP', '¢': 'PO', '£': 'PR', '¤': 'PR', '¥': 'PR', '«': 'QU', '\u00ad': 'BA', '°': 'PO', '±': 'PR', '´': 'BB', '»': 'QU', '¿': 'OP',
+  '\u2000': 'BA', '\u2001': 'BA', '\u2002': 'BA', '\u2003': 'BA', '\u2004': 'BA', '\u2005': 'BA', '\u2006': 'BA', '\u2007': 'GL', '\u2008': 'BA', '\u2009': 'BA', '\u200a': 'BA',
+  '\u200b': 'ZW', '\u2010': 'BA', '\u2011': 'GL', '\u2012': 'BA', '\u2013': 'BA', '\u2014': 'B2', '\u2018': 'QU', '\u2019': 'QU', '\u201a': 'OP', '\u201b': 'QU',
+  '\u201c': 'QU', '\u201d': 'QU', '\u201e': 'OP', '\u201f': 'QU', '\u2026': 'IN', '\u202f': 'GL', '\u2032': 'PO', '\u2033': 'PO', '\u2039': 'QU', '\u203a': 'QU',
+  '\u2044': 'IS', '\u2060': 'WJ', '\u20ac': 'PR', '\u2212': 'PR',
+};
+/** Digits are the ASCII ones and combining marks the main combining blocks, in both runtimes alike. */
+const lineBreakClass = (c: string): LB => LB_CLASS[c] ?? (/^[0-9]$/.test(c) ? 'NU' : /^[\u0300-\u036f\u1ab0-\u1aff\u1dc0-\u1dff\u20d0-\u20ff\ufe20-\ufe2f]$/.test(c) ? 'CM' : 'AL');
+const isInitialQuote = (c: string): boolean => '«‘“‹‛‟'.includes(c);
+const isFinalQuote = (c: string): boolean => '»’”›'.includes(c);
+const isMandatoryBreak = (c: string): boolean => LB_CLASS[c] === 'BK';
+/** Unicode White_Space, as Rust's `char::is_whitespace`. */
+const isWhitespace = (c: string): boolean => /^[\t\n\v\f\r \u0085\u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000]$/.test(c);
+/** Unicode Default_Ignorable_Code_Point, which Typst trims at a line end as it trims spaces. */
+const isDefaultIgnorable = (c: string): boolean => /^[\u00ad\u034f\u061c\u115f\u1160\u17b4\u17b5\u180b-\u180f\u200b-\u200f\u202a-\u202e\u2060-\u206f\u3164\ufe00-\ufe0f\ufeff\uffa0\ufff0-\ufff8]$/.test(c) || /^[\u{1bca0}-\u{1bca3}\u{1d173}-\u{1d17a}\u{e0000}-\u{e0fff}]$/u.test(c);
+
+/** UAX #14 line break opportunities as Typst 0.15 gets them from icu4x's default line segmenter: the Unicode 15.1
+ *  rules with LB15a and LB15b, but without LB15c and LB20a and with the pair-table form of LB25 (each checked
+ *  against Typst on random data), East Asian and Hebrew cases left out. `end` is where the next line would start,
+ *  `mandatory` after a hard break and at the end. */
+function breakpoints(chars: string[]): { end: number; mandatory: boolean }[] {
+  const n = chars.length;
+  if (n === 0) return [{ end: 0, mandatory: true }];
+  const raw = chars.map(lineBreakClass);
+  // LB9, LB10: a combining mark takes its base's class and never separates from it; after a space, a break
+  // or at the start it is a letter.
+  const eff: LB[] = [], attached: boolean[] = [];
+  for (let i = 0; i < n; i++) {
+    const c = raw[i]!;
+    if (c === 'CM' && i > 0 && eff[i - 1] !== 'BK' && eff[i - 1] !== 'SP' && eff[i - 1] !== 'ZW') { eff.push(eff[i - 1]!); attached.push(true); }
+    else { eff.push(c === 'CM' ? 'AL' : c); attached.push(false); }
+  }
+  const is = (k: number, ...classes: LB[]): boolean => k >= 0 && k < n && classes.includes(eff[k]!);
+  const allow = (i: number): boolean => {
+    const b = eff[i - 1]!, a = eff[i]!;
+    if (attached[i]) return false;                                                                   // LB9
+    if (b === 'BK') return !(chars[i - 1] === '\r' && chars[i] === '\n');                           // LB4, LB5
+    if (a === 'BK' || a === 'SP' || a === 'ZW') return false;                                        // LB6, LB7
+    let p = i - 1;
+    while (p >= 0 && eff[p] === 'SP') p--;                                                           // the last non-space before i
+    if (is(p, 'ZW')) return true;                                                                    // LB8
+    if (a === 'WJ' || b === 'WJ' || b === 'GL') return false;                                        // LB11, LB12
+    if (a === 'GL' && b !== 'SP' && b !== 'BA' && b !== 'HY') return false;                          // LB12a
+    if (a === 'CL' || a === 'CP' || a === 'EX' || a === 'IS' || a === 'SY') return false;             // LB13
+    if (is(p, 'OP')) return false;                                                                   // LB14
+    if (is(p, 'QU') && isInitialQuote(chars[p]!) && (p === 0 || is(p - 1, 'BK', 'OP', 'QU', 'GL', 'SP', 'ZW'))) return false; // LB15a
+    if (a === 'QU' && isFinalQuote(chars[i]!) && (i + 1 === n || is(i + 1, 'SP', 'GL', 'WJ', 'CL', 'QU', 'CP', 'EX', 'IS', 'SY', 'BK'))) return false; // LB15b
+    if (is(p, 'CL', 'CP') && a === 'NS') return false;                                               // LB16
+    if (is(p, 'B2') && a === 'B2') return false;                                                     // LB17
+    if (b === 'SP') return true;                                                                     // LB18
+    if (a === 'QU' || b === 'QU') return false;                                                      // LB19, LB19a without East Asian text
+    if (a === 'BA' || a === 'HY' || a === 'NS' || b === 'BB') return false;                          // LB21
+    if (a === 'IN') return false;                                                                    // LB22
+    if ((b === 'AL' && a === 'NU') || (b === 'NU' && a === 'AL')) return false;                      // LB23
+    if (((b === 'PR' || b === 'PO') && a === 'AL') || (b === 'AL' && (a === 'PR' || a === 'PO'))) return false; // LB24
+    if ((b === 'CL' || b === 'CP' || b === 'NU') && (a === 'PO' || a === 'PR')) return false;         // LB25, pair-table form
+    if ((b === 'PO' || b === 'PR') && (a === 'OP' || a === 'NU')) return false;
+    if ((b === 'HY' || b === 'IS' || b === 'NU' || b === 'SY') && a === 'NU') return false;
+    if (b === 'AL' && a === 'AL') return false;                                                      // LB28
+    if (b === 'IS' && a === 'AL') return false;                                                      // LB29
+    if ((b === 'AL' || b === 'NU') && a === 'OP') return false;                                      // LB30
+    if (b === 'CP' && (a === 'AL' || a === 'NU')) return false;
+    return true;                                                                                     // LB31
+  };
+  const out: { end: number; mandatory: boolean }[] = [];
+  for (let i = 1; i < n; i++) if (allow(i)) out.push({ end: i, mandatory: raw[i - 1] === 'BK' });
+  out.push({ end: n, mandatory: true });
+  return out;
+}
+
+/** A line of a wrapping slot: `layoutEnd` excludes the trailing whitespace that does not count for the width;
+ *  `shapingEnd` includes it (Typst draws those glyphs at zero advance). */
+interface BrokenLine { start: number; layoutEnd: number; shapingEnd: number; width: number }
+/** A line as drawn: the first `kept` glyphs count for the width, the rest are trimmed trailing whitespace at zero advance. */
+interface LineRun { ids: number[]; advances: number[]; text: string; width: number; kept: number }
+const isSpaceGlyph = (c: string): boolean => c === ' ' || c === '\u00a0' || c === '\u3000';
+
+/** Typst's simple breaker: greedy first fit, a mandatory break or a line that does not fit even on its own
+ *  committed as it is (an overlong word overflows, as in Typst). */
+function breakLines(chars: string[], widthOf: (from: number, to: number) => number, fits: (width: number) => boolean): BrokenLine[] {
+  const line = (start: number, end: number, mandatory: boolean): BrokenLine => {
+    let shapingEnd = end, layoutEnd = end;
+    if (mandatory) { while (shapingEnd > start && isMandatoryBreak(chars[shapingEnd - 1]!)) shapingEnd--; layoutEnd = shapingEnd; }
+    else while (layoutEnd > start && (isWhitespace(chars[layoutEnd - 1]!) || isDefaultIgnorable(chars[layoutEnd - 1]!))) layoutEnd--;
+    return { start, layoutEnd, shapingEnd, width: widthOf(start, layoutEnd) };
+  };
+  const lines: BrokenLine[] = [];
+  let start = 0;
+  let last: { line: BrokenLine; end: number } | undefined;
+  for (const { end, mandatory } of breakpoints(chars)) {
+    let attempt = line(start, end, mandatory);
+    if (!fits(attempt.width) && last) { lines.push(last.line); start = last.end; attempt = line(start, end, mandatory); }
+    if (mandatory || !fits(attempt.width)) { lines.push(attempt); start = end; last = undefined; }
+    else last = { line: attempt, end };
+  }
+  if (last) lines.push(last.line);
+  return lines;
+}
+
+function fillLines(slot: Slot, text: string, font: Font, traceName: string): Filled {
+  const lines = slot.lines!, pitch = slot.pitch ?? 0, size = slot.size;
+  if (!(pitch > 0)) throw new Error(`slot \`${traceName}\`: a wrapping slot without a line pitch; export the document again`);
+  if (slot.overflow === 'shrink') throw new Error(`slot \`${traceName}\`: \`shrink\` is not an overflow policy for a wrapping slot`);
+  if (text.includes('://') || text.includes('www.')) throw new Error(`slot \`${traceName}\`: ${JSON.stringify(text)} contains a web address, which Typst breaks by rules this runtime does not have yet`);
+  const chars = [...text];
+  const glyphOf = (c: string): number => {
+    const id = font.glyph(c);
+    if (id === undefined) throw new Error(`slot \`${traceName}\`: ${JSON.stringify(c)} (U+${c.codePointAt(0)!.toString(16).toUpperCase().padStart(4, '0')}) is not in the slot's repertoire; declare it with \`charset:\` in the template`);
+    return id;
+  };
+  const ids: (number | undefined)[] = new Array<number | undefined>(chars.length);
+  const idAt = (i: number): number => (ids[i] ??= glyphOf(chars[i]!));
+  const widthOf = (from: number, to: number): number => { let w = 0; for (let i = from; i < to; i++) w += font.advance(idAt(i)) * size; return w; };
+  const fits = (width: number): boolean => slot.width + 1e-4 >= width; // Typst's `Abs::fits`
+  const run = (cs: string[], kept: number): LineRun => {
+    const ids = cs.map(glyphOf);
+    const advances = ids.map((id, i) => (i < kept ? font.advance(id) * size : 0));
+    let width = advances.reduce((w, a) => w + a, 0);
+    if (!fits(width)) {
+      // Typst shrinks the spaces of a line that does not fit by up to a third of their width (`par.justification-limits`,
+      // spacing min 2/3) before letting it overflow; it does so for ragged lines too.
+      const shrinkable = advances.map((a, i) => (i < kept && isSpaceGlyph(cs[i]!) ? Math.min(a / 3, a * 0.75) : 0));
+      const shrinkability = shrinkable.reduce((w, a) => w + a, 0);
+      if (shrinkability > 0) {
+        const ratio = Math.max((slot.width - width) / shrinkability, -1);
+        for (let i = 0; i < advances.length; i++) advances[i]! += ratio * shrinkable[i]!;
+        width = advances.reduce((w, a) => w + a, 0);
+      }
+    }
+    return { ids, advances, text: cs.join(''), width, kept };
+  };
+  const render = (l: BrokenLine): LineRun => run(chars.slice(l.start, l.shapingEnd), l.layoutEnd - l.start);
+  const ellipsize = (l: BrokenLine): LineRun => {
+    const ellipsis = [...(font.glyph('…') !== undefined ? '…' : '...')];
+    const kept = chars.slice(l.start, l.layoutEnd);
+    const trimmed = (): string[] => { while (kept.length && isWhitespace(kept[kept.length - 1]!)) kept.pop(); return kept; };
+    let shown = run([...trimmed(), ...ellipsis], kept.length + ellipsis.length);
+    while (!fits(shown.width) && kept.length) { kept.pop(); shown = run([...trimmed(), ...ellipsis], kept.length + ellipsis.length); }
+    return shown;
+  };
+
+  const broken = breakLines(chars, widthOf, fits);
+  let runs = broken.map(render);
+  // Lines stack as Typst stacks them: a line is as tall as the line height, except that a line of nothing but
+  // trimmed whitespace has no height; `leading` separates lines. The first baseline is the slot's.
+  const lineHeight = slot.baseline - slot.y, leading = pitch - lineHeight;
+  const baselines = (rs: LineRun[]): number[] => { let y = slot.y; return rs.map((r, k) => { const h = r.ids.length > 0 && r.kept === 0 ? 0 : lineHeight; if (k > 0) y += leading; y += h; return y; }); };
+  const bottom = slot.y + slot.height + 1e-6;
+  const visible = baselines(runs).filter(b => b <= bottom).length;
+  const overlong = runs.findIndex(r => !fits(r.width));
+  if (overlong >= 0 || visible < runs.length) switch (slot.overflow) {
+    case 'error':
+      if (overlong >= 0) throw new Error(`slot \`${traceName}\`: ${JSON.stringify(runs[overlong]!.text)} is ${runs[overlong]!.width.toFixed(2)} pt wide but the slot is ${slot.width.toFixed(2)} pt; declare an overflow policy or a smaller max-length`);
+      throw new Error(`slot \`${traceName}\`: ${JSON.stringify(text)} needs ${runs.length} lines but the slot holds ${lines}; declare an overflow policy or a smaller max-length`);
+    case 'clip': runs = runs.slice(0, visible); break; // overlong lines stay, clipped by the box as in Typst
+    case 'ellipsis': {
+      const cut = Math.min(overlong >= 0 ? overlong : visible - 1, visible - 1);
+      runs = runs.slice(0, cut + 1);
+      runs[cut] = ellipsize(broken[cut]!);
+      break;
+    }
+    default: throw new Error(`slot \`${traceName}\`: unknown overflow policy ${JSON.stringify(slot.overflow)}`);
+  }
+
+  const items: (Item & { kind: 'text' })[] = [];
+  const traceGlyphs: ReferenceGlyph[] = [];
+  const ys = baselines(runs);
+  runs.forEach((line, k) => {
+    const y = ys[k]!;
+    let x: number;
+    switch (slot.align) {
+      case 'left': x = slot.x; break;
+      case 'center': x = slot.x + (slot.width - line.width) / 2; break;
+      case 'right': x = slot.x + slot.width - line.width; break;
+      default: throw new Error(`slot \`${traceName}\`: unknown alignment ${JSON.stringify(slot.align)}`);
+    }
+    let pen = x;
+    const glyphs: Glyph[] = line.ids.map((id, i) => { traceGlyphs.push({ id, x: pen, y }); pen += line.advances[i]!; return { id, x_advance: line.advances[i]!, x_offset: 0, y_offset: 0 }; });
+    if (glyphs.length) items.push({ kind: 'text', x, y, font: slot.font, size, fill: slot.fill, text: line.text, glyphs });
+  });
+  // The trace reports the first line's baseline as Typst's frame has it: at the box top when that line is whitespace.
+  return { slot, items, trace: { name: traceName, baseline: ys[0] ?? slot.baseline, size, glyphs: traceGlyphs } };
 }
 
 // ---------------------------------------------------------------------------------------------------------
@@ -491,7 +687,7 @@ async function writePdf(doc: Document, fonts: Font[], fontStreams: Uint8Array[],
   // Fonts, embedded whole; ToUnicode from the glyph's characters (ligatures) or the font's cmap.
   const used = fonts.map(() => new Set<number>());
   const multi = new Map<string, string>();
-  for (const page of pages) { usedGlyphs(page.items, used, multi); usedGlyphs(page.fills.map(f => f.item), used, multi); }
+  for (const page of pages) { usedGlyphs(page.items, used, multi); usedGlyphs(page.fills.flatMap(f => f.items), used, multi); }
   for (let i = 0; i < fonts.length; i++) {
     const font = fonts[i]!, meta = font.meta;
     const cid = pdf.alloc(), descriptor = pdf.alloc(), file = pdf.alloc(), toUnicode = pdf.alloc();
@@ -520,7 +716,7 @@ async function writePdf(doc: Document, fonts: Font[], fontStreams: Uint8Array[],
     const builder = new ContentBuilder(fonts, structure, index);
     builder.emit([{ kind: 'group', x: 0, y: 0, transform: [1, 0, 0, -1, 0, page.height], items: page.items }]);
     for (const fill of page.fills) {
-      builder.emit([{ kind: 'group', x: 0, y: 0, transform: [1, 0, 0, -1, 0, page.height], clip: [{ op: 'move', to: [fill.slot.x, fill.slot.y] }, { op: 'line', to: [fill.slot.x + fill.slot.width, fill.slot.y] }, { op: 'line', to: [fill.slot.x + fill.slot.width, fill.slot.y + fill.slot.height] }, { op: 'line', to: [fill.slot.x, fill.slot.y + fill.slot.height] }, { op: 'close' }], items: [{ ...fill.item, node: fill.node }] }]);
+      builder.emit([{ kind: 'group', x: 0, y: 0, transform: [1, 0, 0, -1, 0, page.height], clip: [{ op: 'move', to: [fill.slot.x, fill.slot.y] }, { op: 'line', to: [fill.slot.x + fill.slot.width, fill.slot.y] }, { op: 'line', to: [fill.slot.x + fill.slot.width, fill.slot.y + fill.slot.height] }, { op: 'line', to: [fill.slot.x, fill.slot.y + fill.slot.height] }, { op: 'close' }], items: fill.items.map(item => ({ ...item, node: fill.node })) }]);
     }
     builder.close();
     pageParents.push(builder.parents);
@@ -595,11 +791,13 @@ export function compare(trace: ReferenceSlot[], reference: ReferenceSlot[]): str
     const expected = byName.get(slot.name);
     if (!expected) { problems.push(`${slot.name}: not in the reference`); continue; }
     if (Math.abs(slot.baseline - expected.baseline) > 1e-3) problems.push(`${slot.name}: baseline ${slot.baseline.toFixed(3)} vs ${expected.baseline.toFixed(3)}`);
-    if (Math.abs(slot.size - expected.size) > 1e-3) problems.push(`${slot.name}: size ${slot.size.toFixed(3)} vs ${expected.size.toFixed(3)}`);
+    if (expected.glyphs.length && Math.abs(slot.size - expected.size) > 1e-3) problems.push(`${slot.name}: size ${slot.size.toFixed(3)} vs ${expected.size.toFixed(3)}`); // an empty value shows no size
     const ours = slot.glyphs.map(g => g.id).join(','), theirs = expected.glyphs.map(g => g.id).join(',');
     if (ours !== theirs) { problems.push(`${slot.name}: glyphs [${ours}] vs [${theirs}]`); continue; }
     for (let i = 0; i < slot.glyphs.length; i++) {
-      if (Math.abs(slot.glyphs[i]!.x - expected.glyphs[i]!.x) > 1e-3) { problems.push(`${slot.name}: glyph ${i} at x ${slot.glyphs[i]!.x.toFixed(4)} vs ${expected.glyphs[i]!.x.toFixed(4)}`); break; }
+      const ours = slot.glyphs[i]!, theirs = expected.glyphs[i]!;
+      if (Math.abs(ours.x - theirs.x) > 1e-3) { problems.push(`${slot.name}: glyph ${i} at x ${ours.x.toFixed(4)} vs ${theirs.x.toFixed(4)}`); break; }
+      if (ours.y !== undefined && theirs.y !== undefined && Math.abs(ours.y - theirs.y) > 1e-3) { problems.push(`${slot.name}: glyph ${i} at y ${ours.y.toFixed(4)} vs ${theirs.y.toFixed(4)}`); break; }
     }
   }
   for (const expected of reference) if (!trace.some(s => s.name === expected.name)) problems.push(`${expected.name}: in the reference but not drawn`);

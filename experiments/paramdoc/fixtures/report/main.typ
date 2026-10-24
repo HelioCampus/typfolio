@@ -1,6 +1,7 @@
 // The worker-batch benchmark's progress report (examples/pretext-hybrid/src/batch/report/main.typ) in the slot
-// dialect. Differences from the original, forced by the dialect: the title is static, the tutor comment is one
-// line with an ellipsis, there are no score bars and no alternating row fill, and columns have fixed widths.
+// dialect. Differences from the original, forced by the dialect: the title is static, the tutor comment is at
+// most three ragged-right lines with an ellipsis, there are no score bars and no alternating row fill, and
+// columns have fixed widths.
 #import "paramdoc.typ": paged, slot, band, repeat, overlay
 #let data = json("/data.json")
 
@@ -48,4 +49,4 @@
 ))
 
 == Tutor comment
-#slot("comment", data.comment, width: 100%, height: 1.3em, max-length: 200, overflow: "ellipsis")
+#slot("comment", data.comment, width: 100%, lines: 3, max-length: 300, overflow: "ellipsis")

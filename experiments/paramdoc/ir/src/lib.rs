@@ -6,7 +6,7 @@
 
 use serde::{Deserialize, Serialize};
 
-pub const VERSION: u32 = 4;
+pub const VERSION: u32 = 5;
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct Document {
@@ -215,7 +215,8 @@ pub struct Slot {
     pub y: f64,
     pub width: f64,
     pub height: f64,
-    /// Absolute y of the text baseline: the box bottom minus `descent`.
+    /// Absolute y of the text baseline: the box bottom minus `descent`. For a wrapping slot (`lines` > 1) the
+    /// first line's baseline: the box top plus the line height; line `k` sits `k · pitch` lower.
     pub baseline: f64,
     /// Room kept below the baseline for descenders, in points.
     pub descent: f64,
@@ -235,4 +236,14 @@ pub struct Slot {
     /// The characters this slot may contain, when the template declares them; otherwise the default repertoire.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub charset: Option<String>,
+    /// How many ragged-right lines the slot holds; 1 is a single line pinned to the box bottom.
+    #[serde(default = "one", skip_serializing_if = "is_one")]
+    pub lines: u32,
+    /// Baseline-to-baseline distance of a wrapping slot's lines, in points; 0 for a single line.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub pitch: f64,
 }
+
+fn one() -> u32 { 1 }
+fn is_one(n: &u32) -> bool { *n == 1 }
+fn is_zero(v: &f64) -> bool { *v == 0.0 }

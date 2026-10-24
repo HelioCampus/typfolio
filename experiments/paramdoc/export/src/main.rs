@@ -1,7 +1,7 @@
 //! paramdoc-export: compiles a slot-dialect template with Typst, exports its frames as a parametric document
 //! and checks that nothing outside the declared slots depends on the data.
 //!
-//! Usage: paramdoc-export <fixture-dir> [--data f] [--fonts d] [--out d] [--fuzz N] [--seed S] [--reference data.json]
+//! Usage: paramdoc-export <fixture-dir> [--data f] [--fonts d] [--out d] [--fuzz N] [--seed S] [--reference data.json]... [--fuzz-references K]
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs;
@@ -274,9 +274,9 @@ fn localize(items: &mut [ir::Item], slots: &mut [ir::Slot], nodes: &[ir::Node]) 
 // ---------------------------------------------------------------------------------------------------------
 // Tags found in the frames
 
-struct SlotMeta { name: String, align: String, overflow: String, max_length: Option<u32>, descent: f64, charset: Option<String> }
+struct SlotMeta { name: String, align: String, overflow: String, max_length: Option<u32>, descent: f64, charset: Option<String>, lines: u32, line_height: f64, pitch: f64 }
 struct TextStyle { font: usize, size: f64, fill: ir::Color, pen_x: f64 }
-struct SlotRecord { meta: SlotMeta, page: usize, rect: Rect, style: Option<TextStyle>, sample: String, baselines: Vec<f64>, glyphs: Vec<(u16, f64)>, node: Option<usize> }
+struct SlotRecord { meta: SlotMeta, page: usize, rect: Rect, style: Option<TextStyle>, sample: String, baselines: Vec<f64>, glyphs: Vec<(u16, f64, f64)>, node: Option<usize> }
 struct BandTag { name: String, repeat_on_break: bool, page: usize, rect: Rect }
 struct OverlayTag { page: usize, rect: Rect }
 struct Margins { top: f64, bottom: f64, left: f64, right: f64 }
@@ -286,7 +286,7 @@ struct Tags { slots: Vec<SlotRecord>, bands: Vec<BandTag>, overlays: Vec<Overlay
 
 /// What Typst itself laid out inside a slot for some data: the runtime compares its own output with this.
 #[derive(serde::Serialize)]
-pub struct ReferenceGlyph { pub id: u16, pub x: f64 }
+pub struct ReferenceGlyph { pub id: u16, pub x: f64, pub y: f64 }
 
 #[derive(serde::Serialize)]
 pub struct ReferenceSlot { pub name: String, pub baseline: f64, pub size: f64, pub glyphs: Vec<ReferenceGlyph>, pub font: String }
@@ -457,7 +457,16 @@ impl<'a> Exporter<'a> {
             other => bail!("slot metadata `max-length` is not an integer: {other:?}"),
         };
         let charset = match dict.get("charset") { Ok(Value::Str(s)) => Some(s.as_str().to_string()), _ => None };
-        Ok(SlotMeta { name: string("name")?, align: string("align")?, overflow: string("overflow")?, max_length, descent: dict_number(dict, "descent")?, charset })
+        let lines = match dict.get("lines") {
+            Ok(Value::Int(n)) if *n >= 1 => *n as u32,
+            Err(_) => 1,
+            other => bail!("slot metadata `lines` is not a positive integer: {other:?}"),
+        };
+        let number_or = |key: &str, default: f64| -> Result<f64> { if dict.get(key).is_ok() { dict_number(dict, key) } else { Ok(default) } };
+        let (line_height, pitch) = (number_or("line-height", 0.0)?, number_or("pitch", 0.0)?);
+        let name = string("name")?;
+        if lines > 1 && !(line_height > 0.0 && pitch > 0.0) { bail!("slot `{name}`: a wrapping slot needs `line-height` and `pitch` in its metadata"); }
+        Ok(SlotMeta { name, align: string("align")?, overflow: string("overflow")?, max_length, descent: dict_number(dict, "descent")?, charset, lines, line_height, pitch })
     }
 
     fn rect_of(&self, t: Transform, size: Size) -> Result<Rect> {
@@ -529,7 +538,7 @@ impl<'a> Exporter<'a> {
                         slot.sample.push_str(&text.text);
                         let mut pen = pt(abs.x);
                         for g in &text.glyphs {
-                            slot.glyphs.push((g.id, pen + pt(g.x_offset.at(text.size))));
+                            slot.glyphs.push((g.id, pen + pt(g.x_offset.at(text.size)), pt(abs.y)));
                             pen += pt(g.x_advance.at(text.size));
                         }
                         continue;
@@ -608,25 +617,43 @@ impl<'a> Exporter<'a> {
                 None if strict => bail!("slot `{}` has no sample text; give it a non-empty sample value", s.meta.name),
                 None => { unstyled.push(s.meta.name.clone()); TextStyle { font: 0, size: 0.0, fill: ir::Color { r: 0.0, g: 0.0, b: 0.0, a: 1.0 }, pen_x: 0.0 } }
             };
-            // The contract is geometric: the slot's baseline is the box bottom minus the declared descent (the
-            // dialect aligns the text's baseline there). The sample only tells us the style; it is checked.
-            let baseline = s.rect.bottom() - s.meta.descent;
-            if strict && s.baselines.len() > 1 {
-                eprintln!("warning: slot `{}`: the sample wrapped to {} lines; the runtime draws a single line", s.meta.name, s.baselines.len());
+            // The contract is geometric: a single line's baseline is the box bottom minus the declared descent (the
+            // dialect aligns the text's baseline there); a wrapping slot's first baseline is the box top plus the
+            // line height, and line k sits k pitches lower. The sample only tells us the style; it is checked.
+            let multi = s.meta.lines > 1;
+            if multi && s.meta.overflow == "shrink" { bail!("slot `{}`: `shrink` is not an overflow policy for a wrapping slot; use error, clip or ellipsis", s.meta.name); }
+            let baseline = if multi { s.rect.y + s.meta.line_height } else { s.rect.bottom() - s.meta.descent };
+            if strict && !multi && s.baselines.len() > 1 {
+                eprintln!("warning: slot `{}`: the sample wrapped to {} lines; the runtime draws a single line (give the slot `lines:`)", s.meta.name, s.baselines.len());
             }
-            if strict && !s.baselines.iter().any(|b| (b - baseline).abs() < 0.01) {
+            if strict && !multi && !s.baselines.iter().any(|b| (b - baseline).abs() < 0.01) {
                 eprintln!("warning: slot `{}`: the sample's baseline(s) {:?} are not at the box bottom minus descent ({baseline:.2})", s.meta.name, s.baselines);
             }
+            if strict && multi {
+                for b in &s.baselines {
+                    let k = ((b - baseline) / s.meta.pitch).round();
+                    if (b - (baseline + k * s.meta.pitch)).abs() > 0.01 {
+                        eprintln!("warning: slot `{}`: the sample's baseline {b:.2} is off the line grid ({baseline:.2} + k × {:.2})", s.meta.name, s.meta.pitch);
+                    }
+                }
+                if s.baselines.len() > s.meta.lines as usize {
+                    eprintln!("warning: slot `{}`: the sample wraps to {} lines but the slot holds {}; Typst clips the rest", s.meta.name, s.baselines.len(), s.meta.lines);
+                }
+            }
+            // The reference is what is visible: a wrapping slot's lines below the box are clipped by Typst and
+            // dropped by the runtimes.
+            let bottom = s.rect.bottom() + 1e-6;
             reference.push(ReferenceSlot {
-                name: s.meta.name.clone(), baseline: s.baselines.last().copied().unwrap_or(baseline), size: style.size,
-                glyphs: s.glyphs.iter().map(|(id, x)| ReferenceGlyph { id: *id, x: *x }).collect(),
+                name: s.meta.name.clone(), size: style.size,
+                baseline: if multi { s.baselines.first() } else { s.baselines.last() }.copied().unwrap_or(baseline),
+                glyphs: s.glyphs.iter().filter(|(_, _, y)| !multi || *y <= bottom).map(|(id, x, y)| ReferenceGlyph { id: *id, x: *x, y: *y }).collect(),
                 font: self.ir_fonts.get(style.font).map(|f| f.source_sha256.clone()).unwrap_or_default(),
             });
             slots.push(ir::Slot {
                 name: s.meta.name, page: s.page, x: s.rect.x, y: s.rect.y, width: s.rect.w, height: s.rect.h,
                 baseline, descent: s.meta.descent, pen_x: style.pen_x, font: style.font, size: style.size, fill: style.fill,
                 align: s.meta.align, overflow: s.meta.overflow, max_length: s.meta.max_length, sample: s.sample, node: s.node,
-                charset: s.meta.charset,
+                charset: s.meta.charset, lines: s.meta.lines, pitch: s.meta.pitch,
             });
         }
         Ok((slots, unstyled, reference))
@@ -928,7 +955,9 @@ impl Rng {
     fn below(&mut self, n: u64) -> u64 { if n == 0 { 0 } else { self.next() % n } }
 }
 
-const CHARSET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz 0123456789-.,'";
+/// Letters, digits and spaces with the punctuation of the default repertoire, so random strings exercise the
+/// runtimes' line breaking (every UAX #14 class a Latin repertoire contains) as well as the layout contract.
+const CHARSET: &str = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz        0123456789-.,'\"()/:;!?%$€–—…“”‘’«»‹›„‚•−";
 
 /// Random data of the same shape: strings of random length (up to twice the sample's), random numbers,
 /// arrays of 1 to 2N rows cloned from the sample rows and mutated.
@@ -937,7 +966,8 @@ fn mutate(value: &mut serde_json::Value, rng: &mut Rng) {
         serde_json::Value::String(s) => {
             let max = (s.chars().count().max(8) * 2) as u64;
             let len = rng.below(max + 1) as usize;
-            *s = (0..len).map(|_| CHARSET[rng.below(CHARSET.len() as u64) as usize] as char).collect();
+            let set: Vec<char> = CHARSET.chars().collect();
+            *s = (0..len).map(|_| set[rng.below(set.len() as u64) as usize]).collect();
         }
         serde_json::Value::Number(_) => *value = serde_json::Value::from(rng.below(1000)),
         serde_json::Value::Bool(b) => *b = !*b,
@@ -1012,11 +1042,11 @@ fn short(v: &serde_json::Value) -> String {
 // ---------------------------------------------------------------------------------------------------------
 // CLI
 
-struct Args { fixture: PathBuf, data: PathBuf, fonts: PathBuf, out: PathBuf, fuzz: usize, seed: u64, reference: Option<PathBuf> }
+struct Args { fixture: PathBuf, data: PathBuf, fonts: PathBuf, out: PathBuf, fuzz: usize, seed: u64, references: Vec<PathBuf>, fuzz_references: usize }
 
 fn parse_args() -> Result<Args> {
     let mut args = std::env::args().skip(1);
-    let fixture = PathBuf::from(args.next().ok_or_else(|| anyhow!("usage: paramdoc-export <fixture-dir> [--data f] [--fonts d] [--out d] [--fuzz N] [--seed S] [--reference data.json]"))?);
+    let fixture = PathBuf::from(args.next().ok_or_else(|| anyhow!("usage: paramdoc-export <fixture-dir> [--data f] [--fonts d] [--out d] [--fuzz N] [--seed S] [--reference data.json]... [--fuzz-references K]"))?);
     let name = fixture.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| "doc".into());
     let mut parsed = Args {
         data: fixture.join("data.json"),
@@ -1024,7 +1054,8 @@ fn parse_args() -> Result<Args> {
         out: PathBuf::from("../../.build/paramdoc").join(name),
         fuzz: 0,
         seed: 1,
-        reference: None,
+        references: Vec::new(),
+        fuzz_references: 0,
         fixture,
     };
     while let Some(flag) = args.next() {
@@ -1035,7 +1066,8 @@ fn parse_args() -> Result<Args> {
             "--out" => parsed.out = value.into(),
             "--fuzz" => parsed.fuzz = value.parse()?,
             "--seed" => parsed.seed = value.parse()?,
-            "--reference" => parsed.reference = Some(value.into()),
+            "--reference" => parsed.references.push(value.into()),
+            "--fuzz-references" => parsed.fuzz_references = value.parse()?,
             other => bail!("unknown flag {other}"),
         }
     }
@@ -1065,7 +1097,8 @@ fn roles(nodes: &[ir::Node]) -> String {
 }
 
 fn describe_slot(slot: &ir::Slot, indent: &str) {
-    println!("{indent}slot {:<14} rect ({:.2}, {:.2}) {:.2} x {:.2}  baseline y {:.2}  font #{} {:.1}pt  align {:<6} sample {:?}",
+    let wrap = if slot.lines > 1 { format!(" lines {} pitch {:.2}", slot.lines, slot.pitch) } else { String::new() };
+    println!("{indent}slot {:<14} rect ({:.2}, {:.2}) {:.2} x {:.2}  baseline y {:.2}  font #{} {:.1}pt  align {:<6}{wrap} sample {:?}",
         slot.name, slot.x, slot.y, slot.width, slot.height, slot.baseline, slot.font, slot.size, slot.align, slot.sample);
 }
 
@@ -1134,8 +1167,10 @@ fn run() -> Result<()> {
     }
     describe(&exported);
 
-    // Typst's own layout of some other data, for the runtime to compare against: reference.json / reference.pdf.
-    if let Some(path) = &args.reference {
+    // Typst's own layout of other data, for the runtimes to compare against: reference.json / reference.pdf for
+    // the first `--reference`, reference-<stem>.json / .pdf for every further one.
+    for (i, path) in args.references.iter().enumerate() {
+        let suffix = if i == 0 { String::new() } else { format!("-{}", path.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default()) };
         let bytes = fs::read(path).with_context(|| format!("reading {}", path.display()))?;
         let (doc, Exported { mut reference, .. }) = build(&args.fixture, &bytes, &fonts, false)?;
         // Typst's glyph ids are the original font's; the runtimes report ids in the subset.
@@ -1144,9 +1179,9 @@ fn run() -> Result<()> {
                 for g in &mut slot.glyphs { g.id = subset.map.get(&g.id).copied().unwrap_or(g.id); }
             }
         }
-        fs::write(args.out.join("reference.json"), serde_json::to_string_pretty(&reference)?)?;
-        fs::write(args.out.join("reference.pdf"), typst_pdf::pdf(&doc, &PdfOptions::default()).map_err(|e| anyhow!("{e:?}"))?)?;
-        println!("reference for {}: {} slot(s) written to reference.json and reference.pdf", path.display(), reference.len());
+        fs::write(args.out.join(format!("reference{suffix}.json")), serde_json::to_string_pretty(&reference)?)?;
+        fs::write(args.out.join(format!("reference{suffix}.pdf")), typst_pdf::pdf(&doc, &PdfOptions::default()).map_err(|e| anyhow!("{e:?}"))?)?;
+        println!("reference for {}: {} slot(s) written to reference{suffix}.json and reference{suffix}.pdf", path.display(), reference.len());
     }
 
     if args.fuzz == 0 { return Ok(()); }
@@ -1159,7 +1194,7 @@ fn run() -> Result<()> {
         let mut sample = original.clone();
         mutate(&mut sample, &mut rng);
         let bytes = serde_json::to_vec(&sample)?;
-        let (doc, Exported { doc: mut fuzzed, unstyled, .. }) = match build(&args.fixture, &bytes, &fonts, false) {
+        let (doc, Exported { doc: mut fuzzed, unstyled, mut reference, .. }) = match build(&args.fixture, &bytes, &fonts, false) {
             Ok(built) => built,
             Err(error) => { leaks += 1; println!("sample {i}: compile failed: {error}"); continue; }
         };
@@ -1178,9 +1213,20 @@ fn run() -> Result<()> {
             }
             for to in all.into_iter().filter(|s| &s.name == name) { to.font = font; to.size = size; to.fill = fill; }
         }
-        if i == 0 {
-            fs::write(args.out.join("fuzz-0.json"), serde_json::to_string_pretty(&sample)?)?;
-            fs::write(args.out.join("fuzz-0.pdf"), typst_pdf::pdf(&doc, &PdfOptions::default()).map_err(|e| anyhow!("{e:?}"))?)?;
+        // The first sample for inspection; the first `--fuzz-references` samples as data plus Typst's layout of
+        // them, so the runtimes can be checked on random data too (fuzz-<i>.json, reference-fuzz-<i>.json / .pdf).
+        if i == 0 || i < args.fuzz_references {
+            fs::write(args.out.join(format!("fuzz-{i}.json")), serde_json::to_string_pretty(&sample)?)?;
+            fs::write(args.out.join(format!("fuzz-{i}.pdf")), typst_pdf::pdf(&doc, &PdfOptions::default()).map_err(|e| anyhow!("{e:?}"))?)?;
+        }
+        if i < args.fuzz_references {
+            for slot in &mut reference {
+                if let Some(subset) = subsets.iter().find(|s| s.source_sha256 == slot.font) {
+                    for g in &mut slot.glyphs { g.id = subset.map.get(&g.id).copied().unwrap_or(g.id); }
+                }
+            }
+            fs::write(args.out.join(format!("reference-fuzz-{i}.json")), serde_json::to_string_pretty(&reference)?)?;
+            fs::copy(args.out.join(format!("fuzz-{i}.pdf")), args.out.join(format!("reference-fuzz-{i}.pdf")))?;
         }
         // The baseline's glyph ids are the subset's; map the sample's the same way (a glyph outside the
         // baseline's subset keeps its id and shows up as a difference, which it is).

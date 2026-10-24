@@ -1,0 +1,6 @@
+{
+  "wide": "Random strings of letters, digits, spaces, hyphens, periods, commas and apostrophes replace this text; the fuzzer makes them up to twice as long.",
+  "narrow": "A narrow column that wraps a lot, with words of many lengths, 12.5 numbers, don't and well-made.",
+  "centered": "Centred lines, 3 of them at most, in a slightly larger size.",
+  "right": "Right-aligned lines with a few hyphen-ated words and 1,000.5 numbers."
+}

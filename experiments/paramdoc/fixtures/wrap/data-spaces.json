@@ -1,0 +1,6 @@
+{
+  "left": "Double  spaces inside and three   here stay as glyphs; trailing spaces at a break do not move the line                 and the line after it starts here.",
+  "center": "   Leading spaces are kept and widen the first line, trailing ones at the end are kept too   ",
+  "right": "Spaces exactly at the break   point.",
+  "note": "a b c d e f g h i j k l m n o p q r s t u v w x y z a b c d e f g h i j k l m n o p q r s t u v w x y z"
+}
