@@ -6,12 +6,15 @@
 
 use serde::{Deserialize, Serialize};
 
-pub const VERSION: u32 = 2;
+pub const VERSION: u32 = 3;
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct Document {
     pub version: u32,
     pub title: Option<String>,
+    /// Document language (BCP 47), from the first text run.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lang: Option<String>,
     pub fonts: Vec<Font>,
     /// Fixed pages (a document without bands); empty for a flow document.
     pub pages: Vec<Page>,
@@ -63,6 +66,8 @@ pub struct Fragment {
     pub height: f64,
     pub items: Vec<Item>,
     pub slots: Vec<Slot>,
+    #[serde(default)]
+    pub nodes: Vec<Node>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
@@ -87,6 +92,22 @@ pub struct Page {
     pub width: f64,
     pub height: f64,
     pub items: Vec<Item>,
+    /// Structure nodes the page's items and slots refer to; parents come before children.
+    #[serde(default)]
+    pub nodes: Vec<Node>,
+}
+
+/// A structure element: a PDF tag such as P, H1, Table, TR, TH, TD or Figure. `parent` is `None` for a root
+/// of its page or fragment; the runtime attaches roots to the document (or, for band rows, to the table).
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct Node {
+    pub role: String,
+    pub parent: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub alt: Option<String>,
+    /// Header scope for TH: "column", "row" or "both".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scope: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
@@ -94,10 +115,11 @@ pub struct Page {
 pub enum Item {
     /// A nested frame: `transform` is a PDF-style matrix `[a b c d e f]` applied after moving to `(x, y)`.
     Group { x: f64, y: f64, transform: [f64; 6], clip: Option<Vec<PathOp>>, items: Vec<Item> },
-    Text { x: f64, y: f64, font: usize, size: f64, fill: Color, text: String, glyphs: Vec<Glyph> },
-    Shape { x: f64, y: f64, geometry: Geometry, fill: Option<Color>, stroke: Option<Stroke> },
+    /// `node` is the structure node the run belongs to; `None` marks an artifact.
+    Text { x: f64, y: f64, font: usize, size: f64, fill: Color, text: String, glyphs: Vec<Glyph>, #[serde(default, skip_serializing_if = "Option::is_none")] node: Option<usize> },
+    Shape { x: f64, y: f64, geometry: Geometry, fill: Option<Color>, stroke: Option<Stroke>, #[serde(default, skip_serializing_if = "Option::is_none")] node: Option<usize> },
     /// Recorded, not yet drawn by the runtime.
-    Image { x: f64, y: f64, width: f64, height: f64, format: String, sha256: String },
+    Image { x: f64, y: f64, width: f64, height: f64, format: String, sha256: String, #[serde(default, skip_serializing_if = "Option::is_none")] node: Option<usize> },
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
@@ -106,6 +128,9 @@ pub struct Glyph {
     pub x_advance: f64,
     pub x_offset: f64,
     pub y_offset: f64,
+    /// The characters this glyph stands for when that is not exactly one (ligatures); for ToUnicode.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chars: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
@@ -174,4 +199,7 @@ pub struct Slot {
     pub max_length: Option<u32>,
     /// The sample value the exporter saw; not part of the layout contract.
     pub sample: String,
+    /// The structure node the slot's text belongs to; `None` marks an artifact.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub node: Option<usize>,
 }

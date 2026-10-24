@@ -17,9 +17,9 @@ Programme: #slot("programme", data.programme, width: 80mm, max-length: 50)
 
 #let cols = (28mm, 1fr, 22mm, 18mm)
 #band("course-header", repeat-on-break: true)[
-  #grid(columns: cols, inset: 4pt, fill: luma(230), [*Code*], [*Course*], align(right)[*Credits*], align(center)[*Grade*])
+  #table(columns: cols, inset: 4pt, stroke: none, fill: luma(230), table.header([*Code*], [*Course*], align(right)[*Credits*], align(center)[*Grade*]))
 ]
-#repeat("courses", data.courses, row => grid(
+#repeat("courses", data.courses, row => table(
   columns: cols, inset: 4pt, stroke: (bottom: 0.3pt + luma(180)),
   slot("code", row.code, width: 100%, max-length: 10),
   slot("title", row.title, width: 100%, max-length: 60, overflow: "ellipsis"),

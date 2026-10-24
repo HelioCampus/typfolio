@@ -3,21 +3,22 @@
 //!
 //! Usage: paramdoc-export <fixture-dir> [--data f] [--fonts d] [--out d] [--fuzz N] [--seed S] [--reference data.json]
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, anyhow, bail};
 use sha2::{Digest, Sha256};
 use typst::diag::{FileError, FileResult, SourceDiagnostic, Warned};
-use typst::foundations::{Bytes, Datetime, Duration, Label, Value};
-use typst::introspection::{MetadataElem, Tag};
-use typst::layout::{Abs, Frame, FrameItem, Point, Size, Transform};
-use typst::model::Document as _;
+use typst::foundations::{Bytes, Datetime, Duration, Label, Smart, StyleChain, Value};
+use typst::introspection::{Location, MetadataElem, Tag};
+use typst::layout::{Abs, Frame, FrameItem, HideElem, Point, RepeatElem, Size, Transform};
+use typst::model::{Document as _, EnumElem, EnumItem, FigureElem, HeadingElem, ListElem, ListItem, ParElem, TableCell, TableElem};
+use typst::pdf::{ArtifactElem, PdfMarkerTag, PdfMarkerTagKind, TableCellKind, TableHeaderScope};
 use typst::syntax::{FileId, RootedPath, Source, VirtualPath, VirtualRoot};
 use typst::text::{Font, FontBook, TextItem};
 use typst::utils::{LazyHash, PicoStr};
-use typst::visualize::{Curve, CurveItem, FixedStroke, Geometry, Image, ImageKind, Paint, Shape};
+use typst::visualize::{Curve, CurveItem, FixedStroke, Geometry, Image, ImageElem, ImageKind, Paint, Shape};
 use typst::{Library, LibraryExt, World, WorldExt};
 use typst_layout::PagedDocument;
 use typst_pdf::PdfOptions;
@@ -198,7 +199,7 @@ fn stroke(s: &FixedStroke) -> Result<ir::Stroke> {
     })
 }
 
-fn shape_item(pos: Point, s: &Shape) -> Result<ir::Item> {
+fn shape_item(pos: Point, s: &Shape, node: Option<usize>) -> Result<ir::Item> {
     let geometry = match &s.geometry {
         Geometry::Line(to) => ir::Geometry::Line { to: point(*to) },
         Geometry::Rect(size) => ir::Geometry::Rect { width: pt(size.x), height: pt(size.y) },
@@ -208,6 +209,7 @@ fn shape_item(pos: Point, s: &Shape) -> Result<ir::Item> {
         x: pt(pos.x), y: pt(pos.y), geometry,
         fill: s.fill.as_ref().map(color).transpose()?,
         stroke: s.stroke.as_ref().map(stroke).transpose()?,
+        node,
     })
 }
 
@@ -216,13 +218,13 @@ fn shape_bbox(abs: Point, s: &Shape) -> Rect {
     Rect { x: pt(abs.x) + pt(b.min.x), y: pt(abs.y) + pt(b.min.y), w: pt(b.max.x - b.min.x), h: pt(b.max.y - b.min.y) }
 }
 
-fn image_item(pos: Point, image: &Image, size: Size) -> ir::Item {
+fn image_item(pos: Point, image: &Image, size: Size, node: Option<usize>) -> ir::Item {
     let (format, sha256) = match image.kind() {
         ImageKind::Raster(raster) => (format!("{:?}", raster.format()).to_ascii_lowercase(), hex(&Sha256::digest(raster.data()))),
         ImageKind::Svg(_) => ("svg".to_string(), String::new()),
         ImageKind::Pdf(_) => ("pdf".to_string(), String::new()),
     };
-    ir::Item::Image { x: pt(pos.x), y: pt(pos.y), width: pt(size.x), height: pt(size.y), format, sha256 }
+    ir::Item::Image { x: pt(pos.x), y: pt(pos.y), width: pt(size.x), height: pt(size.y), format, sha256, node }
 }
 
 fn shift(item: &mut ir::Item, dx: f64, dy: f64) {
@@ -231,12 +233,48 @@ fn shift(item: &mut ir::Item, dx: f64, dy: f64) {
     }
 }
 
+fn node_refs(items: &[ir::Item], used: &mut BTreeSet<usize>) {
+    for item in items {
+        match item {
+            ir::Item::Group { items, .. } => node_refs(items, used),
+            ir::Item::Text { node, .. } | ir::Item::Shape { node, .. } | ir::Item::Image { node, .. } => { if let Some(n) = node { used.insert(*n); } }
+        }
+    }
+}
+
+fn renumber(items: &mut [ir::Item], map: &HashMap<usize, usize>) {
+    for item in items {
+        match item {
+            ir::Item::Group { items, .. } => renumber(items, map),
+            ir::Item::Text { node, .. } | ir::Item::Shape { node, .. } | ir::Item::Image { node, .. } => { *node = node.and_then(|n| map.get(&n).copied()); }
+        }
+    }
+}
+
+/// The part of the page's structure a fragment uses (its items' and slots' nodes and their ancestors), as a
+/// local node list; the items and slots are renumbered to it. Parents keep coming before children.
+fn localize(items: &mut [ir::Item], slots: &mut [ir::Slot], nodes: &[ir::Node]) -> Vec<ir::Node> {
+    let mut used = BTreeSet::new();
+    node_refs(items, &mut used);
+    for slot in slots.iter() { if let Some(n) = slot.node { used.insert(n); } }
+    let mut all = BTreeSet::new();
+    for &n in &used {
+        let mut current = Some(n);
+        while let Some(c) = current { if !all.insert(c) { break; } current = nodes[c].parent; }
+    }
+    let order: Vec<usize> = all.into_iter().collect();
+    let map: HashMap<usize, usize> = order.iter().enumerate().map(|(i, &n)| (n, i)).collect();
+    renumber(items, &map);
+    for slot in slots.iter_mut() { slot.node = slot.node.and_then(|n| map.get(&n).copied()); }
+    order.iter().map(|&n| ir::Node { role: nodes[n].role.clone(), parent: nodes[n].parent.map(|p| map[&p]), alt: nodes[n].alt.clone(), scope: nodes[n].scope.clone() }).collect()
+}
+
 // ---------------------------------------------------------------------------------------------------------
 // Tags found in the frames
 
 struct SlotMeta { name: String, align: String, overflow: String, max_length: Option<u32>, descent: f64 }
 struct TextStyle { font: usize, size: f64, fill: ir::Color, pen_x: f64 }
-struct SlotRecord { meta: SlotMeta, page: usize, rect: Rect, style: Option<TextStyle>, sample: String, baselines: Vec<f64>, glyphs: Vec<(u16, f64)> }
+struct SlotRecord { meta: SlotMeta, page: usize, rect: Rect, style: Option<TextStyle>, sample: String, baselines: Vec<f64>, glyphs: Vec<(u16, f64)>, node: Option<usize> }
 struct BandTag { name: String, repeat_on_break: bool, page: usize, rect: Rect }
 struct OverlayTag { page: usize, rect: Rect }
 struct Margins { top: f64, bottom: f64, left: f64, right: f64 }
@@ -258,11 +296,19 @@ enum AtomKind { Static, Band { name: String, repeat_on_break: bool }, Overlay }
 
 struct Labels { slot: Label, band: Label, overlay: Label, pages: Label }
 
+/// An element whose start tag was seen and whose end tag was not: what the content in between belongs to.
+struct Open { location: Location, node: Option<usize>, artifact: bool }
+
 struct Exporter<'a> {
     fonts: &'a [LoadedFont],
     ir_fonts: Vec<ir::Font>,
     ir_font_of: HashMap<(usize, u32), usize>,
     labels: Labels,
+    /// Structure of the page being exported: open elements, nodes so far, TR nodes by (table, row).
+    stack: Vec<Open>,
+    nodes: Vec<ir::Node>,
+    table_rows: HashMap<(usize, usize), usize>,
+    lang: Option<String>,
 }
 
 fn dict_number(dict: &typst::foundations::Dict, key: &str) -> Result<f64> {
@@ -280,7 +326,92 @@ impl<'a> Exporter<'a> {
         Ok(Self {
             fonts, ir_fonts: Vec::new(), ir_font_of: HashMap::new(),
             labels: Labels { slot: label("paramdoc-slot")?, band: label("paramdoc-band")?, overlay: label("paramdoc-overlay")?, pages: label("paramdoc-pages")? },
+            stack: Vec::new(), nodes: Vec::new(), table_rows: HashMap::new(), lang: None,
         })
+    }
+
+    // -- Structure -------------------------------------------------------------------------------------
+
+    fn reset_structure(&mut self) { self.stack.clear(); self.nodes.clear(); self.table_rows.clear(); }
+
+    fn current(&self) -> (Option<usize>, bool) { self.stack.last().map(|o| (o.node, o.artifact)).unwrap_or((None, false)) }
+
+    /// The node a leaf item belongs to: `None` for artifacts and for content outside any element.
+    fn content_node(&self) -> Option<usize> { let (node, artifact) = self.current(); if artifact { None } else { node } }
+
+    fn push_node(&mut self, role: &str, parent: Option<usize>, alt: Option<String>, scope: Option<String>) -> usize {
+        self.nodes.push(ir::Node { role: role.to_string(), parent, alt, scope });
+        self.nodes.len() - 1
+    }
+
+    fn nearest(&self, mut node: Option<usize>, role: &str) -> Option<usize> {
+        while let Some(n) = node { if self.nodes[n].role == role { return Some(n); } node = self.nodes[n].parent; }
+        None
+    }
+
+    /// Follows Typst's element tags the way typst-pdf does: headings, paragraphs, tables and cells, figures
+    /// and images, lists become nodes; `pdf.artifact`, hidden and repeated content become artifacts;
+    /// everything else is transparent and inherits its parent's node.
+    fn on_tag(&mut self, tag: &Tag) {
+        match tag {
+            Tag::Start(content, _) => {
+                let Some(location) = content.location() else { return };
+                let (parent, mut artifact) = self.current();
+                let mut node = parent;
+                if !artifact {
+                    if content.is::<ArtifactElem>() || content.is::<HideElem>() || content.is::<RepeatElem>() {
+                        artifact = true;
+                    } else if let Some(heading) = content.to_packed::<HeadingElem>() {
+                        let level = heading.resolve_level(StyleChain::default()).get().min(6);
+                        node = Some(self.push_node(&format!("H{level}"), parent, None, None));
+                    } else if content.is::<ParElem>() {
+                        node = Some(self.push_node("P", parent, None, None));
+                    } else if content.is::<TableElem>() {
+                        node = Some(self.push_node("Table", parent, None, None));
+                    } else if let Some(cell) = content.to_packed::<TableCell>() {
+                        if cell.is_repeated.get(StyleChain::default()) {
+                            artifact = true;
+                        } else if let Some(table) = self.nearest(parent, "Table") {
+                            let y = match cell.y.get(StyleChain::default()) { Smart::Custom(y) => y, Smart::Auto => 0 };
+                            let row = match self.table_rows.get(&(table, y)) {
+                                Some(&row) => row,
+                                None => { let row = self.push_node("TR", Some(table), None, None); self.table_rows.insert((table, y), row); row }
+                            };
+                            let (role, scope) = match cell.kind.get(StyleChain::default()) {
+                                Smart::Custom(TableCellKind::Header(_, scope)) => ("TH", Some(match scope {
+                                    TableHeaderScope::Column => "column", TableHeaderScope::Row => "row", TableHeaderScope::Both => "both",
+                                }.to_string())),
+                                _ => ("TD", None),
+                            };
+                            node = Some(self.push_node(role, Some(row), None, scope));
+                        }
+                    } else if let Some(figure) = content.to_packed::<FigureElem>() {
+                        let alt = figure.alt.get_cloned(StyleChain::default()).map(|a| a.to_string());
+                        node = Some(self.push_node("Figure", parent, alt, None));
+                    } else if let Some(image) = content.to_packed::<ImageElem>() {
+                        let alt = image.alt.get_cloned(StyleChain::default()).map(|a| a.to_string());
+                        match self.nearest(parent, "Figure") {
+                            Some(figure) => { if self.nodes[figure].alt.is_none() { self.nodes[figure].alt = alt; } node = Some(figure); }
+                            None => node = Some(self.push_node("Figure", parent, alt, None)),
+                        }
+                    } else if content.is::<ListElem>() || content.is::<EnumElem>() {
+                        node = Some(self.push_node("L", parent, None, None));
+                    } else if content.is::<ListItem>() || content.is::<EnumItem>() {
+                        node = Some(self.push_node("LI", parent, None, None));
+                    } else if let Some(marker) = content.to_packed::<PdfMarkerTag>() {
+                        match marker.kind {
+                            PdfMarkerTagKind::ListItemLabel => node = Some(self.push_node("Lbl", parent, None, None)),
+                            PdfMarkerTagKind::ListItemBody => node = Some(self.push_node("LBody", parent, None, None)),
+                            _ => {}
+                        }
+                    }
+                }
+                self.stack.push(Open { location, node, artifact });
+            }
+            Tag::End(location, _, _) => {
+                if let Some(position) = self.stack.iter().rposition(|o| o.location == *location) { self.stack.truncate(position); }
+            }
+        }
     }
 
     fn font_id(&mut self, font: &Font) -> Result<usize> {
@@ -296,13 +427,19 @@ impl<'a> Exporter<'a> {
     }
 
     fn text_item(&mut self, pos: Point, text: &TextItem) -> Result<ir::Item> {
+        if self.lang.is_none() { self.lang = Some(text.lang.as_str().to_string()); }
+        let node = self.content_node();
         Ok(ir::Item::Text {
-            x: pt(pos.x), y: pt(pos.y), font: self.font_id(text.font.font())?, size: pt(text.size), fill: color(&text.fill)?, text: text.text.to_string(),
-            glyphs: text.glyphs.iter().map(|g| ir::Glyph {
-                id: g.id,
-                x_advance: pt(g.x_advance.at(text.size)),
-                x_offset: pt(g.x_offset.at(text.size)),
-                y_offset: pt(g.y_offset.at(text.size)),
+            x: pt(pos.x), y: pt(pos.y), font: self.font_id(text.font.font())?, size: pt(text.size), fill: color(&text.fill)?, text: text.text.to_string(), node,
+            glyphs: text.glyphs.iter().map(|g| {
+                let covered = text.text.get(g.range.start as usize..g.range.end as usize).unwrap_or("");
+                ir::Glyph {
+                    id: g.id,
+                    x_advance: pt(g.x_advance.at(text.size)),
+                    x_offset: pt(g.x_offset.at(text.size)),
+                    y_offset: pt(g.y_offset.at(text.size)),
+                    chars: (covered.chars().count() != 1).then(|| covered.to_string()),
+                }
             }).collect(),
         })
     }
@@ -341,7 +478,7 @@ impl<'a> Exporter<'a> {
                     if label == self.labels.slot {
                         let meta = self.slot_meta(value()?)?;
                         let rect = clipped.ok_or_else(|| anyhow!("slot `{}` is not inside a clipped box", meta.name))?;
-                        tags.slots.push(SlotRecord { meta, page, rect, style: None, sample: String::new(), baselines: Vec::new(), glyphs: Vec::new() });
+                        tags.slots.push(SlotRecord { meta, page, rect, style: None, sample: String::new(), baselines: Vec::new(), glyphs: Vec::new(), node: None });
                     } else if label == self.labels.band {
                         let Value::Dict(dict) = value()? else { bail!("band metadata is not a dictionary") };
                         let name = match dict.get("name") { Ok(Value::Str(s)) => s.as_str().to_string(), other => bail!("band `name` is not a string: {other:?}") };
@@ -396,9 +533,15 @@ impl<'a> Exporter<'a> {
                     }
                     items.push(self.text_item(*pos, text)?);
                 }
-                FrameItem::Shape(s, _) => items.push(shape_item(*pos, s)?),
-                FrameItem::Image(image, size, _) => items.push(image_item(*pos, image, *size)),
-                FrameItem::Link(..) | FrameItem::Tag(..) => {}
+                FrameItem::Shape(s, _) => { let node = self.nearest(self.content_node(), "Figure"); items.push(shape_item(*pos, s, node)?) }
+                FrameItem::Image(image, size, _) => { let node = self.content_node(); items.push(image_item(*pos, image, *size, node)) }
+                FrameItem::Tag(tag) => {
+                    if let (Some(index), Tag::Start(content, _)) = (current, tag) && content.label() == Some(self.labels.slot) {
+                        slots[index].node = self.content_node();
+                    }
+                    self.on_tag(tag);
+                }
+                FrameItem::Link(..) => {}
             }
         }
         Ok(items)
@@ -435,13 +578,16 @@ impl<'a> Exporter<'a> {
                 }
                 FrameItem::Shape(s, _) => {
                     let abs = apply(acc, *pos);
-                    out.push(Atom { rect: shape_bbox(abs, s), item: shape_item(abs, s)?, kind: AtomKind::Static });
+                    let node = self.nearest(self.content_node(), "Figure");
+                    out.push(Atom { rect: shape_bbox(abs, s), item: shape_item(abs, s, node)?, kind: AtomKind::Static });
                 }
                 FrameItem::Image(image, size, _) => {
                     let abs = apply(acc, *pos);
-                    out.push(Atom { rect: Rect { x: pt(abs.x), y: pt(abs.y), w: pt(size.x), h: pt(size.y) }, item: image_item(abs, image, *size), kind: AtomKind::Static });
+                    let node = self.content_node();
+                    out.push(Atom { rect: Rect { x: pt(abs.x), y: pt(abs.y), w: pt(size.x), h: pt(size.y) }, item: image_item(abs, image, *size, node), kind: AtomKind::Static });
                 }
-                FrameItem::Link(..) | FrameItem::Tag(..) => {}
+                FrameItem::Tag(tag) => self.on_tag(tag),
+                FrameItem::Link(..) => {}
             }
         }
         Ok(())
@@ -475,7 +621,7 @@ impl<'a> Exporter<'a> {
             slots.push(ir::Slot {
                 name: s.meta.name, page: s.page, x: s.rect.x, y: s.rect.y, width: s.rect.w, height: s.rect.h,
                 baseline, descent: s.meta.descent, pen_x: style.pen_x, font: style.font, size: style.size, fill: style.fill,
-                align: s.meta.align, overflow: s.meta.overflow, max_length: s.meta.max_length, sample: s.sample,
+                align: s.meta.align, overflow: s.meta.overflow, max_length: s.meta.max_length, sample: s.sample, node: s.node,
             });
         }
         Ok((slots, unstyled, reference))
@@ -495,11 +641,12 @@ impl<'a> Exporter<'a> {
         if !tags.bands.is_empty() { bail!("bands need a `paged` wrapper so the runtime knows the flow area"); }
         let mut pages = Vec::new();
         for (index, page) in doc.pages().iter().enumerate() {
+            self.reset_structure();
             let items = self.export_frame(index, &page.frame, Transform::identity(), &mut tags.slots, None)?;
-            pages.push(ir::Page { width: pt(page.frame.width()), height: pt(page.frame.height()), items });
+            pages.push(ir::Page { width: pt(page.frame.width()), height: pt(page.frame.height()), items, nodes: std::mem::take(&mut self.nodes) });
         }
         let (slots, unstyled, reference) = self.finish_slots(tags.slots, strict)?;
-        Ok(Exported { doc: ir::Document { version: ir::VERSION, title, fonts: self.ir_fonts, pages, slots, flow: None }, unstyled, reference })
+        Ok(Exported { doc: ir::Document { version: ir::VERSION, title, lang: self.lang.clone(), fonts: self.ir_fonts, pages, slots, flow: None }, unstyled, reference })
     }
 
     /// A flow document: the single sample page segmented into static blocks, repeat regions and overlays.
@@ -511,7 +658,9 @@ impl<'a> Exporter<'a> {
         let area = ir::Area { x: margins.left, y: margins.top, width: page_width - margins.left - margins.right, height: page_height - margins.top - margins.bottom };
 
         let mut atoms = Vec::new();
+        self.reset_structure();
         self.flatten(0, &page.frame, Transform::identity(), &mut tags.slots, &tags.bands, &tags.overlays, &mut atoms)?;
+        let page_nodes = std::mem::take(&mut self.nodes);
         let (abs_slots, unstyled, references) = self.finish_slots(tags.slots, strict)?;
         atoms.sort_by(|a, b| a.rect.y.partial_cmp(&b.rect.y).unwrap_or(std::cmp::Ordering::Equal));
         let (overlay_atoms, flow_atoms): (Vec<Atom>, Vec<Atom>) = atoms.into_iter().partition(|a| matches!(a.kind, AtomKind::Overlay));
@@ -535,9 +684,11 @@ impl<'a> Exporter<'a> {
             }
             out
         };
-        let fragment_of = |atom: &Atom, slots: Vec<ir::Slot>, y: f64| -> Result<ir::Fragment> {
+        let fragment_of = |atom: &Atom, mut slots: Vec<ir::Slot>, y: f64| -> Result<ir::Fragment> {
             let ir::Item::Group { items, .. } = &atom.item else { bail!("a band or overlay atom is not a group") };
-            Ok(ir::Fragment { x: atom.rect.x, y, width: atom.rect.w, height: atom.rect.h, items: items.clone(), slots })
+            let mut items = items.clone();
+            let nodes = localize(&mut items, &mut slots, &page_nodes);
+            Ok(ir::Fragment { x: atom.rect.x, y, width: atom.rect.w, height: atom.rect.h, items, slots, nodes })
         };
 
         let mut blocks = Vec::new();
@@ -555,7 +706,7 @@ impl<'a> Exporter<'a> {
             let bottom = atom.rect.y;
             if bottom < top - 0.01 { bail!("band `{name}` at y {bottom:.2} overlaps the content before it (ends at {top:.2})"); }
             if !pending.is_empty() || bottom > top + 1e-6 {
-                blocks.push(ir::Block::Static { fragment: static_fragment(&pending, top, bottom - top, page_width, &mut |rect| take_inside(rect, &mut taken, &mut owners, &|| Owner::Flow)) });
+                blocks.push(ir::Block::Static { fragment: static_fragment(&pending, top, bottom - top, page_width, &page_nodes, &mut |rect| take_inside(rect, &mut taken, &mut owners, &|| Owner::Flow)) });
                 pending.clear();
             }
             let mut header = None;
@@ -602,7 +753,7 @@ impl<'a> Exporter<'a> {
         }
         if !pending.is_empty() {
             let bottom = pending.iter().map(|a| a.rect.bottom()).fold(prev_bottom, f64::max);
-            blocks.push(ir::Block::Static { fragment: static_fragment(&pending, prev_bottom, bottom - prev_bottom, page_width, &mut |rect| take_inside(rect, &mut taken, &mut owners, &|| Owner::Flow)) });
+            blocks.push(ir::Block::Static { fragment: static_fragment(&pending, prev_bottom, bottom - prev_bottom, page_width, &page_nodes, &mut |rect| take_inside(rect, &mut taken, &mut owners, &|| Owner::Flow)) });
         }
         let mut overlays = Vec::new();
         for atom in &overlay_atoms {
@@ -623,7 +774,7 @@ impl<'a> Exporter<'a> {
         let _ = instances;
         Ok(Exported {
             doc: ir::Document {
-                version: ir::VERSION, title, fonts: self.ir_fonts, pages: Vec::new(), slots: Vec::new(),
+                version: ir::VERSION, title, lang: self.lang.clone(), fonts: self.ir_fonts, pages: Vec::new(), slots: Vec::new(),
                 flow: Some(ir::Flow { page_width, page_height, area, blocks, bands, overlays }),
             },
             unstyled, reference,
@@ -633,11 +784,12 @@ impl<'a> Exporter<'a> {
 
 /// A static block from the atoms between two regions: items shifted so that `top` becomes 0; slots taken
 /// from the vertical range.
-fn static_fragment(atoms: &[&Atom], top: f64, height: f64, width: f64, take: &mut dyn FnMut(&Rect) -> Vec<ir::Slot>) -> ir::Fragment {
-    let items = atoms.iter().map(|a| { let mut item = a.item.clone(); shift(&mut item, 0.0, -top); item }).collect();
+fn static_fragment(atoms: &[&Atom], top: f64, height: f64, width: f64, nodes: &[ir::Node], take: &mut dyn FnMut(&Rect) -> Vec<ir::Slot>) -> ir::Fragment {
+    let mut items: Vec<ir::Item> = atoms.iter().map(|a| { let mut item = a.item.clone(); shift(&mut item, 0.0, -top); item }).collect();
     // The fragment spans the page width from x = 0, so slot x positions stay absolute.
-    let slots = take(&Rect { x: 0.0, y: top, w: 1e9, h: height.max(0.0) });
-    ir::Fragment { x: 0.0, y: 0.0, width, height, items, slots }
+    let mut slots = take(&Rect { x: 0.0, y: top, w: 1e9, h: height.max(0.0) });
+    let nodes = localize(&mut items, &mut slots, nodes);
+    ir::Fragment { x: 0.0, y: 0.0, width, height, items, slots, nodes }
 }
 
 struct Exported { doc: ir::Document, unstyled: Vec<String>, reference: Vec<ReferenceSlot> }
@@ -788,6 +940,12 @@ fn count(items: &[ir::Item]) -> (usize, usize, usize) {
     })
 }
 
+fn roles(nodes: &[ir::Node]) -> String {
+    let mut counts: std::collections::BTreeMap<&str, usize> = std::collections::BTreeMap::new();
+    for n in nodes { *counts.entry(n.role.as_str()).or_default() += 1; }
+    counts.iter().map(|(r, c)| if *c > 1 { format!("{r}×{c}") } else { r.to_string() }).collect::<Vec<_>>().join(" ")
+}
+
 fn describe_slot(slot: &ir::Slot, indent: &str) {
     println!("{indent}slot {:<14} rect ({:.2}, {:.2}) {:.2} x {:.2}  baseline y {:.2}  font #{} {:.1}pt  align {:<6} sample {:?}",
         slot.name, slot.x, slot.y, slot.width, slot.height, slot.baseline, slot.font, slot.size, slot.align, slot.sample);
@@ -796,7 +954,7 @@ fn describe_slot(slot: &ir::Slot, indent: &str) {
 fn describe(exported: &ir::Document) {
     for (i, page) in exported.pages.iter().enumerate() {
         let (t, s, g) = count(&page.items);
-        println!("  page {i}: {:.1} x {:.1} pt, {t} static text runs, {s} shapes, {g} groups", page.width, page.height);
+        println!("  page {i}: {:.1} x {:.1} pt, {t} static text runs, {s} shapes, {g} groups, nodes [{}]", page.width, page.height, roles(&page.nodes));
     }
     for slot in &exported.slots { describe_slot(slot, "  "); }
     if let Some(flow) = &exported.flow {
@@ -805,7 +963,7 @@ fn describe(exported: &ir::Document) {
             match block {
                 ir::Block::Static { fragment } => {
                     let (t, s, g) = count(&fragment.items);
-                    println!("  static block: height {:.2}, {t} text runs, {s} shapes, {g} groups, {} slot(s)", fragment.height, fragment.slots.len());
+                    println!("  static block: height {:.2}, {t} text runs, {s} shapes, {g} groups, {} slot(s), nodes [{}]", fragment.height, fragment.slots.len(), roles(&fragment.nodes));
                     for slot in &fragment.slots { describe_slot(slot, "    "); }
                 }
                 ir::Block::Repeat { band, header, header_gap, gap, sample_rows } => {
@@ -815,7 +973,7 @@ fn describe(exported: &ir::Document) {
         }
         for band in &flow.bands {
             let (t, s, g) = count(&band.fragment.items);
-            println!("  band `{}`{}: x {:.2} w {:.2} h {:.2}, {t} text runs, {s} shapes, {g} groups, {} slot(s)", band.name, if band.repeat_on_break { " (repeat on break)" } else { "" }, band.fragment.x, band.fragment.width, band.fragment.height, band.fragment.slots.len());
+            println!("  band `{}`{}: x {:.2} w {:.2} h {:.2}, {t} text runs, {s} shapes, {g} groups, {} slot(s), nodes [{}]", band.name, if band.repeat_on_break { " (repeat on break)" } else { "" }, band.fragment.x, band.fragment.width, band.fragment.height, band.fragment.slots.len(), roles(&band.fragment.nodes));
             for slot in &band.fragment.slots { describe_slot(slot, "    "); }
         }
         for overlay in &flow.overlays {

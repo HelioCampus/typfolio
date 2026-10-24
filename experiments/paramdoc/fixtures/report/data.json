@@ -1,0 +1,43 @@
+{
+  "number": 6,
+  "name": "Ilya Ito",
+  "studentId": "977731",
+  "programme": "BA History",
+  "term": "Spring 2026",
+  "average": 65,
+  "course_count": 5,
+  "attendance": "99%",
+  "courses": [
+    {
+      "code": "PH130",
+      "title": "Physics for Engineers",
+      "score": 61,
+      "grade": "C"
+    },
+    {
+      "code": "HI210",
+      "title": "Modern European History",
+      "score": 47,
+      "grade": "D"
+    },
+    {
+      "code": "MA120",
+      "title": "Linear Algebra",
+      "score": 91,
+      "grade": "A"
+    },
+    {
+      "code": "CE220",
+      "title": "Structural Analysis",
+      "score": 41,
+      "grade": "D"
+    },
+    {
+      "code": "ST200",
+      "title": "Statistics and Data",
+      "score": 87,
+      "grade": "A"
+    }
+  ],
+  "comment": "Consistent effort across the term. More regular practice with problem sets would lift the lower scores."
+}

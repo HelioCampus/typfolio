@@ -26,7 +26,12 @@
 // A flow document is a sequence of blocks the runtime stacks and breaks into pages: static blocks between
 // bands, and repeat regions of band instances. Wrap the document in `paged`, which records the flow area.
 
-#let sides(margin) = if type(margin) == dictionary { margin } else { (top: margin, bottom: margin, left: margin, right: margin) }
+#let sides(margin) = if type(margin) == dictionary {
+  let rest = margin.at("rest", default: 0pt)
+  let x = margin.at("x", default: rest)
+  let y = margin.at("y", default: rest)
+  (top: margin.at("top", default: y), bottom: margin.at("bottom", default: y), left: margin.at("left", default: x), right: margin.at("right", default: x))
+} else { (top: margin, bottom: margin, left: margin, right: margin) }
 
 // Sets the page margins and records them (in points) for the runtime; `footer` is per-page content, wrap it
 // in `overlay`. The record lives in the page foreground so it cannot affect the flow.
