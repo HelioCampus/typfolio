@@ -85,6 +85,22 @@ Defaults: fonts from `../../fixtures/fonts`, output under `../../.build/paramdoc
   - Static blocks must take slots from a half-plane starting at x = 0, not from a sentinel rectangle, or slot
     x positions pick up the sentinel.
 
+### Size and speed of the runtime (release profile: opt-level s, fat LTO, panic abort, stripped)
+
+The runtime is now a library (`paramdoc_runtime::fill(doc_json, fonts, data_json)`) with a C ABI
+(`paramdoc_fill` / `paramdoc_alloc` / `paramdoc_free`) and a thin CLI. Built as a wasm32 cdylib through that
+ABI, with nothing yet done to shrink it:
+
+| | raw | gzip -9 |
+|---|---:|---:|
+| paramdoc runtime, wasm32 | 1,059,023 B | 382,344 B |
+| Typfolio's Typst compiler, wasm32 (for comparison) | 24,404,191 B | 8,951,728 B |
+
+About 23x smaller before any size work; the heavy parts are the CFF subsetter, ttf-parser and serde_json.
+Native release timings for a complete fill, fonts parsed and subset included: certificate 9 ms, 42-row
+transcript 8 ms. (An earlier 77 kB figure from building the CLI binary for wasm32 was wrong: `std::env::args`
+is empty on that target, so the optimiser removed the entire runtime as dead code.)
+
 ### Re-evaluation after M3
 
 Demonstrated: for documents made of fixed slots and fixed-height repeating rows, a runtime with no typesetter

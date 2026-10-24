@@ -5,6 +5,9 @@ license.workspace = true
 publish.workspace = true
 version.workspace = true
 
+[lib]
+crate-type = ["rlib"]
+
 [dependencies]
 paramdoc-ir = { path = "../ir" }
 pdf-writer = "0.15"
