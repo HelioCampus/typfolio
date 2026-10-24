@@ -4,8 +4,9 @@
 #   ./check.sh            # everything, fuzzing 100 samples per fixture
 #   FUZZ=20 ./check.sh    # quicker
 #
-# Needs: Rust (cargo), Node 22.18+, `npm ci` at the repository root (inspectPdf), poppler (pdftoppm, pdftotext)
-# and veraPDF on PATH. Missing optional tools are reported as SKIP; every other failure fails the script.
+# Needs: Rust (cargo), Node 22.18+, `npm ci` and `npm run build` at the repository root (inspectPdf, Playwright),
+# poppler (pdftoppm, pdftotext) and veraPDF on PATH. Missing optional tools are reported as SKIP; every other
+# failure fails the script. With DEMO_URL set to a running pretext-hybrid dev server, the demo page is driven too.
 set -u
 cd "$(dirname "$0")"
 FUZZ="${FUZZ:-100}"
@@ -16,6 +17,7 @@ fail() { FAIL=$((FAIL + 1)); printf '  FAIL  %s\n' "$1"; }
 skip() { SKIP=$((SKIP + 1)); printf '  SKIP  %s\n' "$1"; }
 run()  { local what="$1"; shift; if "$@" > "$B/.last.log" 2>&1; then ok "$what"; else fail "$what"; sed 's/^/        /' "$B/.last.log" | tail -15; fi; }
 have() { command -v "$1" > /dev/null 2>&1; }
+fonts_match() { for font in "documents/$1"/fonts/*; do cmp -s "$font" "$B/$1/fonts/$(basename "$font")" || return 1; done; }
 NODE=(node --disable-warning=ExperimentalWarning --experimental-strip-types)
 mkdir -p "$B"
 
@@ -27,6 +29,12 @@ for f in certificate policies transcript report; do
   run "export $f: 0 leaks" cargo run -q -p paramdoc-export -- fixtures/$f --fuzz "$FUZZ" --reference fixtures/$f/data.json
 done
 if cargo run -q -p paramdoc-export -- fixtures/leak --fuzz 20 > "$B/.last.log" 2>&1; then fail "export leak: the auto-width slot was not detected"; else ok "export leak: detected (exit 1)"; fi
+for dir in documents/*/; do
+  f=$(basename "$dir")
+  [ -f "$B/$f/doc.json" ] || cargo run -q -p paramdoc-export -- "fixtures/$f" --fuzz 1 > /dev/null 2>&1
+  if cmp -s "$B/$f/doc.json" "documents/$f/doc.json" && fonts_match "$f"; then ok "documents/$f matches a fresh export"
+  else fail "documents/$f is stale: run ./export-documents.sh $f"; fi
+done
 
 echo "3. Runtimes against Typst's layout of the same data, and TypeScript against Rust"
 for f in certificate policies transcript report; do
@@ -67,6 +75,16 @@ if have verapdf; then
   done
 else skip "verapdf not on PATH (brew install verapdf)"; fi
 
+echo "8. Demo page (DEMO_URL=http://127.0.0.1:4190 ./check.sh, with the pretext-hybrid dev server running)"
+if [ -n "${DEMO_URL:-}" ]; then
+  if [ -d ../../node_modules/playwright ]; then
+    if node notes/bench/bench-browser.mjs "$DEMO_URL/performance?engine=paramdoc&workers=4&count=200&autostart" > "$B/.last.log" 2>&1 && grep -q 'per second' "$B/.last.log" && ! grep -q 'failed' "$B/.last.log"; then ok "paramdoc engine: $(grep 'per second' "$B/.last.log" | tail -1)"
+    else fail "paramdoc engine on the demo page"; sed 's/^/        /' "$B/.last.log" | tail -8; fi
+  else skip "playwright is not installed at the repository root"; fi
+else skip "DEMO_URL not set"; fi
+
+# The rasterised pages are large and only needed during the run.
+rm -f "$B"/*/.px-*.ppm "$B/.last.log"
 echo
 echo "$PASS passed, $FAIL failed, $SKIP skipped"
 [ "$FAIL" -eq 0 ]

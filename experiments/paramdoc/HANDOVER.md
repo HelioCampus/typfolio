@@ -43,7 +43,7 @@ Commits, oldest first:
 | Path | What |
 |---|---|
 | `PLAN.md` | Principle, architecture, milestones, findings, measurements, re-evaluations. Read it first. |
-| `check.sh` | The whole proof below as one script: build, exports with fuzzing, both runtimes against Typst and each other, pixels, text, structure, veraPDF. 40 checks, about 30 s. |
+| `check.sh` | The whole proof below as one script: build, exports with fuzzing, checked-in documents against a fresh export, both runtimes against Typst and each other, pixels, text, structure, veraPDF, and with `DEMO_URL` set the demo page. 42 checks, under a minute. |
 | `export-documents.sh` | Exports a fixture and copies what a browser runtime needs, `doc.json` and the subset fonts, into `documents/<fixture>/`. |
 | `documents/report/` | The report fixture exported, checked in (152 kB) because the demo page cannot run the exporter at build time. Regenerate after changing the fixture, the dialect or the exporter. |
 | `Cargo.toml`, `Cargo.lock`, `.cargo/config.toml` | Rust workspace; build output goes to `../../.build/paramdoc-target` (gitignored), never in-tree. |
@@ -53,18 +53,20 @@ Commits, oldest first:
 | `ts/runtime.ts`, `ts/cli.ts` | The same runtime in dependency-free erasable TypeScript; Node 22 runs it with `--experimental-strip-types`; esbuild bundles it (16 kB). |
 | `fixtures/*/` | Templates in the slot dialect, each with `paramdoc.typ` (the dialect helper, identical copies), `main.typ`, `data.json`: `certificate` (fixed page), `policies` (overflow policies), `leak` (deliberately broken, must fail the check), `transcript` (flow: table bands, 42-row `data-long.json`), `report` (the worker-batch benchmark's report in the dialect). |
 | `notes/wasm-size-report.md` | Where the 24 MB compiler's bytes go (crate by crate, data blobs, dependency paths). |
-| `notes/bench/` | Scripts: `gen-inputs.mjs` (1000 inputs from the repo's `data.ts`), `bench-wasm.mjs` (Rust wasm in Node), `bench-browser.mjs` (drives the repo's `/performance` page headlessly), `bench-ts.html` + `bench-ts-browser.mjs` (TypeScript runtime in Chromium), `inspect.mjs` (structure via the repo's `inspectPdf`), `ppmdiff.mjs` (pixel diff of two PPMs, used by `check.sh`). |
+| `notes/bench/` | Scripts: `gen-inputs.mjs` (1000 inputs from the repo's `data.ts`), `bench-wasm.mjs` (Rust wasm in Node), `bench-browser.mjs` (drives the repo's `/performance` page headlessly), `bench-ts.html` + `bench-ts-browser.mjs` (TypeScript runtime in Chromium), `inspect.mjs` (structure via the repo's `inspectPdf`), `ppmdiff.mjs` (pixel diff of two PPMs, used by `check.sh`), `write-all.mjs` (every benchmark input as a PDF, for veraPDF over the set). |
 
 ## How to prove it still works (do this first after any change)
 
 ```sh
-cd experiments/paramdoc && ./check.sh      # 40 checks, about 30 s after the first build; FUZZ=20 ./check.sh is quicker
+cd experiments/paramdoc && ./check.sh      # 42 checks, under a minute after the first build; FUZZ=20 ./check.sh is quicker
+DEMO_URL=http://127.0.0.1:4190 ./check.sh  # also drives the performance page of a running pretext-hybrid dev server
 ```
 
 It builds, exports every fixture with fuzzing and a Typst reference, runs both runtimes against Typst and
 against each other, rasterises and compares pixels, compares text extraction, inspects the structure and
-validates every runtime PDF with veraPDF as PDF/UA-1. Tools it cannot find (poppler, veraPDF, the dev-tools
-build) are reported as SKIP; anything else that fails fails the script.
+validates every runtime PDF with veraPDF as PDF/UA-1; it also fails when `documents/<fixture>` no longer equals a
+fresh export (the export is byte-deterministic, so this is a plain comparison). Tools it cannot find (poppler,
+veraPDF, the dev-tools build, Playwright) are reported as SKIP; anything else that fails fails the script.
 
 Prerequisites: Rust stable (1.97 on Linux and 1.99 on macOS have been used; crates pin Typst 0.15.1 which needs
 1.92+), Node 22.18+, `npm ci` and `npm run build` at the repo root (for the TypeScript tools
@@ -98,7 +100,7 @@ pdftotext -layout ../../.build/paramdoc/report/runtime.pdf -                  # 
 Expected state: every command above passes; the certificate, policies and transcript render pixel-identical
 to Typst, the report differs by one pixel by one level; the TypeScript trace is identical to the Rust trace on
 every fixture; wasm and native Rust outputs are byte-identical; veraPDF 1.30 reports PDF/UA-1 PASS (106 rules,
-1904 checks) on every runtime PDF.
+1904 checks) on every runtime PDF and on all 1000 synthetic reports of the benchmark set.
 
 Benchmarks (see `PLAN.md` for the tables): `cargo run --release -p paramdoc-runtime -- bench <doc-dir> --inputs
 inputs.json`, `node --experimental-strip-types ts/cli.ts bench ...`, and the scripts in `notes/bench/`. The
@@ -133,12 +135,23 @@ the same synthetic batch through this experiment. `?engine=paramdoc&count=1000&a
   document until none is left, a worker's first job is its cold one, the PDF/UA-1 box is forced on (the runtime always
   tags), and the runs panel shows one engine's runs at a time because the rates are an order of magnitude apart.
 
-On a 10-core M-series Mac, 1000 reports, 4 workers: the paramdoc engine takes 0.2 s (4237 PDFs/s, median 1 ms per
-fill, cold start 9 ms, 61 kB per PDF); the Typst compiler takes 12.8 s (78 PDFs/s, median 21 ms, cold start 329 ms,
-26 kB per PDF). With the tab hidden the paramdoc runs drop to 2100–2300 PDFs/s, so compare runs made with the tab in
-view. The first synthetic report from the same data path passes veraPDF PDF/UA-1. The exported report is the slot
-dialect's version of the page's template, so the PDFs differ from the compiler's: a static title, a one-line tutor
-comment, no score bars and no row stripes; the page says so next to the switch.
+Measured under the same conditions, headless Chromium through `notes/bench/bench-browser.mjs` with the tab visible,
+1000 reports on a 10-core M-series Mac (the compiler's time includes its 23 MB download on the first run):
+
+| Workers | Typst compiler | paramdoc runtime | ratio |
+|---:|---:|---:|---:|
+| 1 | 3.6 s, 281 PDFs/s | 0.4 s, 2312 PDFs/s | 8.2× |
+| 4 | 1.2–1.3 s, 778–839 PDFs/s | 0.2 s, 4350–4396 PDFs/s | 5.3× |
+| 10 | 1.0 s, 1048 PDFs/s | 0.3 s, 3973 PDFs/s | 3.8× |
+
+Per report the compiler needs about 5 ms on a warm worker (the same template compiles incrementally), the runtime
+0.2 ms plus the message round trip; the runtime stops scaling past 4 workers because 1000 documents are over in
+0.2 s, which is mostly worker start. A hidden tab throttles both: the first measurement of the compiler, made in a
+hidden pane, gave 12.8 s, ten times its real figure, so never compare runs from a hidden tab. All 1000 synthetic
+reports from the same data path, written by the TypeScript runtime (`notes/bench/write-all.mjs`), pass veraPDF
+PDF/UA-1. The exported report is the slot dialect's version of the page's template, so the PDFs differ from the
+compiler's: a static title, a one-line tutor comment, no score bars and no row stripes; the page says so next to the
+switch. The compiler's PDFs are 26 kB, the runtime's 61 kB (the two repertoire subsets embedded whole).
 
 ## Open items, in the order I would do them
 

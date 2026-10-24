@@ -48,7 +48,7 @@ Re-evaluate after each milestone; stop and discuss on critical findings.
 
 ```sh
 cd experiments/paramdoc
-./check.sh                                                           # the whole proof: 40 checks, about 30 s
+./check.sh                                                           # the whole proof: 42 checks, under a minute
 cargo run -p paramdoc-export -- fixtures/certificate --fuzz 200      # exit 0: no leaks; writes doc.json and fonts/*.subset.*
 cargo run -p paramdoc-export -- fixtures/leak --fuzz 20              # exit 1: the auto-width slot leaks
 cargo run -p paramdoc-export -- fixtures/certificate --reference fixtures/certificate/data.json   # + reference.{json,pdf}
@@ -89,21 +89,31 @@ Defaults: fonts from `../../fixtures/fonts`, output under `../../.build/paramdoc
 - **Demo page (2026-10-24).** The performance page of `examples/pretext-hybrid` has an engine switch: the
   TypeScript runtime runs in a pool of Web Workers (one runtime each, `src/batch/paramdoc.worker.ts`), fed by
   the page's own synthetic inputs mapped to the slot names, from `documents/report/` (the report fixture exported
-  and checked in, 152 kB). Same machine, same page, 1000 reports, 4 workers, 10-core M-series Mac:
+  and checked in, 152 kB). Same machine, same page, same conditions (headless Chromium through
+  `notes/bench/bench-browser.mjs`, tab visible), 1000 reports, 10-core M-series Mac:
 
-  | Engine | total | PDFs/s | median per PDF | cold start | PDF |
-  |---|---:|---:|---:|---:|---:|
-  | Typst compiler in workers (tab hidden) | 12.8 s | 78 | 21 ms | 329 ms | 26 kB |
-  | paramdoc runtime in workers | 0.2 s | 4237 | 1 ms | 9 ms | 61 kB |
-  | paramdoc runtime in workers, tab hidden | 0.4–0.5 s | 2100–2300 | 1 ms | 35–59 ms | 61 kB |
-  | paramdoc runtime in Node, one thread | 0.23 s | 4327 | 0.21 ms | setup 13 ms | 62 kB |
+  | Engine | workers | total | PDFs/s | PDF |
+  |---|---:|---:|---:|---:|
+  | Typst compiler in workers | 1 | 3.6 s | 281 | 26 kB |
+  | Typst compiler in workers | 4 | 1.2–1.3 s | 778–839 | 26 kB |
+  | Typst compiler in workers | 10 | 1.0 s | 1048 | 26 kB |
+  | paramdoc runtime in workers | 1 | 0.4 s | 2312 | 61 kB |
+  | paramdoc runtime in workers | 4 | 0.2 s | 4350–4396 | 61 kB |
+  | paramdoc runtime in workers | 10 | 0.3 s | 3973 | 61 kB |
+  | paramdoc runtime in Node, one thread | 1 | 0.23 s | 4327 | 62 kB |
 
-  The first synthetic report passes veraPDF PDF/UA-1 like the fixtures. The median per fill on the page is the
-  round trip through `postMessage`; the runtime itself takes 0.2 ms. The runtime's PDFs are larger than the
-  compiler's because each embeds the two repertoire subsets (35 kB compressed) instead of a per-document subset,
-  the M6 trade-off. The static build of the demo bundles the worker, `doc.json` and the fonts, and
-  `tools/check-static-demo.ts` passes. Finding: running `vite build` while the dev server is up makes both
-  regenerate `routeTree.gen.ts` and the page reloads in a loop until the build ends.
+  So 8× the compiler on one worker and 5× on four: a far smaller gap than the container's 17×, because the
+  compiler is fast here (about 5 ms per report on a warm worker, the same template compiling incrementally) and
+  the runtime's 1000 documents are over in 0.2 s, mostly worker start, so it stops scaling past 4 workers. The
+  first measurement, made in a hidden browser pane, had the compiler at 12.8 s and 78 PDFs/s: a hidden tab
+  throttles it tenfold, so that comparison was wrong and is withdrawn. All 1000 synthetic reports written by the
+  TypeScript runtime (`notes/bench/write-all.mjs`) pass veraPDF PDF/UA-1, 6 s for the directory. The runtime's
+  PDFs are larger than the compiler's because each embeds the two repertoire subsets (35 kB compressed) instead
+  of a per-document subset, the M6 trade-off. The static build of the demo bundles the worker, `doc.json` and
+  the fonts, and `tools/check-static-demo.ts` passes. `check.sh` now also fails when `documents/<fixture>` differs
+  from a fresh export (the export is byte-deterministic) and, with `DEMO_URL` set, drives the demo page: 42
+  checks. Finding: running `vite build` while the dev server is up makes both regenerate `routeTree.gen.ts` and
+  the page reloads in a loop until the build ends.
 
 - **veraPDF done (2026-10-24, on a Mac, from the bundle).** veraPDF 1.30.0 validates every runtime PDF of every
   fixture (Rust and TypeScript, single and multi-page, ten files) as PDF/UA-1: 106 rules, 1904 checks, no
