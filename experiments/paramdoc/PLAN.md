@@ -23,7 +23,8 @@ Translation, stacking, page breaking, picking variant two of three. Never a layo
 
 - `ir/`: the parametric document format shared by both sides (serde).
 - `export/`: in-memory `World`, compile, frame walk, slot detection, fuzz-and-diff isolation check, baseline PDF via typst-pdf.
-- `runtime/`: composes IR with data and writes PDF. Milestone 2 onwards.
+- `runtime/`: composes IR with data and writes PDF (Rust; also the wasm32 build with a C ABI).
+- `ts/`: the same runtime in dependency-free TypeScript, for browsers; the Rust runtime is its oracle.
 - `fixtures/`: templates written in the slot dialect (`paramdoc.typ`).
 
 The dialect is plain Typst from a helper file, no Rust patches: a `slot` is a fixed-size clipped `box` carrying a
@@ -38,7 +39,7 @@ labelled `metadata`; the exporter finds it through the frame's tags and the encl
    from the runtime equal Typst's own frames (kerning and ligatures off inside slots), and the PDF opens.
 3. **Bands and pagination.** Repeating rows, header repetition, page numbers. ✅
 4. **Tagging.** Structure tree assembly; checked with the repo's `inspectPdf`, veraPDF not reachable from this container. ✅
-5. **TypeScript port** of the runtime against the Rust implementation as oracle. ⟵ next
+5. **TypeScript port** of the runtime against the Rust implementation as oracle. ✅
 
 Re-evaluate after each milestone; stop and discuss on critical findings.
 
@@ -65,12 +66,61 @@ cargo rustc --release -p paramdoc-runtime --lib --crate-type cdylib --target was
 node <scratch>/bench-wasm.mjs ../../.build/paramdoc-target/wasm32-unknown-unknown/release/paramdoc_runtime.wasm ../../.build/paramdoc/report ../../.build/paramdoc/bench/inputs.json
 ```
 
-The benchmark scripts (`gen-inputs.mjs`, `bench-wasm.mjs`, `bench-browser.mjs`, `inspect.mjs`) are in `notes/bench/`.
+The benchmark scripts (`gen-inputs.mjs`, `bench-wasm.mjs`, `bench-browser.mjs`, `bench-ts.html`, `bench-ts-browser.mjs`,
+`inspect.mjs`) are in `notes/bench/`.
+
+TypeScript runtime (Node 22, no build step):
+
+```sh
+node --experimental-strip-types ts/cli.ts ../../.build/paramdoc/report --data fixtures/report/data.json \
+  --out ../../.build/paramdoc/report/runtime-ts.pdf --expect ../../.build/paramdoc/report/reference.json \
+  --expect-rust ../../.build/paramdoc/report/runtime.trace.json
+node --experimental-strip-types ts/cli.ts bench ../../.build/paramdoc/report --inputs ../../.build/paramdoc/bench/inputs.json
+npx esbuild ts/runtime.ts --bundle --format=esm --minify --outfile=<dir>/runtime.js   # then notes/bench/bench-ts.html next to doc.json, fonts/, inputs.json
+```
 
 Defaults: fonts from `../../fixtures/fonts`, output under `../../.build/paramdoc/<fixture>/` (`doc.json`, `baseline.pdf`,
 `fonts/`, and `fuzz-0.{json,pdf}` for the first fuzzed sample).
 
 ## Status log
+
+- **M5 done.** `ts/runtime.ts` (about 600 lines, no dependencies, erasable TypeScript so Node 22 runs it with
+  `--experimental-strip-types` and esbuild bundles it unchanged) ports the Rust runtime: an OpenType reader for
+  `head`, `hhea`, `hmtx`, `maxp`, `cmap` (formats 4 and 12), `OS/2`, `post` and the CFF flag; slot filling
+  with the same alignment and overflow policies; fixed and flow composition with page breaks, header
+  repetition and counters; structure assembly with the same table merging; marked content, parent tree,
+  MarkInfo, language, XMP and ToUnicode; a small PDF writer with an xref table. `ts/cli.ts` mirrors the Rust
+  CLI, including `bench`, and adds `--expect-rust` to compare against the Rust runtime's slot trace.
+  Oracles, all three fixtures and the 42-row transcript: Typst's reference layout (identical), the Rust
+  runtime's trace (identical slot for slot), rasterised pages (0 or 1 pixel of 2.2 million), `pdftotext`
+  output (identical to the Rust PDFs) and `inspectPdf` structure roles (identical). Bundle: 18.0 kB minified,
+  7.5 kB gzipped, plus `doc.json` and the fonts.
+  Deliberate difference: fonts are embedded whole, compressed once per runtime, because a CFF subsetter in
+  TypeScript is out of this step's scope; the report PDFs are 529 kB instead of 24 kB. The browser payload is
+  unaffected (the fonts ship either way), the download of each generated PDF is. The small per-document streams
+  are written uncompressed: CompressionStream costs milliseconds per call in Chromium, and the change doubled
+  throughput (Node 240 → 500 documents/s, Chromium 110 → 290–387) for about 14 kB per PDF.
+  Not done: subsetting (export-time subsetting to a declared repertoire, or a TrueType-only path with CFF fonts
+  converted at build time, are the two options), a Web Worker wrapper, images.
+
+### Performance, all runtimes (M5 checkpoint)
+
+Same machine and the same 1000 synthetic reports as the M4 table.
+
+| | documents/s | median per document |
+|---|---:|---:|
+| Typst compiler (WASM) in Chromium, 4 workers | 50.4 | — |
+| Typst compiler (WASM) in Chromium, 1 worker | 25.5 | — |
+| TypeScript runtime in Chromium, main thread, 1 thread | 290–387 | 1.7–2.0 ms (p95 8–11 ms, GC pauses) |
+| TypeScript runtime in Node, 1 thread | 500–508 | 1.6–1.7 ms |
+| Rust runtime as wasm32 in Node, 1 thread | 420–445 | 2.0 ms |
+| Rust runtime native, 1 thread | 490–650 | 1.4 ms |
+
+| Browser payload | raw | gzip |
+|---|---:|---:|
+| Typst compiler wasm | 24.4 MB | 8.95 MB |
+| Rust runtime wasm32 | 1.12 MB | 403 kB |
+| TypeScript runtime bundle | 18.0 kB | 7.5 kB |
 
 - **M4 done.** The exporter follows Typst's element tags through the frame walk with a stack, as typst-pdf does:
   headings (H1–H6 from the resolved level), paragraphs, `table` → Table with TR rows synthesised from the cells'
@@ -151,6 +201,14 @@ About 23x smaller before any size work; the heavy parts are the CFF subsetter, t
 Native release timings for a complete fill, fonts parsed and subset included: certificate 9 ms, 42-row
 transcript 8 ms. (An earlier 77 kB figure from building the CLI binary for wasm32 was wrong: `std::env::args`
 is empty on that target, so the optimiser removed the entire runtime as dead code.)
+
+### Re-evaluation after M5
+
+All five milestones are built and verified. What remains is productisation, not research: font subsetting for
+the browser path, veraPDF conformance from a machine that can reach it, images and links, variable-height
+rows through variants, a Worker wrapper, and the export step as a Vite plugin fed by `defineTemplate`. The
+one architectural question left open is where subsetting belongs; export time is the answer that keeps the
+TypeScript runtime at 18 kB.
 
 ### Re-evaluation after M4
 
