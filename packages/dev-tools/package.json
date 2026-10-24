@@ -1,10 +1,10 @@
 {
   "name": "@typfolio/dev-tools",
   "version": "0.3.0",
-  "description": "Dev-time tools for Typfolio templates: schema-based template checks and PDF inspection (install as a devDependency)",
+  "description": "Dev-time tools for Typfolio templates: schema-based template checks, PDF inspection and an in-page structure panel (install as a devDependency)",
   "type": "module",
   "license": "Apache-2.0",
-  "keywords": ["typst", "pdf", "pdf-ua", "accessibility", "template", "testing", "ci", "json-schema"],
+  "keywords": ["typst", "pdf", "pdf-ua", "accessibility", "template", "testing", "ci", "json-schema", "devtools"],
   "repository": {
     "type": "git",
     "url": "git+https://github.com/HelioCampus/typfolio.git",
@@ -12,15 +12,17 @@
   },
   "homepage": "https://github.com/HelioCampus/typfolio#readme",
   "bugs": { "url": "https://github.com/HelioCampus/typfolio/issues" },
-  "files": ["dist", "README.md"],
+  "files": ["dist", "README.md", "THIRD_PARTY_NOTICES.md"],
   "types": "./dist/index.d.ts",
   "exports": {
     ".": { "types": "./dist/index.d.ts", "import": "./dist/index.js" },
-    "./pdf": { "types": "./dist/pdf.d.ts", "import": "./dist/pdf.js" }
+    "./pdf": { "types": "./dist/pdf.d.ts", "import": "./dist/pdf.js" },
+    "./panel": { "types": "./dist/panel.d.ts", "import": "./dist/panel.js" }
   },
   "typesVersions": {
     "*": {
-      "pdf": ["./dist/pdf.d.ts"]
+      "pdf": ["./dist/pdf.d.ts"],
+      "panel": ["./dist/panel.d.ts"]
     }
   },
   "dependencies": {

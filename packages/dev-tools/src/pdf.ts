@@ -2,6 +2,10 @@
 // a file conforms to anything. `pdfjs-dist` is an optional peer dependency, loaded on the first call and only
 // from this entry, so the main `@typfolio/dev-tools` entry (and every bundle that uses only that) never sees it.
 import { TypstPdfError } from '@typfolio/core';
+import { eachElement, headingLevel, isMarked, pageStructure, readDocument, type PdfMarkInfo, type PdfStructurePage, type PdfStructureWarning } from './structure.js';
+
+export { readStructure, structureWarnings } from './structure.js';
+export type { PdfStructureElement, PdfStructurePage, PdfStructureSource, PdfStructureWarning, PdfStructureWarningKind } from './structure.js';
 
 export interface PdfHeading {
   /** 1 to 6 for `H1`..`H6`; 0 for a plain `H`. */
@@ -48,25 +52,24 @@ export interface PdfInspection {
   fonts: PdfFont[];
   /** How often each structure role occurs, whatever it is. */
   structureRoles: Record<string, number>;
+  /** Every page's part of the structure tree, in page order. */
+  structure: PdfStructurePage[];
 }
 
 // The part of pdf.js this module uses. Declared here so the published declarations do not depend on pdfjs-dist's types.
 interface PdfJsMetadata { get(name: string): unknown }
 interface PdfJsInfo { Title?: unknown; Language?: unknown; CreationDate?: unknown }
-interface PdfJsContentRef { type?: string; id?: string }
-interface PdfJsStructNode extends PdfJsContentRef { role?: string; alt?: string; children?: PdfJsStructNode[] }
-interface PdfJsTextItem { str?: string; hasEOL?: boolean; type?: string; id?: string | null }
 interface PdfJsCommonObjs { has(id: string): boolean; get(id: string): unknown }
 interface PdfJsPage {
-  getStructTree(): Promise<PdfJsStructNode | null>;
-  getTextContent(options: { includeMarkedContent: boolean }): Promise<{ items: PdfJsTextItem[] }>;
+  getStructTree(): Promise<unknown>;
+  getTextContent(options: { includeMarkedContent: boolean }): Promise<{ items: unknown[] }>;
   getOperatorList(): Promise<{ fnArray: number[]; argsArray: unknown[][] }>;
   commonObjs: PdfJsCommonObjs;
 }
 interface PdfJsDocument {
   numPages: number;
   getMetadata(): Promise<{ info: PdfJsInfo | null; metadata: PdfJsMetadata | null }>;
-  getMarkInfo(): Promise<{ Marked?: boolean } | Map<string, unknown> | null>;
+  getMarkInfo(): Promise<PdfMarkInfo>;
   getPage(number: number): Promise<PdfJsPage>;
 }
 interface PdfJsLoadingTask { promise: Promise<PdfJsDocument>; destroy(): Promise<void> }
@@ -104,12 +107,12 @@ function getPdfJs(): Promise<PdfJs> {
   return loader;
 }
 
-async function requirePdfJs(): Promise<PdfJs> {
+async function requirePdfJs(caller: string): Promise<PdfJs> {
   try {
     return await getPdfJs();
   } catch (error) {
     if (!(error instanceof PdfJsImportError)) throw error;
-    throw new TypstPdfError('INITIALIZATION', 'inspectPdf could not load pdfjs-dist. Install pdfjs-dist (an optional peer dependency of @typfolio/dev-tools) to use @typfolio/dev-tools/pdf.', [], { cause: error.cause });
+    throw new TypstPdfError('INITIALIZATION', `${caller} could not load pdfjs-dist. Install pdfjs-dist (an optional peer dependency of @typfolio/dev-tools) to use @typfolio/dev-tools/pdf.`, [], { cause: error.cause });
   }
 }
 
@@ -133,54 +136,6 @@ function creationDate(pdfjs: PdfJs, info: PdfJsInfo | null, metadata: PdfJsMetad
   return date && !Number.isNaN(date.getTime()) ? date : undefined;
 }
 
-const headingLevel = (role: string): number | undefined => {
-  const match = /^H([1-6])?$/.exec(role);
-  return match ? Number(match[1] ?? 0) : undefined;
-};
-
-interface PageFacts {
-  headings: { level: number; contentIds: string[] }[];
-  figures: PdfFigure[];
-  tables: number;
-}
-
-function contentIds(node: PdfJsStructNode, into: string[] = []): string[] {
-  for (const child of node.children ?? []) {
-    if (child.type === 'content' && typeof child.id === 'string') into.push(child.id);
-    else contentIds(child, into);
-  }
-  return into;
-}
-
-function walk(node: PdfJsStructNode, roles: Map<string, number>, facts: PageFacts): void {
-  const role = text(node.role);
-  if (role !== undefined) {
-    roles.set(role, (roles.get(role) ?? 0) + 1);
-    const level = headingLevel(role);
-    if (level !== undefined) facts.headings.push({ level, contentIds: contentIds(node) });
-    else if (role === 'Figure') facts.figures.push(typeof node.alt === 'string' ? { alt: node.alt } : {});
-    else if (role === 'Table') facts.tables += 1;
-  }
-  for (const child of node.children ?? []) if (child.role !== undefined) walk(child, roles, facts);
-}
-
-/** The text of each marked-content section that has an id, by id. Text goes to its innermost section with an id. */
-async function textByContentId(page: PdfJsPage): Promise<Map<string, string>> {
-  const { items } = await page.getTextContent({ includeMarkedContent: true });
-  const byId = new Map<string, string>();
-  const open: (string | null)[] = [];
-  for (const item of items) {
-    if (item.type === 'beginMarkedContentProps') open.push(typeof item.id === 'string' ? item.id : null);
-    else if (item.type === 'beginMarkedContent') open.push(null);
-    else if (item.type === 'endMarkedContent') open.pop();
-    else if (typeof item.str === 'string') {
-      let id: string | null = null;
-      for (let depth = open.length - 1; depth >= 0 && id === null; depth -= 1) id = open[depth] ?? null;
-      if (id) byId.set(id, (byId.get(id) ?? '') + item.str + (item.hasEOL ? ' ' : ''));
-    }
-  }
-  return byId;
-}
 
 async function pageFonts(pdfjs: PdfJs, page: PdfJsPage, fonts: Map<string, PdfFont>): Promise<void> {
   const { fnArray, argsArray } = await page.getOperatorList();
@@ -199,19 +154,11 @@ function isPdf(bytes: Uint8Array): boolean {
   return head.includes('%PDF-');
 }
 
-/**
- * Reads a compiled PDF and reports facts that matter for accessibility and output policy: tagging, title,
- * language, the standards its XMP metadata declares, headings, figure alternative text, tables and fonts.
- * It reports facts only. A tagged PDF with PDF/UA metadata and all the right-looking structure is not thereby
- * conformant; use a validator such as veraPDF for that.
- *
- * Needs `pdfjs-dist` (an optional peer dependency); rejects with a `TypstPdfError` that says so if it is missing.
- * Input that is not a readable PDF rejects with `INVALID_REQUEST`.
- */
-export async function inspectPdf(bytes: Uint8Array): Promise<PdfInspection> {
-  if (!(bytes instanceof Uint8Array)) throw new TypstPdfError('INVALID_REQUEST', 'inspectPdf needs the PDF bytes as a Uint8Array');
-  if (!isPdf(bytes)) throw new TypstPdfError('INVALID_REQUEST', 'inspectPdf input is not a PDF: no %PDF- header in the first 1024 bytes');
-  const pdfjs = await requirePdfJs();
+/** Opens the PDF in `bytes` with pdf.js, hands it to `use` and frees it. */
+async function withDocument<T>(caller: string, bytes: Uint8Array, use: (pdfjs: PdfJs, doc: PdfJsDocument) => Promise<T>): Promise<T> {
+  if (!(bytes instanceof Uint8Array)) throw new TypstPdfError('INVALID_REQUEST', `${caller} needs the PDF bytes as a Uint8Array`);
+  if (!isPdf(bytes)) throw new TypstPdfError('INVALID_REQUEST', `${caller} input is not a PDF: no %PDF- header in the first 1024 bytes`);
+  const pdfjs = await requirePdfJs(caller);
   // pdf.js takes ownership of the buffer it is given and detaches it, so give it a copy.
   const task = pdfjs.getDocument({
     data: new Uint8Array(bytes),
@@ -226,39 +173,53 @@ export async function inspectPdf(bytes: Uint8Array): Promise<PdfInspection> {
       doc = await task.promise;
     } catch (cause) {
       const detail = cause instanceof Error && cause.message ? `: ${cause.message}` : '';
-      throw new TypstPdfError('INVALID_REQUEST', `inspectPdf could not read the PDF${detail}`, [], { cause });
+      throw new TypstPdfError('INVALID_REQUEST', `${caller} could not read the PDF${detail}`, [], { cause });
     }
+    return await use(pdfjs, doc);
+  } finally {
+    await task.destroy();
+  }
+}
+
+/**
+ * Reads a compiled PDF and reports facts that matter for accessibility and output policy: tagging, title,
+ * language, the standards its XMP metadata declares, the structure tree, headings, figure alternative text,
+ * tables and fonts. It reports facts only. A tagged PDF with PDF/UA metadata and all the right-looking structure
+ * is not thereby conformant; use a validator such as veraPDF for that.
+ *
+ * Needs `pdfjs-dist` (an optional peer dependency); rejects with a `TypstPdfError` that says so if it is missing.
+ * Input that is not a readable PDF rejects with `INVALID_REQUEST`.
+ */
+export function inspectPdf(bytes: Uint8Array): Promise<PdfInspection> {
+  return withDocument('inspectPdf', bytes, async (pdfjs, doc) => {
     const { info, metadata } = await doc.getMetadata();
     const markInfo = await doc.getMarkInfo();
-    const roles = new Map<string, number>();
-    const headings: PdfHeading[] = [];
-    const figures: PdfFigure[] = [];
+    const structure: PdfStructurePage[] = [];
     const fonts = new Map<string, PdfFont>();
-    let tables = 0;
     let structureTree = false;
     for (let number = 1; number <= doc.numPages; number += 1) {
       const page = await doc.getPage(number);
-      const tree = await page.getStructTree();
-      if (tree) {
-        structureTree = true;
-        const facts: PageFacts = { headings: [], figures: [], tables: 0 };
-        for (const child of tree.children ?? []) walk(child, roles, facts);
-        const textById = facts.headings.length ? await textByContentId(page) : new Map<string, string>();
-        for (const heading of facts.headings) {
-          const joined = heading.contentIds.map(id => textById.get(id) ?? '').join('');
-          headings.push({ level: heading.level, text: joined.replace(/\s+/g, ' ').trim() });
-        }
-        figures.push(...facts.figures);
-        tables += facts.tables;
-      }
+      const elements = await pageStructure(page);
+      if (elements) structureTree = true;
+      structure.push({ page: number, elements: elements ?? [] });
       await pageFonts(pdfjs, page, fonts);
     }
-    const marked = markInfo instanceof Map ? markInfo.get('Marked') : markInfo?.Marked;
+    const roles = new Map<string, number>();
+    const headings: PdfHeading[] = [];
+    const figures: PdfFigure[] = [];
+    let tables = 0;
+    eachElement(structure, element => {
+      if (element.role) roles.set(element.role, (roles.get(element.role) ?? 0) + 1);
+      const level = headingLevel(element.role);
+      if (level !== undefined) headings.push({ level, text: element.text });
+      else if (element.role === 'Figure') figures.push(element.alt === undefined ? {} : { alt: element.alt });
+      else if (element.role === 'Table') tables += 1;
+    });
     const part = integer(metadataValue(metadata, 'pdfaid:part'));
     const conformance = text(metadataValue(metadata, 'pdfaid:conformance'));
     return {
       pages: doc.numPages,
-      tagged: marked === true,
+      tagged: isMarked(markInfo),
       structureTree,
       title: text(info?.Title) ?? text(metadataValue(metadata, 'dc:title')),
       language: text(info?.Language),
@@ -272,8 +233,16 @@ export async function inspectPdf(bytes: Uint8Array): Promise<PdfInspection> {
       tables,
       fonts: [...fonts.values()],
       structureRoles: Object.fromEntries(roles),
+      structure,
     };
-  } finally {
-    await task.destroy();
-  }
+  });
+}
+
+/**
+ * The PDF in `bytes`, read with pdf.js: one `untagged` warning when it is not tagged (`/MarkInfo /Marked`), else
+ * the `structureWarnings` of its pages. The function to pass as a template check's `structure` option. Needs
+ * `pdfjs-dist`, and rejects as `inspectPdf` does.
+ */
+export function checkStructure(bytes: Uint8Array): Promise<PdfStructureWarning[]> {
+  return withDocument('checkStructure', bytes, async (_pdfjs, doc) => (await readDocument(doc)).warnings);
 }

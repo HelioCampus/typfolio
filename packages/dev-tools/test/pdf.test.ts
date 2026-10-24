@@ -8,7 +8,8 @@ import { createCompiler, defineTemplate, pdfStandards, TypstPdfError } from '@ty
 import type { Assets, ErrorCode, PdfCompiler, PdfOptions } from '@typfolio/core';
 import * as main from '../dist/index.js';
 import * as pdfModule from '../dist/pdf.js';
-import { inspectPdf } from '../dist/pdf.js';
+import { checkStructure, inspectPdf, readStructure, structureWarnings } from '../dist/pdf.js';
+import type { PdfStructureElement, PdfStructurePage, PdfStructureSource } from '../dist/pdf.js';
 
 const root = new URL('../../../', import.meta.url);
 type PdfModule = typeof import('../dist/pdf.js');
@@ -64,7 +65,18 @@ test('reports the structure of a PDF/UA compile of the basic fixture', async () 
     Object.fromEntries(Object.entries(report.structureRoles).filter(([role]) => ['H1', 'Table', 'Figure', 'TH', 'TD'].includes(role))),
   );
   // Facts only: nothing in the report is a verdict.
-  assert.deepEqual(Object.keys(report).sort(), ['creationDate', 'figures', 'fonts', 'headings', 'language', 'pages', 'standard', 'structureRoles', 'structureTree', 'tables', 'tagged', 'title']);
+  assert.deepEqual(Object.keys(report).sort(), ['creationDate', 'figures', 'fonts', 'headings', 'language', 'pages', 'standard', 'structure', 'structureRoles', 'structureTree', 'tables', 'tagged', 'title']);
+  // The tree, as a screen reader gets it: the page's Document, then the tags in reading order with their text.
+  assert.deepEqual(report.structure.map(({ page, elements }) => [page, elements.map(element => element.role)]), [[1, ['Document']]]);
+  assert.deepEqual(report.structure[0].elements[0].children.map(child => [child.role, child.text]).filter(([role]) => role !== 'P'), [
+    ['H1', input.title],
+    ['Table', 'Outcome Status Communication Complete Critical thinking In progress'],
+    ['Figure', ''],
+  ]);
+  assert.deepEqual(elementsOf(report.structure, 'TH').map(cell => cell.text), ['Outcome', 'Status']);
+  assert.equal(elementsOf(report.structure, 'Figure')[0].alt, 'A blue bar representing the completed outcome.');
+  assert.deepEqual(structureWarnings(report.structure), []);
+  assert.deepEqual(await checkStructure(bytes), []);
 });
 
 test('an untagged compile reports no tags, no structure tree and no PDF/UA declaration', async () => {
@@ -148,6 +160,152 @@ test('a heading on a later page is found with its text', async () => {
   assert.deepEqual(report.headings, [{ level: 1, text: 'First' }, { level: 2, text: 'Second page' }]);
 });
 
+/** Every element with this role, in reading order. */
+function elementsOf(pages: readonly PdfStructurePage[], role: string): PdfStructureElement[] {
+  const found: PdfStructureElement[] = [];
+  const walk = (element: PdfStructureElement) => {
+    if (element.role === role) found.push(element);
+    element.children.forEach(walk);
+  };
+  for (const page of pages) page.elements.forEach(walk);
+  return found;
+}
+const rows = (count: number) => Array.from({ length: count }, (_, index) => `[Row ${index}], [${index}]`).join(', ');
+const warningsOf = async (source: string, pdf: PdfOptions = {}) => {
+  const { structure } = await inspectPdf(await compileSource(source, pdf));
+  return { structure, warnings: structureWarnings(structure) };
+};
+const kinds = (warnings: readonly { kind: string; page?: number }[]) => warnings.map(warning => [warning.kind, warning.page]);
+
+test('an inline element runs on with the text around it, and block elements are separate runs', async () => {
+  const { structure } = await inspectPdf(await compileSource(levels + '= Foo#emph[bar] baz\nText.'));
+  const [heading] = elementsOf(structure, 'H1');
+  assert.equal(heading.text, 'Foobar baz');
+  assert.deepEqual(heading.children.map(child => [child.role, child.text]), [['Span', 'bar']]);
+  assert.equal(structure[0].elements[0].text, 'Foobar baz Text.');
+});
+
+test('a table without header cells is reported once, on the page it starts, though it runs over three pages', async () => {
+  const { structure, warnings } = await warningsOf(levels + `= Results\n#table(columns: 2, ${rows(90)})`, { standards: ['ua-1'] });
+  assert.equal(structure.length, 3);
+  // pdf.js gives each page its own part of the table.
+  assert.equal(elementsOf(structure, 'Table').length, 3);
+  assert.deepEqual(kinds(warnings), [['table-without-headers', 1]]);
+  assert.match(warnings[0].message, /^The table starting "Row 0 0 Row 1 1 .*…" has no header cells \(TH\)/);
+  // The warning points at the element in the pages it was given.
+  assert.equal(warnings[0].element, elementsOf(structure, 'Table')[0]);
+});
+
+test('a table with a header row is not reported, on any of its pages', async () => {
+  const { structure, warnings } = await warningsOf(levels + `= Results\n#table(columns: 2, table.header([Name], [Score]), ${rows(90)})`, { standards: ['ua-1'] });
+  assert.equal(structure.length, 3);
+  assert.deepEqual(warnings, []);
+});
+
+test('a table nested in a table is checked on its own', async () => {
+  const { warnings } = await warningsOf(levels + '= Results\n#table(columns: 1, table.header([Outer]), table(columns: 1, [inner a], [inner b]))', { standards: ['ua-1'] });
+  assert.deepEqual(kinds(warnings), [['table-without-headers', 1]]);
+  assert.match(warnings[0].message, /"inner a inner b"/);
+});
+
+test('several pages with no headings are reported, which PDF/UA-1 accepts; one page with none is not', async () => {
+  const styled = levels + '#text(size: 20pt)[A title drawn large]\n';
+  const { warnings } = await warningsOf(styled + '#lorem(30)\n#pagebreak()\n#lorem(30)', { standards: ['ua-1'] });
+  assert.deepEqual(warnings.map(warning => [warning.kind, warning.page, warning.element]), [['no-headings', undefined, undefined]]);
+  assert.equal(warnings[0].message, '2 pages and no headings, so a screen reader user cannot move between sections.');
+  assert.deepEqual((await warningsOf(styled + '#lorem(30)', { standards: ['ua-1'] })).warnings, []);
+});
+
+test('headings that skip a level are reported for a tagged export; PDF/UA-1 refuses to compile them', async () => {
+  const skipped = levels + '= One\n=== Three\nText.';
+  const firstIsH2 = levels + '== Two\nText.';
+  for (const source of [skipped, firstIsH2]) await assert.rejects(compileSource(source, { standards: ['ua-1'] }), hasCode('COMPILATION'));
+  const skips = (await warningsOf(skipped)).warnings;
+  assert.deepEqual(kinds(skips), [['heading-skips-level', 1]]);
+  assert.equal(skips[0].message, '"Three" is H3 right after an H1, skipping a level.');
+  assert.equal(skips[0].element?.role, 'H3');
+  const first = (await warningsOf(firstIsH2)).warnings;
+  assert.deepEqual(kinds(first), [['heading-skips-level', 1]]);
+  assert.equal(first[0].message, 'The first heading, "Two", is H2; headings start at H1.');
+  // Going back up any number of levels is fine.
+  assert.deepEqual((await warningsOf(levels + '= A\n== B\n=== C\n= D\n== E')).warnings, []);
+});
+
+test('a figure without alt text is reported for a tagged export; PDF/UA-1 refuses to compile it', async () => {
+  const dot = '#let dot = bytes("<svg xmlns=\'http://www.w3.org/2000/svg\' width=\'10\' height=\'10\'><rect width=\'10\' height=\'10\'/></svg>")\n';
+  const source = levels + dot + '= Chart\n#image(dot)';
+  await assert.rejects(compileSource(source, { standards: ['ua-1'] }), hasCode('COMPILATION'));
+  const { structure, warnings } = await warningsOf(source);
+  assert.deepEqual(kinds(warnings), [['figure-without-alt', 1]]);
+  assert.equal(warnings[0].element, elementsOf(structure, 'Figure')[0]);
+  assert.deepEqual((await warningsOf(levels + dot + '= Chart\n#image(dot, alt: "A black square.")')).warnings, []);
+});
+
+test('checkStructure: an untagged PDF is one untagged warning; otherwise the warnings of its pages', async () => {
+  const untagged = await compileSource(levels + '#lorem(30)\n#pagebreak()\n#lorem(30)', { tags: false });
+  assert.deepEqual(kinds(await checkStructure(untagged)), [['untagged', undefined]]);
+  // Its pages have no tags, so all structureWarnings can see is two pages without headings.
+  assert.deepEqual(kinds(structureWarnings((await inspectPdf(untagged)).structure)), [['no-headings', undefined]]);
+  const headerless = await compileSource(levels + '= Results\n#table(columns: 2, [a], [b])');
+  assert.deepEqual(kinds(await checkStructure(headerless)), [['table-without-headers', 1]]);
+  // A tagged PDF with nothing tagged in it, like an empty sample, has nothing to report.
+  assert.deepEqual(await checkStructure(await compileSource(levels)), []);
+  await assert.rejects(checkStructure(new TextEncoder().encode('hello')), (error: TypstPdfError) => hasCode('INVALID_REQUEST')(error) && /^checkStructure input is not a PDF/.test(error.message));
+});
+
+test('readStructure reads a pdf.js document the caller loaded, and gives what inspectPdf gives', async () => {
+  const bytes = await compile();
+  const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs');
+  const task = pdfjs.getDocument({ data: bytes.slice(), verbosity: 0 });
+  try {
+    assert.deepEqual(await readStructure(await task.promise), (await inspectPdf(bytes)).structure);
+  } finally {
+    await task.destroy();
+  }
+});
+
+// A pdf.js document stand-in: one page whose tree has a P in German, a heading split over two sections, and an artifact.
+const standIn: PdfStructureSource = {
+  numPages: 2,
+  async getPage(number) {
+    return {
+      async getStructTree() {
+        if (number === 2) return null;
+        return { role: 'Root', children: [{ role: 'Document', children: [
+          { role: 'H1', children: [{ type: 'content', id: 'mc0' }, { type: 'content', id: 'mc1' }] },
+          { role: 'P', lang: 'de-DE', alt: '', children: [{ type: 'content', id: 'mc2' }, { type: 'annotation', id: 'a0' }] },
+        ] }] };
+      },
+      async getTextContent() {
+        return { items: [
+          { type: 'beginMarkedContent', tag: 'Artifact' }, { str: 'Page 1' }, { type: 'endMarkedContent' },
+          { type: 'beginMarkedContentProps', id: 'mc0', tag: 'H1' }, { str: 'Split ' }, { type: 'endMarkedContent' },
+          { type: 'beginMarkedContentProps', id: 'mc1', tag: 'H1' }, { type: 'beginMarkedContent', tag: 'Span' }, { str: 'heading', hasEOL: true }, { type: 'endMarkedContent' }, { type: 'endMarkedContent' },
+          { type: 'beginMarkedContentProps', id: 'mc2', tag: 'P' }, { str: 'Hallo' }, { type: 'beginMarkedContent', tag: 'Artifact' }, { str: ' (skipped)' }, { type: 'endMarkedContent' }, { str: ' Welt' }, { type: 'endMarkedContent' },
+        ] };
+      },
+    };
+  },
+};
+
+test('readStructure takes any pdf.js-shaped document, keeps lang and alt, and leaves artifacts out', async () => {
+  assert.deepEqual(await readStructure(standIn), [
+    { page: 1, elements: [{ role: 'Document', text: 'Split heading Hallo Welt', children: [
+      { role: 'H1', text: 'Split heading', children: [] },
+      { role: 'P', text: 'Hallo Welt', alt: '', lang: 'de-DE', children: [] },
+    ] }] },
+    { page: 2, elements: [] },
+  ]);
+  for (const bad of [undefined, {}, { numPages: 1 }, { numPages: Number.NaN, getPage() {} }]) {
+    // @ts-expect-error not a pdf.js document
+    await assert.rejects(readStructure(bad), (error: TypstPdfError) => hasCode('INVALID_REQUEST')(error) && /PDFDocumentProxy/.test(error.message));
+  }
+  for (const bad of [undefined, 'pages', [{ page: 1 }]]) {
+    // @ts-expect-error not pages of a structure tree
+    assert.throws(() => structureWarnings(bad), (error: TypstPdfError) => hasCode('INVALID_REQUEST')(error) && /readStructure/.test(error.message));
+  }
+});
+
 // A one-page PDF whose only font is the unembedded standard Helvetica, written by hand (xref offsets computed).
 function helveticaPdf() {
   const content = 'BT /F1 24 Tf 72 700 Td (Not embedded) Tj ET';
@@ -206,7 +364,7 @@ test('a file with a PDF header that pdf.js cannot read rejects with INVALID_REQU
 
 test('the main entry has no inspectPdf and never reaches the pdf module or pdfjs-dist', async () => {
   assert.equal('inspectPdf' in main, false);
-  assert.deepEqual(Object.keys(pdfModule), ['inspectPdf']);
+  assert.deepEqual(Object.keys(pdfModule), ['checkStructure', 'inspectPdf', 'readStructure', 'structureWarnings']);
   const seen = new Set<string>();
   const visit = async (url: URL): Promise<void> => {
     if (seen.has(url.href)) return;
@@ -239,6 +397,10 @@ test('a missing pdfjs-dist rejects with an install hint', async () => {
         return true;
       });
     }
+    await assert.rejects(copy.checkStructure(bytes), (error: TypstPdfError) => hasCode('INITIALIZATION')(error) && /^checkStructure could not load pdfjs-dist/.test(error.message));
+    // A caller that brings its own pdf.js document needs none installed.
+    assert.equal((await copy.readStructure(standIn))[0].elements[0].children[0].text, 'Split heading');
+    assert.deepEqual(copy.structureWarnings(await copy.readStructure(standIn)), []);
     // Input checks come first, so they need no pdfjs-dist.
     await assert.rejects(copy.inspectPdf(new Uint8Array(4)), (error: TypstPdfError) => hasCode('INVALID_REQUEST')(error) && /not a PDF/.test(error.message));
   } finally {

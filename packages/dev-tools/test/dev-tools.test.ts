@@ -8,6 +8,7 @@ import type { ErrorCode, StandardSchemaV1 } from '@typfolio/core';
 import * as devTools from '../dist/index.js';
 import { checkTemplate, createTemplateChecker, inputSchemaFiles } from '../dist/index.js';
 import type { SampleMode, SchemaFile, TemplateCheckReport, TemplateChecker, TemplateCheckResult } from '../dist/index.js';
+import { checkStructure } from '../dist/pdf.js';
 import { headerSchema } from '../../../examples/vite-react/src/common/header.schema.ts';
 import { outcomesSchema } from '../../../examples/vite-react/src/outcomes/outcomes.schema.ts';
 
@@ -287,10 +288,64 @@ test('a checker runs one check at a time and refuses work once disposed', async 
   await local.dispose();
 });
 
+// The sample's rows as a table, with a header row or without one.
+const tableOf = (header: string) => reportOf('#set document(title: "Rows")', '#set text(lang: "en")', '= Rows', `#table(columns: 1, ${header}..data.rows.map(row => [#row.name]))`);
+
+test('structure: checkStructure fails a mode whose PDF has a table without header cells', async () => {
+  const headerless = await checker.check(tableOf(''), { assets: schemaAssets, structure: checkStructure });
+  assert.equal(headerless.ok, false);
+  const { minimal, full } = byMode(headerless);
+  // The minimal sample has no rows, so its table draws nothing and has no tags to check.
+  assert.deepEqual([minimal.ok, minimal.structure], [true, []]);
+  assert.equal(full.ok, false);
+  assert.equal(full.error, undefined);
+  assert.ok(full.bytes instanceof Uint8Array);
+  assert.deepEqual(full.structure?.map(warning => [warning.kind, warning.page, warning.message]), [
+    ['table-without-headers', 1, 'The table starting "Sample text" has no header cells (TH), so a screen reader cannot name its columns.'],
+  ]);
+  const withHeader = await checker.check(tableOf('table.header([Name]), '), { assets: schemaAssets, structure: checkStructure });
+  assert.equal(withHeader.ok, true, JSON.stringify(withHeader.results.map(result => result.structure)));
+  for (const result of withHeader.results) assert.deepEqual(result.structure, [], result.mode);
+  // Without the option nothing reads the PDF: the headerless table compiles, as PDF/UA-1 lets it.
+  const unchecked = await checker.check(tableOf(''), { assets: schemaAssets, pdf: { standards: ['ua-1'] } });
+  assert.equal(unchecked.ok, true, messages(unchecked));
+  for (const result of unchecked.results) assert.equal('structure' in result, false);
+});
+
+test('structure reads only the PDFs that compiled, and a function of its own decides what fails', async () => {
+  const seen: Uint8Array[] = [];
+  const report = await checker.check(reportOf('#data.subtitle'), { assets: schemaAssets, structure: async bytes => { seen.push(bytes); return []; } });
+  const { minimal, full } = byMode(report);
+  assert.equal(minimal.ok, false);
+  assert.ok(hasCode('COMPILATION')(minimal.error));
+  assert.equal('structure' in minimal, false);
+  assert.deepEqual(seen, [full.bytes]);
+  assert.deepEqual([full.ok, full.structure], [true, []]);
+  // Filtering checkStructure's warnings is how one is accepted.
+  const lenient = await checker.check(tableOf(''), {
+    assets: schemaAssets,
+    structure: async bytes => (await checkStructure(bytes)).filter(warning => warning.kind !== 'table-without-headers'),
+  });
+  assert.equal(lenient.ok, true);
+});
+
+test('structure must be a function that resolves to an array, and its rejection rejects the check', async () => {
+  // @ts-expect-error structure is the function that reads the PDF, not a flag
+  await assert.rejects(checker.check(hello(), { structure: true }), (error: TypstPdfError) => hasCode('INVALID_REQUEST')(error) && /checkStructure from @typfolio\/dev-tools\/pdf/.test(error.message));
+  // @ts-expect-error a warning list, not a count
+  await assert.rejects(checker.check(hello(), { structure: async () => 0 }), (error: TypstPdfError) => hasCode('INVALID_REQUEST')(error) && /array/.test(error.message));
+  const failure = new Error('no pdf.js here');
+  await assert.rejects(checker.check(hello(), { structure: async () => { throw failure; } }), failure);
+  // The checker is free again.
+  assert.equal((await checker.check(hello(), { structure: checkStructure })).ok, true);
+});
+
 test('checkTemplate is the one-shot form, and fonts are required', async () => {
   const report = await checkTemplate(hello(), { wasm, fonts, modes: ['minimal'] });
   assert.equal(report.ok, true);
   assert.deepEqual(report.results.map(result => result.mode), ['minimal']);
+  const structured = await checkTemplate(tableOf(''), { wasm, fonts, modes: ['full'], assets: schemaAssets, structure: checkStructure });
+  assert.deepEqual(structured.results[0].structure?.map(warning => warning.kind), ['table-without-headers']);
   await assert.rejects(createTemplateChecker({ wasm, fonts: [] }), hasCode('INVALID_REQUEST'));
 });
 

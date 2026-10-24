@@ -265,14 +265,14 @@ import { createTemplateChecker } from '@typfolio/dev-tools';
 const checker = await createTemplateChecker({ wasm, fonts }); // the options of createCompiler
 try {
   const report = await checker.check(template, { modes: ['minimal', 'full'], pdf: { standards: ['ua-1'] } });
-  // report.ok: true only if every mode compiled
-  // report.results: { mode, ok, diagnostics, error?, bytes? } per mode
+  // report.ok: true only if every mode is ok
+  // report.results: { mode, ok, diagnostics, error?, bytes?, structure? } per mode
 } finally {
   await checker.dispose();
 }
 ```
 
-`checkTemplate(template, { wasm, fonts, modes?, pdf?, assets? })` is the one-shot form that creates and disposes a checker.
+`checkTemplate(template, { wasm, fonts, modes?, pdf?, assets?, structure? })` is the one-shot form that creates and disposes a checker.
 
 `check` takes a template made with `defineTemplate`. It compiles the files the template declares and nothing else, with each piece of data's JSON Schema at its `schemaPath`, made as `inputSchemaFiles` makes it (pass `toJSONSchema` where the schemas need it). A JSON Schema file given in `assets` at a data path is used as it is instead: that is how the files committed on disk are checked, and how data without a schema is. A file the template imports without declaring it fails with the message described in [Templates whose parts have data of their own](#templates-whose-parts-have-data-of-their-own), which is the check that catches a forgotten partial before any data does.
 
@@ -281,7 +281,8 @@ What a check does:
 - It compiles in editor mode, once per mode: Typfolio's runtime marker is not set, `sys.inputs.typfolio-sample` is the mode, and the package's `typst.toml`, `lib.typ` and `sample.typ` are mounted. `input()` therefore reads the schema and builds the sample, exactly as an editor does.
 - **Each `schemaPath` must be the path the Typst file's `json.with(...)` names**, relative to the template root (`reports/outcome/schemas/x.json` for a template at `reports/outcome/main.typ` that says `json.with("./schemas/x.json")`). A mismatch makes every mode fail with `file-not-found` on the path the file reads.
 - The default modes are `minimal` then `full`. `full` catches a template that no longer matches the schema (a renamed or removed field). `minimal` catches the templates that assume optional data: reading an optional field without `.at(key, default: ...)`, calling `.first()` on a list that can be empty, or treating a nullable value as present.
-- A compile error in one mode is reported in that mode's result (`ok: false`, `error`, `diagnostics`) and the other modes still run. A malformed template (`INVALID_REQUEST`) or an unsupported `pdf` option (`UNSUPPORTED_OPTION`) is thrown, as for `compile()`. `bytes` of a successful mode are in memory only.
+- A compile error in one mode is reported in that mode's result (`ok: false`, `error`, `diagnostics`) and the other modes still run. A malformed template (`INVALID_REQUEST`) or an unsupported `pdf` option (`UNSUPPORTED_OPTION`) is thrown, as for `compile()`. `bytes` of a mode that compiled are in memory only.
+- With `structure: checkStructure` (from `@typfolio/dev-tools/pdf`, which needs `pdfjs-dist`), the PDF of each mode that compiled is read for the structure a screen reader needs, as in [Inspecting the output](#inspecting-the-output): a mode with any warning is not `ok`, and its result lists them in `structure`. The option is the function itself, so the main entry never loads pdf.js; wrap it to accept a warning, for example `structure: async bytes => (await checkStructure(bytes)).filter(warning => warning.kind !== 'no-headings')`.
 - Nothing is written to disk. The samples exist only inside the compile, and `@typfolio/dev-tools` imports no file-system module. Writing the PDFs somewhere is up to the caller.
 - A checker runs one check at a time, like a compiler.
 
@@ -331,6 +332,7 @@ Limits of a check, stated plainly:
 - It checks the shape of the template against the shape of the schema. It does not validate runtime data, and the samples are not validated against the schema; data the schema allows but the samples do not exercise (a non-first `anyOf` branch, a string `pattern`, a long list, an unusual `enum` value) can still break a template.
 - PDF standards apply to every mode, so `minimal` can reveal PDF/UA problems. A string the template turns into a heading or the document title is `""` in the `minimal` sample, and PDF/UA reports that ("heading title is empty"). If the schema promises the string is non-empty, say so with `minLength: 1` (Zod: `z.string().min(1)`): `minimal` then produces `"a"` and the check is meaningful. If the string may legitimately be empty, the failure is real: the template would emit an invalid document for that data, and it has to guard against it.
 - It makes no accessibility claim. `pdf: { standards: ['ua-1'] }` only asks the compiler for PDF/UA output, and a compile that succeeds is not a conformance verdict (see `docs/compiler-build.md`). Accessible authoring and human review stay necessary.
+- `structure` sees the samples' PDFs, which are small: `minimal` has empty lists, `full` one item in each, so a sample is usually one page. It catches what the template draws whatever the data, such as a table with no header row, but not what only shows with real data, such as six pages without a heading. Run `checkStructure` on PDFs compiled from real or recorded data as well.
 - The sample is only as good as the schema. A schema that does not describe what the application actually sends is checked faithfully and proves nothing.
 
 ### Inspecting the output
@@ -345,15 +347,30 @@ const report = await inspectPdf(bytes);
 // report.standard: { pdfUa?, pdfA?: { part, conformance? } }, as the XMP metadata declares them
 // report.headings: [{ level, text }] in document order; report.figures: [{ alt? }]; report.tables
 // report.fonts: [{ name, embedded }]; report.structureRoles: how often each structure role occurs
+// report.structure: [{ page, elements: [{ role, text, alt?, lang?, children }] }]: each page's tags in reading order
 ```
 
-`pdfjs-dist` (6.3 or later) is an optional peer dependency of `@typfolio/dev-tools`, loaded only when `inspectPdf` is first called; without it the call rejects with a `TypstPdfError` that says to install it. Input that is not a readable PDF rejects with `INVALID_REQUEST`.
+`pdfjs-dist` (6.3 or later) is an optional peer dependency of `@typfolio/dev-tools`, loaded only when `inspectPdf` or `checkStructure` is first called (`structureWarnings` and `readStructure` never load it); without it the call rejects with a `TypstPdfError` that says to install it. Input that is not a readable PDF rejects with `INVALID_REQUEST`.
 
 The report states facts and nothing more. A tagged PDF with a title, a language, a heading outline, figure alt text and a PDF/UA declaration can still fail PDF/UA, and `standard.pdfUa` only repeats what the file claims. Use the report to catch regressions (a lost heading level, a figure that lost its alt text, a missing language); use a validator such as [veraPDF](https://verapdf.org) for conformance, and review reading order and alt text by hand.
 
+`structureWarnings(report.structure)` lists what a screen reader user would trip over and neither a PDF/UA-1 compile nor a validator reports: a table without header cells (TH), and several pages without a heading, such as titles drawn in a large face. It also lists headings that skip a level and figures without alt text, which a PDF/UA-1 compile refuses but a tagged compile accepts. Each warning has a `kind`, a `message`, and, unless it is about the whole document, the `page` and the `element` of `report.structure` it is about. `checkStructure(bytes)` reads the bytes and returns the same, or a single `untagged` warning for a PDF that is not tagged; it is the function a template check takes as `structure` (see [Build-time checks](#build-time-checks)). `readStructure(document)` gives `report.structure` from a pdf.js document you loaded yourself, for example in a browser page that shows a PDF's tags.
+
+```ts
+import { checkStructure } from '@typfolio/dev-tools/pdf';
+
+const { bytes } = await compiler.compile(report(recordedData), { pdf: { standards: ['ua-1'] } });
+assert.deepEqual((await checkStructure(bytes)).map(warning => warning.message), []);
+```
+
+The warnings are heuristics, not a conformance check, and an empty list is not a verdict: they say nothing about reading order, wording, or whether alt text describes the image.
+
+To see the tags while you edit a template, `mountStructureDevtools` from `@typfolio/dev-tools/panel` shows them in the page, page by page, with these warnings and the tag each is about; load it in development only. See [the panel](../packages/dev-tools/README.md#structure-panel).
+
 What the report cannot tell you, because of how pdf.js exposes the structure tree (it is read per page):
 
-- An element that continues over a page break is counted once for each page it has content on. A table that spans three pages makes `tables` 3 and adds three `Table`, and so on, to `structureRoles`. Assert `tables >= 1` or compare against a baseline, not exact counts, for content that can break.
+- An element that continues over a page break is counted once for each page it has content on. A table that spans three pages makes `tables` 3 and adds three `Table`, and so on, to `structureRoles`, and is in `structure` once for each of those pages. Assert `tables >= 1` or compare against a baseline, not exact counts, for content that can break.
+- `structureWarnings` checks a table that runs over a page break once, on the page it starts, because the part that carries on has no header row unless the header repeats. It tells a continuation from a new table only by position, so a new table that starts a page right after another table ended the previous page is not checked.
 - `figures` lists the structure elements whose role is `Figure`. Typst 0.15.1 writes one for an `image` (with its alt text), but a `figure` around other content, such as a drawn shape, is tagged `Div`, so it is not listed.
 - Roles are the ones pdf.js reports after resolving the file's `/RoleMap` once, so a custom role that the file maps appears under the standard role it maps to. Typst maps a heading deeper than level 6 (`H7`) to `P`, so such a heading is not in `headings`.
 - `headings[].text` is recovered from the page's marked content; it is the empty string for a heading whose text pdf.js cannot attribute to it.

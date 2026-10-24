@@ -64,11 +64,18 @@ for (const name of packageFiles) {
 }
 // Every tarball must carry the licence; the wasm tarball also carries the NOTICE and third-party notices and licence texts.
 // npm adds LICENSE/NOTICE from a package's own root, so this guards the per-package copies.
-for (const [name, extra] of [['wasm', ['NOTICE', 'THIRD_PARTY_NOTICES.md', 'THIRD_PARTY_LICENSES.md', 'generated/LICENSE.typst-ts']], ['core', []], ['workers', []], ['react', []], ['dev-tools', []]] as [string, string[]][]) {
+for (const [name, extra] of [['wasm', ['NOTICE', 'THIRD_PARTY_NOTICES.md', 'THIRD_PARTY_LICENSES.md', 'generated/LICENSE.typst-ts']], ['core', []], ['workers', []], ['react', []], ['dev-tools', ['THIRD_PARTY_NOTICES.md', 'dist/panel.js']]] as [string, string[]][]) {
   const listing = spawnSync('tar', ['-tzf', tarballs[name]], { encoding: 'utf8' });
   if (listing.error || listing.status !== 0) throw listing.error ?? new Error('tar exited ' + listing.status);
   const files = listing.stdout.split('\n');
   for (const file of ['LICENSE', ...extra]) assert.ok(files.includes(`package/${file}`), `the ${name} tarball must contain ${file}`);
+  if (name === 'dev-tools') {
+    // The panel ships as one bundle with React in it: tsc's unbundled copy of its modules stays out.
+    assert.ok(!files.some(file => file.startsWith('package/dist/panel/')), 'the dev-tools tarball must not contain dist/panel/');
+    const notices = await readFile(join(dir, 'node_modules/@typfolio/dev-tools/THIRD_PARTY_NOTICES.md'), 'utf8');
+    assert.equal(notices, await readFile(join(root, 'packages/dev-tools/THIRD_PARTY_NOTICES.md'), 'utf8'), 'the installed dev-tools THIRD_PARTY_NOTICES.md must equal the repository copy');
+    assert.ok(notices.includes(await readFile(join(root, 'node_modules/react/LICENSE'), 'utf8')), "the dev-tools notices must carry React's licence text");
+  }
   const installed = await readFile(join(dir, 'node_modules/@typfolio', name, 'LICENSE'));
   assert.ok(installed.equals(await readFile(join(root, 'LICENSE'))), `the installed @typfolio/${name} LICENSE must equal the root LICENSE`);
   if (name === 'wasm') {
@@ -95,7 +102,8 @@ import * as coreMain from '@typfolio/core';
 import * as devTools from '@typfolio/dev-tools';
 import { checkTemplate, createTemplateChecker, inputSchemaFiles } from '@typfolio/dev-tools';
 import * as devToolsPdf from '@typfolio/dev-tools/pdf';
-import { inspectPdf } from '@typfolio/dev-tools/pdf';
+import { checkStructure, inspectPdf, readStructure, structureWarnings } from '@typfolio/dev-tools/pdf';
+import * as devToolsPanel from '@typfolio/dev-tools/panel';
 import { captureAssets, captureProps } from '@typfolio/core/capture';
 import { serializeSvg, svgCapture } from '@typfolio/core/capture/svg';
 import { domPngCapture } from '@typfolio/core/capture/dom';
@@ -117,8 +125,18 @@ assert.deepEqual(Object.keys(reactCapture).sort(), ['CaptureRegion']);
 assert.equal('captureAssets' in coreMain, false);
 assert.deepEqual(Object.keys(devTools).sort(), ['checkTemplate', 'createTemplateChecker', 'inputSchemaFiles']);
 assert.equal(typeof inputSchemaFiles, 'function');
-assert.deepEqual(Object.keys(devToolsPdf), ['inspectPdf']);
-assert.equal('inspectPdf' in devTools, false);
+assert.deepEqual(Object.keys(devToolsPdf), ['checkStructure', 'inspectPdf', 'readStructure', 'structureWarnings']);
+for (const name of Object.keys(devToolsPdf)) assert.equal(name in devTools, false, name + ' leaked into the dev-tools main entry');
+assert.equal(typeof readStructure, 'function');
+assert.deepEqual(Object.keys(devToolsPanel).sort(), ['mountStructureDevtools', 'mountStructurePanel']);
+for (const name of Object.keys(devToolsPanel)) assert.equal(name in devTools || name in devToolsPdf, false, name + ' leaked into another dev-tools entry');
+{
+  // The bundle brings React with it: it imports only @typfolio/core, and its declarations do not name React.
+  const bundle = await readFile('node_modules/@typfolio/dev-tools/dist/panel.js', 'utf8');
+  const imports = [...bundle.matchAll(/(?:^|[;}\\s])import\\s*(?:[\\w*{}\\s,$]+from\\s*)?["']([^"']+)["']/g)].map(match => match[1]);
+  assert.deepEqual([...new Set(imports)], ['@typfolio/core']);
+  assert.equal(/react/i.test(await readFile('node_modules/@typfolio/dev-tools/dist/panel.d.ts', 'utf8')), false, 'the panel declarations must not depend on React');
+}
 await assert.rejects(import('@typfolio/core/dev-tools'), { code: 'ERR_PACKAGE_PATH_NOT_EXPORTED' });
 for (const name of Object.keys(devTools)) assert.equal(name in coreMain, false, name + ' leaked into the main entry');
 assert.equal(typeof createTemplateChecker, 'function');
@@ -148,7 +166,10 @@ try {
   assert.equal(inspection.title, 'Installed package works');
   assert.equal(inspection.language, 'en');
   assert.deepEqual(inspection.headings, []);
-  console.log('Packed @typfolio/dev-tools/pdf inspects that PDF: tagged, PDF/UA declared.');
+  assert.deepEqual(inspection.structure.map(page => page.elements.map(element => element.role)), [['Document']]);
+  assert.deepEqual(structureWarnings(inspection.structure), []);
+  assert.deepEqual(await checkStructure(result.bytes), []);
+  console.log('Packed @typfolio/dev-tools/pdf inspects that PDF: tagged, PDF/UA declared, no structure warnings.');
   // compile takes a document; a template without data is called without any.
   const fixed = defineTemplate({ files: { 'main.typ': '#set document(title: "Fixed")\\nFixed' } });
   assert.equal((await compiler.compile(fixed())).metadata.title, 'Fixed');
@@ -213,7 +234,12 @@ try {
   const given = defineTemplate({ files: source('#data.title'), schemaPath: 'report.schema.json' });
   const fromFile = await checker.check(given, { assets: { 'report.schema.json': new TextEncoder().encode(JSON.stringify(jsonSchema)) } });
   assert.equal(fromFile.ok, true);
-  console.log('Packed @typfolio/dev-tools checks a template against a schema in both sample modes.');
+  // structure reads each compiled mode's PDF: a table without header cells fails, as PDF/UA-1 alone does not.
+  const headerless = await checker.check(checked('= Rows\\n#table(columns: 2, [a], [b])'), { pdf: { standards: ['ua-1'] }, structure: checkStructure });
+  assert.deepEqual(headerless.results.map(result => [result.mode, result.ok, result.structure.map(warning => warning.kind)]), [
+    ['minimal', false, ['table-without-headers']], ['full', false, ['table-without-headers']],
+  ]);
+  console.log('Packed @typfolio/dev-tools checks a template against a schema in both sample modes, and its structure.');
 } finally { await checker.dispose(); }
 `);
 await writeFile(join(dir, 'consumer.ts'), `
@@ -253,7 +279,29 @@ import {
   type TemplateCheckResult,
   type TemplateChecker,
 } from '@typfolio/dev-tools';
-import { inspectPdf, type PdfFigure, type PdfFont, type PdfHeading, type PdfInspection } from '@typfolio/dev-tools/pdf';
+import {
+  checkStructure,
+  inspectPdf,
+  readStructure,
+  structureWarnings,
+  type PdfFigure,
+  type PdfFont,
+  type PdfHeading,
+  type PdfInspection,
+  type PdfStructureElement,
+  type PdfStructurePage,
+  type PdfStructureSource,
+  type PdfStructureWarning,
+  type PdfStructureWarningKind,
+} from '@typfolio/dev-tools/pdf';
+import {
+  mountStructureDevtools,
+  mountStructurePanel,
+  type MountedStructurePanel,
+  type StructureDevtoolsOptions,
+  type StructurePanelOptions,
+  type StructurePanelPdfJs,
+} from '@typfolio/dev-tools/panel';
 declare const wasm: WebAssembly.Module;
 declare const font: Uint8Array;
 declare const worker: Worker;
@@ -435,6 +483,33 @@ inspection.figures satisfies PdfFigure[];
 inspection.tables satisfies number;
 inspection.fonts satisfies PdfFont[];
 inspection.structureRoles satisfies Record<string, number>;
+inspection.structure satisfies PdfStructurePage[];
+inspection.structure[0]?.elements[0] satisfies PdfStructureElement | undefined;
+const warnings: PdfStructureWarning[] = structureWarnings(inspection.structure);
+warnings[0]?.kind satisfies PdfStructureWarningKind | undefined;
+(await checkStructure(result)) satisfies PdfStructureWarning[];
+declare const pdfDocument: PdfStructureSource;
+(await readStructure(pdfDocument)) satisfies PdfStructurePage[];
+const structured: TemplateCheckOptions = { structure: checkStructure };
+void structured;
+// @ts-expect-error structure is the function that reads the PDF, not a flag
+const flagged: TemplateCheckOptions = { structure: true };
+void flagged;
+// The structure panel takes the page's pdf.js and the PDF's bytes.
+declare const panelPdfjs: StructurePanelPdfJs;
+declare const panelElement: HTMLElement;
+const embedded: MountedStructurePanel<StructurePanelOptions> = mountStructurePanel(panelElement, { pdfjs: panelPdfjs, theme: 'dark' });
+embedded.update({ bytes: result });
+const devtoolsOptions: StructureDevtoolsOptions = { pdfjs: panelPdfjs, position: 'right', buttonPosition: 'top-left', initialIsOpen: true };
+const devtoolsPanel: MountedStructurePanel<StructureDevtoolsOptions> = mountStructureDevtools(devtoolsOptions);
+devtoolsPanel.update({ bytes: undefined });
+devtoolsPanel.unmount();
+// @ts-expect-error pdfjs is required
+mountStructureDevtools({});
+// @ts-expect-error a side of the page
+mountStructureDevtools({ pdfjs: panelPdfjs, position: 'top-left' });
+// @ts-expect-error a corner of the page
+mountStructureDevtools({ pdfjs: panelPdfjs, buttonPosition: 'top' });
 const lazy: LazyCompiler = createLazyCompiler({ wasm, fonts: [font] });
 lazy satisfies PdfClient;
 await lazy.compile(rowsTemplate(rowsInput), { pdf: { standards: ['ua-1'] } });
