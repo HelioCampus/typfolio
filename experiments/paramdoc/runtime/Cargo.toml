@@ -12,8 +12,6 @@ crate-type = ["rlib"]
 paramdoc-ir = { path = "../ir" }
 pdf-writer = "0.15"
 sha2.workspace = true
-ttf-parser = "0.25"
-subsetter = "0.2"
 flate2 = "1"
 serde.workspace = true
 serde_json.workspace = true

@@ -18,53 +18,57 @@ use pdf_writer::types::UnicodeCmap;
 use pdf_writer::{Content, Filter, Finish, Name, Pdf, Rect, Ref, Str, TextStr};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use subsetter::GlyphRemapper;
-use ttf_parser::{Face, GlyphId};
 
 use paramdoc_ir as ir;
 
 // ---------------------------------------------------------------------------------------------------------
 // Fonts
 
+/// A font as exported: the subset program's bytes plus the metrics, advances and character map from the
+/// document. Nothing is parsed from the font file.
 struct LoadedFont<'a> {
-    face: Face<'a>,
     data: &'a [u8],
+    name: String,
+    program: String,
     units_per_em: f64,
-    /// Glyph id to the character it came from, for the ToUnicode map.
-    reverse_cmap: HashMap<u16, char>,
+    ascender: f64,
+    descender: f64,
+    cap_height: f64,
+    bbox: [f64; 4],
+    italic_angle: f64,
+    italic: bool,
+    advances: Vec<f64>,
+    cmap: HashMap<char, u16>,
+    /// Glyph id to the characters it stands for, for the ToUnicode map.
+    reverse: HashMap<u16, String>,
 }
 
 impl LoadedFont<'_> {
-    fn advance(&self, glyph: u16) -> f64 {
-        self.face.glyph_hor_advance(GlyphId(glyph)).unwrap_or(0) as f64 / self.units_per_em
-    }
-    /// Glyph for a character, or `None` when the font has no glyph for it.
-    fn glyph(&self, c: char) -> Option<u16> {
-        self.face.glyph_index(c).map(|g| g.0)
-    }
+    /// Advance of a glyph in em.
+    fn advance(&self, glyph: u16) -> f64 { self.advances.get(glyph as usize).copied().unwrap_or(0.0) / self.units_per_em }
+    /// Glyph for a character, or `None` when it is not in the exported repertoire.
+    fn glyph(&self, c: char) -> Option<u16> { self.cmap.get(&c).copied() }
 }
 
-/// Parses the font files in the order the document lists them, checking their hashes.
+/// Takes the font files in the order the document lists them, checking their hashes.
 fn load_fonts<'a>(doc: &ir::Document, data: &[&'a [u8]]) -> Result<Vec<LoadedFont<'a>>> {
     if data.len() != doc.fonts.len() { bail!("the document lists {} font(s) but {} were supplied", doc.fonts.len(), data.len()); }
     let mut fonts = Vec::new();
     for (font, bytes) in doc.fonts.iter().zip(data) {
         let sha = format!("{:x}", Sha256::digest(bytes));
         if sha != font.sha256 { bail!("{}: sha256 {sha} does not match the document's {}", font.file, font.sha256); }
-        let face = Face::parse(bytes, font.index).map_err(|e| anyhow!("{}: {e}", font.file))?;
-        let units_per_em = face.units_per_em() as f64;
-        let mut reverse_cmap = HashMap::new();
-        if let Some(cmap) = face.tables().cmap {
-            for subtable in cmap.subtables {
-                if !subtable.is_unicode() { continue; }
-                subtable.codepoints(|codepoint| {
-                    if let Some(c) = char::from_u32(codepoint) && let Some(glyph) = subtable.glyph_index(codepoint) {
-                        reverse_cmap.entry(glyph.0).or_insert(c);
-                    }
-                });
-            }
+        if font.advances.is_empty() || font.units_per_em <= 0.0 { bail!("{}: the document carries no font metrics; export it again", font.file); }
+        let mut cmap = HashMap::new();
+        let mut reverse: HashMap<u16, String> = HashMap::new();
+        for (text, gid) in &font.cmap {
+            if let Some(c) = text.chars().next() { cmap.insert(c, *gid); }
+            reverse.entry(*gid).or_insert_with(|| text.clone());
         }
-        fonts.push(LoadedFont { face, data: bytes, units_per_em, reverse_cmap });
+        fonts.push(LoadedFont {
+            data: bytes, name: format!("PARAMD+{}", font.file.replace(|c: char| !c.is_ascii_alphanumeric(), "")), program: font.program.clone(),
+            units_per_em: font.units_per_em, ascender: font.ascender, descender: font.descender, cap_height: font.cap_height,
+            bbox: font.bbox, italic_angle: font.italic_angle, italic: font.italic, advances: font.advances.clone(), cmap, reverse,
+        });
     }
     Ok(fonts)
 }
@@ -100,7 +104,7 @@ fn fill_slot(slot: &ir::Slot, text: &str, font: &LoadedFont, trace_name: String)
         let mut glyphs = Vec::new();
         let mut width = 0.0;
         for c in text.chars() {
-            let id = font.glyph(c).ok_or_else(|| anyhow!("slot `{trace_name}`: the font has no glyph for {c:?} (U+{:04X})", c as u32))?;
+            let id = font.glyph(c).ok_or_else(|| anyhow!("slot `{trace_name}`: {c:?} (U+{:04X}) is not in the slot's repertoire; declare it with `charset:` in the template", c as u32))?;
             let advance = font.advance(id) * size;
             glyphs.push(ir::Glyph { id, x_advance: advance, x_offset: 0.0, y_offset: 0.0, chars: None });
             width += advance;
@@ -345,8 +349,6 @@ fn compose_flow(flow: &ir::Flow, data: &serde_json::Value, fonts: &[LoadedFont],
 
 struct Writer<'a> {
     fonts: &'a [LoadedFont<'a>],
-    /// Original glyph id to subset glyph id, per font.
-    remaps: &'a [HashMap<u16, u16>],
     warned_images: bool,
     structure: &'a mut Structure,
     /// The page being written and, per marked-content id on it, the node it belongs to (the parent tree).
@@ -491,8 +493,7 @@ impl Writer<'_> {
             if glyph.y_offset != 0.0 { eprintln!("warning: vertical glyph offsets are ignored"); }
             let shift = pending + glyph.x_offset;
             if shift.abs() > 1e-6 { items.adjust((-shift * 1000.0 / size) as f32); }
-            let subset_id = self.remaps[font].get(&glyph.id).copied().unwrap_or(0);
-            items.show(Str(&subset_id.to_be_bytes()));
+            items.show(Str(&glyph.id.to_be_bytes()));
             let natural = loaded.advance(glyph.id) * size;
             pending = glyph.x_advance - glyph.x_offset - natural;
         }
@@ -549,48 +550,26 @@ fn write_pdf(doc: &ir::Document, fonts: &[LoadedFont], pages: &[Composed], struc
     meta.pair(Name(b"Subtype"), Name(b"XML"));
     meta.finish();
 
-    // Glyphs actually used, per font: the embedded font programs are subset to them and remapped.
+    // Glyphs actually used, per font, for the ToUnicode maps.
     let mut used: Vec<BTreeSet<u16>> = vec![BTreeSet::new(); fonts.len()];
     let mut multi: HashMap<(usize, u16), String> = HashMap::new();
     for page in pages {
         collect_glyphs(&page.items, &mut used, &mut multi);
         for fill in &page.fills { collect_glyphs(std::slice::from_ref(&fill.item), &mut used, &mut multi); }
     }
-    let mut remaps: Vec<HashMap<u16, u16>> = Vec::new();
 
     for (i, font) in fonts.iter().enumerate() {
         let cid = alloc();
         let descriptor = alloc();
         let file = alloc();
         let to_unicode = alloc();
-        let name = format!("PARAMD+{}", doc.fonts[i].file.replace(|c: char| !c.is_ascii_alphanumeric(), ""));
-        let gids: Vec<u16> = used[i].iter().copied().collect();
-        let remapper = GlyphRemapper::new_from_glyphs(&gids);
-        let subset = subsetter::subset(font.data, doc.fonts[i].index, &remapper).map_err(|e| anyhow!("subsetting {}: {e:?}", doc.fonts[i].file))?;
-        // The subsetter returns a bare CFF table for CFF-flavoured fonts and a TrueType file otherwise.
-        let (truetype, file_subtype) = match subset.get(..4) {
-            Some(b"OTTO") => (false, Some("OpenType")),
-            Some([0, 1, 0, 0]) | Some(b"true") => (true, None),
-            _ => (false, Some("CIDFontType0C")),
-        };
-        let mut widths = vec![0f32; remapper.num_gids() as usize];
-        let mut map = HashMap::new();
-        for old in &gids {
-            let new = remapper.get(*old).ok_or_else(|| anyhow!("glyph {old} missing from the subset"))?;
-            map.insert(*old, new);
-            widths[new as usize] = (font.advance(*old) * 1000.0) as f32;
-        }
-        widths[0] = (font.advance(0) * 1000.0) as f32;
-        remaps.push(map);
-
+        let name = font.name.as_str();
+        let truetype = font.program == "truetype";
         pdf.type0_font(font_refs[i]).base_font(Name(name.as_bytes())).encoding_predefined(Name(b"Identity-H")).descendant_font(cid).to_unicode(to_unicode);
         let mut cmap = UnicodeCmap::new(Name(b"Custom"), SystemInfo { registry: Str(b"Adobe"), ordering: Str(b"UCS"), supplement: 0 });
-        // Sorted so the bytes are reproducible: the remap is a hash map.
-        let mut pairs: Vec<(u16, u16)> = remaps.last().expect("pushed above").iter().map(|(o, n)| (*n, *o)).collect();
-        pairs.sort_unstable();
-        for (new, old) in pairs {
-            if let Some(chars) = multi.get(&(i, old)) { cmap.pair_with_multiple(new, chars.chars()); }
-            else if let Some(c) = font.reverse_cmap.get(&old) { cmap.pair(new, *c); }
+        for gid in &used[i] {
+            if let Some(chars) = multi.get(&(i, *gid)) { cmap.pair_with_multiple(*gid, chars.chars()); }
+            else if let Some(chars) = font.reverse.get(gid) { cmap.pair_with_multiple(*gid, chars.chars()); }
         }
         let cmap_bytes = cmap.finish();
         pdf.stream(to_unicode, &deflate(&cmap_bytes)).filter(Filter::FlateDecode);
@@ -602,32 +581,32 @@ fn write_pdf(doc: &ir::Document, fonts: &[LoadedFont], pages: &[Composed], struc
             .font_descriptor(descriptor)
             .default_width(0.0);
         if truetype { cid_font.cid_to_gid_map_predefined(Name(b"Identity")); }
-        cid_font.widths().consecutive(0, widths.iter().copied());
+        cid_font.widths().consecutive(0, font.advances.iter().map(|a| (a * scale) as f32));
         cid_font.finish();
-        let bbox = font.face.global_bounding_box();
         let mut flags = FontFlags::SERIF | FontFlags::NON_SYMBOLIC;
-        if font.face.is_italic() { flags |= FontFlags::ITALIC; }
+        if font.italic { flags |= FontFlags::ITALIC; }
         let mut desc = pdf.font_descriptor(descriptor);
         desc.name(Name(name.as_bytes())).flags(flags)
-            .bbox(Rect::new(bbox.x_min as f32 * scale as f32, bbox.y_min as f32 * scale as f32, bbox.x_max as f32 * scale as f32, bbox.y_max as f32 * scale as f32))
-            .italic_angle(font.face.italic_angle())
-            .ascent(font.face.ascender() as f32 * scale as f32)
-            .descent(font.face.descender() as f32 * scale as f32)
-            .cap_height(font.face.capital_height().unwrap_or(font.face.ascender()) as f32 * scale as f32)
+            .bbox(Rect::new((font.bbox[0] * scale) as f32, (font.bbox[1] * scale) as f32, (font.bbox[2] * scale) as f32, (font.bbox[3] * scale) as f32))
+            .italic_angle(font.italic_angle as f32)
+            .ascent((font.ascender * scale) as f32)
+            .descent((font.descender * scale) as f32)
+            .cap_height((font.cap_height * scale) as f32)
             .stem_v(80.0);
         if truetype { desc.font_file2(file); } else { desc.font_file3(file); }
         desc.finish();
-        let compressed = deflate(&subset);
+        let compressed = deflate(font.data);
         let mut stream = pdf.stream(file, &compressed);
         stream.filter(Filter::FlateDecode);
-        match file_subtype {
-            Some(subtype) => { stream.pair(Name(b"Subtype"), Name(subtype.as_bytes())); }
-            None => { stream.pair(Name(b"Length1"), subset.len() as i32); }
+        match font.program.as_str() {
+            "truetype" => { stream.pair(Name(b"Length1"), font.data.len() as i32); }
+            "opentype-cff" => { stream.pair(Name(b"Subtype"), Name(b"OpenType")); }
+            _ => { stream.pair(Name(b"Subtype"), Name(b"CIDFontType0C")); }
         }
         stream.finish();
     }
 
-    let mut writer = Writer { fonts, remaps: &remaps, warned_images: false, structure, page: 0, parents: Vec::new(), open: None };
+    let mut writer = Writer { fonts, warned_images: false, structure, page: 0, parents: Vec::new(), open: None };
     let mut page_parents: Vec<Vec<usize>> = Vec::new();
     for (index, page) in pages.iter().enumerate() {
         writer.page = index;

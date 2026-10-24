@@ -1,12 +1,13 @@
 // paramdoc runtime in TypeScript: fills an exported parametric document with data and writes a tagged PDF.
 // A port of ../runtime/src/lib.rs with the same contract: no typesetter, no shaper, slots filled through the
 // font's cmap and advances, flow documents composed page by page, structure tree assembled per document.
-// Differences from the Rust runtime: fonts are embedded whole (no subsetting) and compressed once per runtime
-// with the platform's CompressionStream (so creation is asynchronous); the small per-document streams are
-// written uncompressed, because CompressionStream costs milliseconds per call in browsers. Erasable TypeScript only, so Node can run it
+// Fonts arrive subset by the exporter with their metrics, advances and character map in the document, so no
+// font file is parsed here. The font programs are compressed once per runtime with the platform's
+// CompressionStream (so creation is asynchronous); the small per-document streams are written uncompressed,
+// because CompressionStream costs milliseconds per call in browsers. Erasable TypeScript only, so Node can run it
 // with `--experimental-strip-types` and a bundler can ship it to a browser unchanged.
 
-export const IR_VERSION = 3;
+export const IR_VERSION = 4;
 
 // ---------------------------------------------------------------------------------------------------------
 // IR (mirrors ../ir/src/lib.rs; serde writes `None` as null unless skipped)
@@ -40,107 +41,45 @@ export interface Flow {
   blocks: Block[]; bands: Band[]; overlays: Fragment[];
 }
 export interface Page { width: number; height: number; items: Item[]; nodes: Node[] }
-export interface FontRef { family: string; index: number; sha256: string; file: string }
+export interface FontRef {
+  family: string; index: number; sha256: string; source_sha256: string; file: string;
+  /** "cff" (a bare CFF table), "opentype-cff" or "truetype". */
+  program: string;
+  units_per_em: number; ascender: number; descender: number; cap_height: number; bbox: [number, number, number, number];
+  italic_angle: number; italic: boolean;
+  /** Advance per glyph id, in font units. */
+  advances: number[];
+  /** Character to glyph id, for the slot repertoire and the static text. */
+  cmap: Record<string, number>;
+}
 export interface Document { version: number; title?: string | null; lang?: string | null; fonts: FontRef[]; pages: Page[]; slots: Slot[]; flow?: Flow | null }
 
 // ---------------------------------------------------------------------------------------------------------
-// Fonts: the OpenType tables the runtime needs
-
-const TAG = (s: string): number => (s.charCodeAt(0) << 24 | s.charCodeAt(1) << 16 | s.charCodeAt(2) << 8 | s.charCodeAt(3)) >>> 0;
+// Fonts: as exported, nothing is parsed from the file
 
 export class Font {
-  readonly unitsPerEm: number;
-  readonly numGlyphs: number;
-  readonly ascender: number;
-  readonly descender: number;
-  readonly capHeight: number;
-  readonly bbox: [number, number, number, number];
-  readonly italicAngle: number;
-  readonly italic: boolean;
-  readonly cff: boolean;
-  private readonly advances: Uint16Array;
-  private readonly cmap = new Map<number, number>();
-  readonly reverseCmap = new Map<number, string>();
   readonly data: Uint8Array;
+  readonly meta: FontRef;
+  readonly name: string;
+  private readonly cmap = new Map<string, number>();
+  /** Glyph id to the characters it stands for, for the ToUnicode map. */
+  readonly reverseCmap = new Map<number, string>();
 
-  constructor(data: Uint8Array) {
+  constructor(meta: FontRef, data: Uint8Array) {
+    if (!meta.advances?.length || !(meta.units_per_em > 0)) throw new Error(`${meta.file}: the document carries no font metrics; export it again`);
+    this.meta = meta;
     this.data = data;
-    const view = new DataView(data.buffer, data.byteOffset, data.byteLength);
-    const tables = new Map<number, [number, number]>();
-    const count = view.getUint16(4);
-    for (let i = 0; i < count; i++) {
-      const at = 12 + i * 16;
-      tables.set(view.getUint32(at), [view.getUint32(at + 8), view.getUint32(at + 12)]);
-    }
-    const table = (name: string): [number, number] | undefined => tables.get(TAG(name));
-    const head = table('head'), hhea = table('hhea'), maxp = table('maxp'), hmtx = table('hmtx'), cmap = table('cmap');
-    if (!head || !hhea || !maxp || !hmtx || !cmap) throw new Error('font lacks a required table');
-    this.unitsPerEm = view.getUint16(head[0] + 18);
-    this.bbox = [view.getInt16(head[0] + 36), view.getInt16(head[0] + 38), view.getInt16(head[0] + 40), view.getInt16(head[0] + 42)];
-    this.ascender = view.getInt16(hhea[0] + 4);
-    this.descender = view.getInt16(hhea[0] + 6);
-    this.numGlyphs = view.getUint16(maxp[0] + 4);
-    const metrics = view.getUint16(hhea[0] + 34);
-    this.advances = new Uint16Array(this.numGlyphs);
-    for (let g = 0; g < this.numGlyphs; g++) this.advances[g] = view.getUint16(hmtx[0] + Math.min(g, metrics - 1) * 4);
-    const os2 = table('OS/2');
-    this.italic = os2 ? (view.getUint16(os2[0] + 62) & 1) === 1 : false;
-    this.capHeight = os2 && view.getUint16(os2[0]) >= 2 ? view.getInt16(os2[0] + 88) : this.ascender;
-    const post = table('post');
-    this.italicAngle = post ? view.getInt32(post[0] + 4) / 65536 : 0;
-    this.cff = tables.has(TAG('CFF ')) || tables.has(TAG('CFF2'));
-    this.parseCmap(view, cmap[0]);
-  }
-
-  private parseCmap(view: DataView, base: number): void {
-    const n = view.getUint16(base + 2);
-    let best: { score: number; offset: number } | undefined;
-    for (let i = 0; i < n; i++) {
-      const platform = view.getUint16(base + 4 + i * 8), encoding = view.getUint16(base + 6 + i * 8), offset = view.getUint32(base + 8 + i * 8);
-      const format = view.getUint16(base + offset);
-      const unicode = platform === 0 || (platform === 3 && (encoding === 1 || encoding === 10));
-      if (!unicode || (format !== 4 && format !== 12)) continue;
-      const score = format === 12 ? 2 : 1;
-      if (!best || score > best.score) best = { score, offset: base + offset };
-    }
-    if (!best) throw new Error('font has no Unicode cmap subtable of format 4 or 12');
-    const at = best.offset;
-    const add = (cp: number, gid: number) => {
-      if (gid === 0 || cp > 0x10ffff) return;
-      this.cmap.set(cp, gid);
-      if (!this.reverseCmap.has(gid)) this.reverseCmap.set(gid, String.fromCodePoint(cp));
-    };
-    if (view.getUint16(at) === 4) {
-      const segX2 = view.getUint16(at + 6), segs = segX2 / 2;
-      const ends = at + 14, starts = ends + segX2 + 2, deltas = starts + segX2, ranges = deltas + segX2;
-      for (let s = 0; s < segs; s++) {
-        const end = view.getUint16(ends + s * 2), start = view.getUint16(starts + s * 2);
-        const delta = view.getInt16(deltas + s * 2), rangeOffset = view.getUint16(ranges + s * 2);
-        if (start === 0xffff) continue;
-        for (let c = start; c <= end; c++) {
-          let gid: number;
-          if (rangeOffset === 0) gid = (c + delta) & 0xffff;
-          else {
-            const idx = ranges + s * 2 + rangeOffset + (c - start) * 2;
-            if (idx + 2 > view.byteLength) continue;
-            gid = view.getUint16(idx);
-            if (gid !== 0) gid = (gid + delta) & 0xffff;
-          }
-          add(c, gid);
-        }
-      }
-    } else {
-      const groups = view.getUint32(at + 12);
-      for (let g = 0; g < groups; g++) {
-        const start = view.getUint32(at + 16 + g * 12), end = view.getUint32(at + 20 + g * 12), gid = view.getUint32(at + 24 + g * 12);
-        for (let c = start; c <= end; c++) add(c, gid + (c - start));
-      }
+    this.name = 'PARAMD+' + meta.file.replace(/[^A-Za-z0-9]/g, '');
+    for (const [text, gid] of Object.entries(meta.cmap)) {
+      this.cmap.set(text, gid);
+      if (!this.reverseCmap.has(gid)) this.reverseCmap.set(gid, text);
     }
   }
 
   /** Advance of a glyph in em. */
-  advance(gid: number): number { return (this.advances[gid] ?? 0) / this.unitsPerEm; }
-  glyph(c: string): number | undefined { return this.cmap.get(c.codePointAt(0)!); }
+  advance(gid: number): number { return (this.meta.advances[gid] ?? 0) / this.meta.units_per_em; }
+  /** Glyph for a character, or undefined when it is not in the exported repertoire. */
+  glyph(c: string): number | undefined { return this.cmap.get(c); }
 }
 
 // ---------------------------------------------------------------------------------------------------------
@@ -164,7 +103,7 @@ function fillSlot(slot: Slot, text: string, font: Font, traceName: string): Fill
     let width = 0;
     for (const c of s) {
       const id = font.glyph(c);
-      if (id === undefined) throw new Error(`slot \`${traceName}\`: the font has no glyph for ${JSON.stringify(c)} (U+${c.codePointAt(0)!.toString(16).toUpperCase().padStart(4, '0')})`);
+      if (id === undefined) throw new Error(`slot \`${traceName}\`: ${JSON.stringify(c)} (U+${c.codePointAt(0)!.toString(16).toUpperCase().padStart(4, '0')}) is not in the slot's repertoire; declare it with \`charset:\` in the template`);
       const advance = font.advance(id) * size;
       glyphs.push({ id, x_advance: advance, x_offset: 0, y_offset: 0 });
       width += advance;
@@ -554,17 +493,18 @@ async function writePdf(doc: Document, fonts: Font[], fontStreams: Uint8Array[],
   const multi = new Map<string, string>();
   for (const page of pages) { usedGlyphs(page.items, used, multi); usedGlyphs(page.fills.map(f => f.item), used, multi); }
   for (let i = 0; i < fonts.length; i++) {
-    const font = fonts[i]!;
+    const font = fonts[i]!, meta = font.meta;
     const cid = pdf.alloc(), descriptor = pdf.alloc(), file = pdf.alloc(), toUnicode = pdf.alloc();
-    const name = 'PARAMD-' + doc.fonts[i]!.file.replace(/[^A-Za-z0-9]/g, '');
-    const scale = 1000 / font.unitsPerEm;
+    const name = font.name;
+    const truetype = meta.program === 'truetype';
+    const scale = 1000 / meta.units_per_em;
     pdf.set(fontRefs[i]!, `<< /Type /Font /Subtype /Type0 /BaseFont /${name} /Encoding /Identity-H /DescendantFonts [${cid} 0 R] /ToUnicode ${toUnicode} 0 R >>`);
-    const widths: string[] = [];
-    for (let g = 0; g < font.numGlyphs; g++) widths.push(num(Math.round(font.advance(g) * 1000 * 1000) / 1000));
-    pdf.set(cid, `<< /Type /Font /Subtype /${font.cff ? 'CIDFontType0' : 'CIDFontType2'} /BaseFont /${name} /CIDSystemInfo << /Registry (Adobe) /Ordering (Identity) /Supplement 0 >> /FontDescriptor ${descriptor} 0 R /DW 0 /W [0 [${widths.join(' ')}]]${font.cff ? '' : ' /CIDToGIDMap /Identity'} >>`);
-    const flags = 2 | 32 | (font.italic ? 64 : 0);
-    pdf.set(descriptor, `<< /Type /FontDescriptor /FontName /${name} /Flags ${flags} /FontBBox [${font.bbox.map(v => num(v * scale)).join(' ')}] /ItalicAngle ${num(font.italicAngle)} /Ascent ${num(font.ascender * scale)} /Descent ${num(font.descender * scale)} /CapHeight ${num(font.capHeight * scale)} /StemV 80 /${font.cff ? 'FontFile3' : 'FontFile2'} ${file} 0 R >>`);
-    pdf.setStream(file, `/Filter /FlateDecode${font.cff ? ' /Subtype /OpenType' : ` /Length1 ${font.data.length}`}`, fontStreams[i]!);
+    const widths = meta.advances.map(a => num(Math.round(a * scale * 1000) / 1000));
+    pdf.set(cid, `<< /Type /Font /Subtype /${truetype ? 'CIDFontType2' : 'CIDFontType0'} /BaseFont /${name} /CIDSystemInfo << /Registry (Adobe) /Ordering (Identity) /Supplement 0 >> /FontDescriptor ${descriptor} 0 R /DW 0 /W [0 [${widths.join(' ')}]]${truetype ? ' /CIDToGIDMap /Identity' : ''} >>`);
+    const flags = 2 | 32 | (meta.italic ? 64 : 0);
+    pdf.set(descriptor, `<< /Type /FontDescriptor /FontName /${name} /Flags ${flags} /FontBBox [${meta.bbox.map(v => num(v * scale)).join(' ')}] /ItalicAngle ${num(meta.italic_angle)} /Ascent ${num(meta.ascender * scale)} /Descent ${num(meta.descender * scale)} /CapHeight ${num(meta.cap_height * scale)} /StemV 80 /${truetype ? 'FontFile2' : 'FontFile3'} ${file} 0 R >>`);
+    const fileDict = truetype ? ` /Length1 ${font.data.length}` : meta.program === 'opentype-cff' ? ' /Subtype /OpenType' : ' /Subtype /CIDFontType0C';
+    pdf.setStream(file, `/Filter /FlateDecode${fileDict}`, fontStreams[i]!);
     const entries: [number, string][] = [];
     for (const gid of [...used[i]!].sort((a, b) => a - b)) {
       const chars = multi.get(`${i}:${gid}`) ?? font.reverseCmap.get(gid);
@@ -634,7 +574,7 @@ export class Runtime {
     for (let i = 0; i < fonts.length; i++) {
       const sha = await sha256Hex(fonts[i]!);
       if (sha !== doc.fonts[i]!.sha256) throw new Error(`${doc.fonts[i]!.file}: sha256 ${sha} does not match the document's ${doc.fonts[i]!.sha256}`);
-      parsed.push(new Font(fonts[i]!));
+      parsed.push(new Font(doc.fonts[i]!, fonts[i]!));
     }
     return new Runtime(doc, parsed, await Promise.all(parsed.map(f => deflate(f.data))));
   }

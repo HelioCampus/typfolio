@@ -3,12 +3,14 @@
 //!
 //! Usage: paramdoc-export <fixture-dir> [--data f] [--fonts d] [--out d] [--fuzz N] [--seed S] [--reference data.json]
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, anyhow, bail};
 use sha2::{Digest, Sha256};
+use subsetter::GlyphRemapper;
+use ttf_parser::GlyphId;
 use typst::diag::{FileError, FileResult, SourceDiagnostic, Warned};
 use typst::foundations::{Bytes, Datetime, Duration, Label, Smart, StyleChain, Value};
 use typst::introspection::{Location, MetadataElem, Tag};
@@ -272,7 +274,7 @@ fn localize(items: &mut [ir::Item], slots: &mut [ir::Slot], nodes: &[ir::Node]) 
 // ---------------------------------------------------------------------------------------------------------
 // Tags found in the frames
 
-struct SlotMeta { name: String, align: String, overflow: String, max_length: Option<u32>, descent: f64 }
+struct SlotMeta { name: String, align: String, overflow: String, max_length: Option<u32>, descent: f64, charset: Option<String> }
 struct TextStyle { font: usize, size: f64, fill: ir::Color, pen_x: f64 }
 struct SlotRecord { meta: SlotMeta, page: usize, rect: Rect, style: Option<TextStyle>, sample: String, baselines: Vec<f64>, glyphs: Vec<(u16, f64)>, node: Option<usize> }
 struct BandTag { name: String, repeat_on_break: bool, page: usize, rect: Rect }
@@ -287,7 +289,7 @@ struct Tags { slots: Vec<SlotRecord>, bands: Vec<BandTag>, overlays: Vec<Overlay
 pub struct ReferenceGlyph { pub id: u16, pub x: f64 }
 
 #[derive(serde::Serialize)]
-pub struct ReferenceSlot { pub name: String, pub baseline: f64, pub size: f64, pub glyphs: Vec<ReferenceGlyph> }
+pub struct ReferenceSlot { pub name: String, pub baseline: f64, pub size: f64, pub glyphs: Vec<ReferenceGlyph>, pub font: String }
 
 /// A top-level piece of the sample page after flattening: a leaf item, or a clipped/transformed group.
 struct Atom { rect: Rect, item: ir::Item, kind: AtomKind }
@@ -421,7 +423,7 @@ impl<'a> Exporter<'a> {
             .find(|f| f.font.data().as_ptr() == font.data().as_ptr() && f.font.index() == font.index())
             .ok_or_else(|| anyhow!("text uses a font that was not loaded from the fonts directory: {}", font.info().family))?;
         let id = self.ir_fonts.len();
-        self.ir_fonts.push(ir::Font { family: font.info().family.to_string(), index: font.index(), sha256: loaded.sha256.clone(), file: loaded.file.clone() });
+        self.ir_fonts.push(ir::Font { family: font.info().family.to_string(), index: font.index(), sha256: loaded.sha256.clone(), source_sha256: loaded.sha256.clone(), file: loaded.file.clone(), ..Default::default() });
         self.ir_font_of.insert(key, id);
         Ok(id)
     }
@@ -454,7 +456,8 @@ impl<'a> Exporter<'a> {
             Ok(Value::None) | Err(_) => None,
             other => bail!("slot metadata `max-length` is not an integer: {other:?}"),
         };
-        Ok(SlotMeta { name: string("name")?, align: string("align")?, overflow: string("overflow")?, max_length, descent: dict_number(dict, "descent")? })
+        let charset = match dict.get("charset") { Ok(Value::Str(s)) => Some(s.as_str().to_string()), _ => None };
+        Ok(SlotMeta { name: string("name")?, align: string("align")?, overflow: string("overflow")?, max_length, descent: dict_number(dict, "descent")?, charset })
     }
 
     fn rect_of(&self, t: Transform, size: Size) -> Result<Rect> {
@@ -617,11 +620,13 @@ impl<'a> Exporter<'a> {
             reference.push(ReferenceSlot {
                 name: s.meta.name.clone(), baseline: s.baselines.last().copied().unwrap_or(baseline), size: style.size,
                 glyphs: s.glyphs.iter().map(|(id, x)| ReferenceGlyph { id: *id, x: *x }).collect(),
+                font: self.ir_fonts.get(style.font).map(|f| f.source_sha256.clone()).unwrap_or_default(),
             });
             slots.push(ir::Slot {
                 name: s.meta.name, page: s.page, x: s.rect.x, y: s.rect.y, width: s.rect.w, height: s.rect.h,
                 baseline, descent: s.meta.descent, pen_x: style.pen_x, font: style.font, size: style.size, fill: style.fill,
                 align: s.meta.align, overflow: s.meta.overflow, max_length: s.meta.max_length, sample: s.sample, node: s.node,
+                charset: s.meta.charset,
             });
         }
         Ok((slots, unstyled, reference))
@@ -795,6 +800,119 @@ fn static_fragment(atoms: &[&Atom], top: f64, height: f64, width: f64, nodes: &[
 struct Exported { doc: ir::Document, unstyled: Vec<String>, reference: Vec<ReferenceSlot> }
 
 // ---------------------------------------------------------------------------------------------------------
+// Export-time font subsetting
+
+/// What a slot may contain unless it declares a `charset`: printable ASCII, Latin-1 and common typography.
+const DEFAULT_REPERTOIRE: &str = concat!(
+    " !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~",
+    "\u{a0}¡¢£¤¥¦§¨©ª«¬\u{ad}®¯°±²³´µ¶·¸¹º»¼½¾¿ÀÁÂÃÄÅÆÇÈÉÊËÌÍÎÏÐÑÒÓÔÕÖ×ØÙÚÛÜÝÞßàáâãäåæçèéêëìíîïðñòóôõö÷øùúûüýþÿ",
+    "–—‘’‚“”„•…€‹›™−",
+);
+
+struct SubsetFont { file: String, bytes: Vec<u8>, map: HashMap<u16, u16>, source_sha256: String }
+
+fn each_items_mut(doc: &mut ir::Document, f: &mut dyn FnMut(&mut Vec<ir::Item>)) {
+    for page in &mut doc.pages { f(&mut page.items); }
+    if let Some(flow) = &mut doc.flow {
+        for block in &mut flow.blocks { if let ir::Block::Static { fragment } = block { f(&mut fragment.items); } }
+        for band in &mut flow.bands { f(&mut band.fragment.items); }
+        for overlay in &mut flow.overlays { f(&mut overlay.items); }
+    }
+}
+
+fn each_slot(doc: &ir::Document, f: &mut dyn FnMut(&ir::Slot)) {
+    for slot in &doc.slots { f(slot); }
+    if let Some(flow) = &doc.flow {
+        for block in &flow.blocks { if let ir::Block::Static { fragment } = block { for slot in &fragment.slots { f(slot); } } }
+        for band in &flow.bands { for slot in &band.fragment.slots { f(slot); } }
+        for overlay in &flow.overlays { for slot in &overlay.slots { f(slot); } }
+    }
+}
+
+fn used_glyphs(items: &[ir::Item], used: &mut [BTreeSet<u16>]) {
+    for item in items {
+        match item {
+            ir::Item::Group { items, .. } => used_glyphs(items, used),
+            ir::Item::Text { font, glyphs, .. } => used[*font].extend(glyphs.iter().map(|g| g.id)),
+            _ => {}
+        }
+    }
+}
+
+fn rewrite_glyphs(items: &mut [ir::Item], maps: &[HashMap<u16, u16>]) {
+    for item in items {
+        match item {
+            ir::Item::Group { items, .. } => rewrite_glyphs(items, maps),
+            ir::Item::Text { font, glyphs, .. } => for g in glyphs { g.id = maps.get(*font).and_then(|m| m.get(&g.id)).copied().unwrap_or(g.id); },
+            _ => {}
+        }
+    }
+}
+
+/// Subsets every font to the glyphs the static items use plus the glyphs of each slot's repertoire, rewrites
+/// the document's glyph ids to the subset, and fills the font records with the metrics, advances and
+/// character map the runtimes read instead of parsing fonts.
+fn subset_fonts(doc: &mut ir::Document, loaded: &[LoadedFont]) -> Result<Vec<SubsetFont>> {
+    let count = doc.fonts.len();
+    let mut used: Vec<BTreeSet<u16>> = vec![BTreeSet::new(); count];
+    each_items_mut(doc, &mut |items| used_glyphs(items, &mut used));
+    let mut repertoire: Vec<BTreeSet<char>> = vec![BTreeSet::new(); count];
+    each_slot(doc, &mut |slot| {
+        let set = repertoire.get_mut(slot.font).expect("slot font index");
+        set.extend(slot.charset.as_deref().unwrap_or(DEFAULT_REPERTOIRE).chars());
+        set.insert('…'); // the ellipsis policy
+    });
+    let mut outputs = Vec::new();
+    for (i, font) in doc.fonts.iter_mut().enumerate() {
+        let source = loaded.iter().find(|l| l.sha256 == font.source_sha256 && l.font.index() == font.index)
+            .ok_or_else(|| anyhow!("font {} is not among the loaded fonts", font.file))?;
+        let data: &[u8] = source.font.data();
+        let face = ttf_parser::Face::parse(data, font.index).map_err(|e| anyhow!("parsing {}: {e}", font.file))?;
+        // Characters of the static glyphs, so ToUnicode covers them too.
+        let mut reverse: HashMap<u16, char> = HashMap::new();
+        if let Some(cmap) = face.tables().cmap {
+            for subtable in cmap.subtables {
+                if !subtable.is_unicode() { continue; }
+                subtable.codepoints(|cp| {
+                    if let (Some(c), Some(g)) = (char::from_u32(cp), subtable.glyph_index(cp)) { reverse.entry(g.0).or_insert(c); }
+                });
+            }
+        }
+        let mut chars = repertoire[i].clone();
+        for g in &used[i] { if let Some(c) = reverse.get(g) { chars.insert(*c); } }
+        let mut char_gids: BTreeMap<char, u16> = BTreeMap::new();
+        for c in &chars { if let Some(g) = face.glyph_index(*c) { char_gids.insert(*c, g.0); } }
+        let mut gids: BTreeSet<u16> = used[i].clone();
+        gids.extend(char_gids.values().copied());
+        gids.insert(0);
+        let gid_list: Vec<u16> = gids.into_iter().collect();
+        let remapper = GlyphRemapper::new_from_glyphs(&gid_list);
+        let bytes = subsetter::subset(data, font.index, &remapper).map_err(|e| anyhow!("subsetting {}: {e:?}", font.file))?;
+        let map: HashMap<u16, u16> = gid_list.iter().map(|g| (*g, remapper.get(*g).expect("glyph in remapper"))).collect();
+        let program = match bytes.get(..4) { Some(b"OTTO") => "opentype-cff", Some([0, 1, 0, 0]) | Some(b"true") => "truetype", _ => "cff" };
+        let mut advances = vec![0.0; remapper.num_gids() as usize];
+        for (old, new) in &map { advances[*new as usize] = face.glyph_hor_advance(GlyphId(*old)).unwrap_or(0) as f64; }
+        let bbox = face.global_bounding_box();
+        let stem = font.file.rsplit_once('.').map(|(s, _)| s.to_string()).unwrap_or_else(|| font.file.clone());
+        let file = format!("{stem}.subset.{}", match program { "cff" => "cff", "opentype-cff" => "otf", _ => "ttf" });
+        let subset = ir::Font {
+            family: font.family.clone(), index: font.index, sha256: hex(&Sha256::digest(&bytes)), source_sha256: font.source_sha256.clone(),
+            file: file.clone(), program: program.to_string(), units_per_em: face.units_per_em() as f64,
+            ascender: face.ascender() as f64, descender: face.descender() as f64,
+            cap_height: face.capital_height().unwrap_or(face.ascender()) as f64,
+            bbox: [bbox.x_min as f64, bbox.y_min as f64, bbox.x_max as f64, bbox.y_max as f64],
+            italic_angle: face.italic_angle() as f64, italic: face.is_italic(), advances,
+            cmap: char_gids.iter().map(|(c, g)| (c.to_string(), map[g])).collect(),
+        };
+        outputs.push(SubsetFont { file, bytes, map, source_sha256: font.source_sha256.clone() });
+        *font = subset;
+    }
+    let maps: Vec<HashMap<u16, u16>> = outputs.iter().map(|o| o.map.clone()).collect();
+    each_items_mut(doc, &mut |items| rewrite_glyphs(items, &maps));
+    Ok(outputs)
+}
+
+// ---------------------------------------------------------------------------------------------------------
 // Fuzz and diff
 
 struct Rng(u64);
@@ -839,7 +957,7 @@ fn mutate(value: &mut serde_json::Value, rng: &mut Rng) {
 /// sample row counts are stripped; font references are resolved to the font's identity, because the table
 /// is built from what the frames use and a slot with an empty sample uses nothing; the table is left out.
 fn static_view(doc: &ir::Document) -> serde_json::Value {
-    let identities: Vec<String> = doc.fonts.iter().map(|f| format!("{}#{}@{}", f.family, f.index, &f.sha256[..8])).collect();
+    let identities: Vec<String> = doc.fonts.iter().map(|f| format!("{}#{}@{}", f.family, f.index, &f.source_sha256[..8])).collect();
     let mut value = serde_json::to_value(doc).expect("serializable");
     fn strip(value: &mut serde_json::Value, identities: &[String]) {
         match value {
@@ -997,25 +1115,35 @@ fn run() -> Result<()> {
     let data = fs::read(&args.data).with_context(|| format!("reading {}", args.data.display()))?;
 
     let started = std::time::Instant::now();
-    let (doc, Exported { doc: exported, .. }) = build(&args.fixture, &data, &fonts, true)?;
+    let (doc, Exported { doc: mut exported, .. }) = build(&args.fixture, &data, &fonts, true)?;
     let compiled_in = started.elapsed();
+    let subset_started = std::time::Instant::now();
+    let subsets = subset_fonts(&mut exported, &fonts)?;
+    let subset_in = subset_started.elapsed();
     let pdf = typst_pdf::pdf(&doc, &PdfOptions::default()).map_err(|e| anyhow!("pdf export failed: {e:?}"))?;
     fs::write(args.out.join("baseline.pdf"), &pdf)?;
-    fs::write(args.out.join("doc.json"), serde_json::to_string_pretty(&exported)?)?;
+    let doc_json = serde_json::to_string_pretty(&exported)?;
+    fs::write(args.out.join("doc.json"), &doc_json)?;
     let font_dir = args.out.join("fonts");
     fs::create_dir_all(&font_dir)?;
-    for font in &exported.fonts {
-        let source = fonts.iter().find(|f| f.file == font.file).expect("exported font was loaded");
-        fs::write(font_dir.join(&font.file), source.font.data().as_ref() as &[u8])?;
+    for subset in &subsets { fs::write(font_dir.join(&subset.file), &subset.bytes)?; }
+    println!("compiled and exported in {compiled_in:.1?}: {} font(s) subset in {subset_in:.1?}, baseline PDF {} bytes, doc.json {} bytes, {}",
+        exported.fonts.len(), pdf.len(), doc_json.len(), if exported.flow.is_some() { "flow document" } else { "fixed pages" });
+    for (font, subset) in exported.fonts.iter().zip(&subsets) {
+        println!("  font {}: {} glyphs, {} characters in the map, {} bytes ({})", subset.file, font.advances.len(), font.cmap.len(), subset.bytes.len(), font.program);
     }
-    println!("compiled and exported in {compiled_in:.1?}: {} font(s), baseline PDF {} bytes, {}",
-        exported.fonts.len(), pdf.len(), if exported.flow.is_some() { "flow document" } else { "fixed pages" });
     describe(&exported);
 
     // Typst's own layout of some other data, for the runtime to compare against: reference.json / reference.pdf.
     if let Some(path) = &args.reference {
         let bytes = fs::read(path).with_context(|| format!("reading {}", path.display()))?;
-        let (doc, Exported { reference, .. }) = build(&args.fixture, &bytes, &fonts, false)?;
+        let (doc, Exported { mut reference, .. }) = build(&args.fixture, &bytes, &fonts, false)?;
+        // Typst's glyph ids are the original font's; the runtimes report ids in the subset.
+        for slot in &mut reference {
+            if let Some(subset) = subsets.iter().find(|s| s.source_sha256 == slot.font) {
+                for g in &mut slot.glyphs { g.id = subset.map.get(&g.id).copied().unwrap_or(g.id); }
+            }
+        }
         fs::write(args.out.join("reference.json"), serde_json::to_string_pretty(&reference)?)?;
         fs::write(args.out.join("reference.pdf"), typst_pdf::pdf(&doc, &PdfOptions::default()).map_err(|e| anyhow!("{e:?}"))?)?;
         println!("reference for {}: {} slot(s) written to reference.json and reference.pdf", path.display(), reference.len());
@@ -1054,6 +1182,10 @@ fn run() -> Result<()> {
             fs::write(args.out.join("fuzz-0.json"), serde_json::to_string_pretty(&sample)?)?;
             fs::write(args.out.join("fuzz-0.pdf"), typst_pdf::pdf(&doc, &PdfOptions::default()).map_err(|e| anyhow!("{e:?}"))?)?;
         }
+        // The baseline's glyph ids are the subset's; map the sample's the same way (a glyph outside the
+        // baseline's subset keeps its id and shows up as a difference, which it is).
+        let maps: Vec<HashMap<u16, u16>> = fuzzed.fonts.iter().map(|f| subsets.iter().find(|s| s.source_sha256 == f.source_sha256).map(|s| s.map.clone()).unwrap_or_default()).collect();
+        each_items_mut(&mut fuzzed, &mut |items| rewrite_glyphs(items, &maps));
         let mut differences = Vec::new();
         diff(&baseline, &static_view(&fuzzed), "doc", &mut differences);
         if !differences.is_empty() {

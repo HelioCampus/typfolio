@@ -6,7 +6,7 @@
 
 use serde::{Deserialize, Serialize};
 
-pub const VERSION: u32 = 3;
+pub const VERSION: u32 = 4;
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct Document {
@@ -77,14 +77,44 @@ pub struct Band {
     pub fragment: Fragment,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+/// A font as the runtime needs it: a subset program plus everything the runtime would otherwise parse from
+/// it. Glyph ids in the document are ids in this subset.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
 pub struct Font {
     pub family: String,
-    /// Face index inside the font file.
+    /// Face index inside the original font file.
     pub index: u32,
+    /// Hash of the file the runtime loads (the subset).
     pub sha256: String,
+    /// Hash of the original font file, the font's identity across exports.
+    #[serde(default)]
+    pub source_sha256: String,
     /// File name the runtime loads the bytes from, relative to the document.
     pub file: String,
+    /// What the file is: "cff" (a bare CFF table), "opentype-cff" or "truetype".
+    #[serde(default)]
+    pub program: String,
+    #[serde(default)]
+    pub units_per_em: f64,
+    #[serde(default)]
+    pub ascender: f64,
+    #[serde(default)]
+    pub descender: f64,
+    #[serde(default)]
+    pub cap_height: f64,
+    #[serde(default)]
+    pub bbox: [f64; 4],
+    #[serde(default)]
+    pub italic_angle: f64,
+    #[serde(default)]
+    pub italic: bool,
+    /// Advance width per glyph id, in font units.
+    #[serde(default)]
+    pub advances: Vec<f64>,
+    /// Character to glyph id, for every character a slot may contain (its repertoire) and every character of
+    /// the static text; the runtime maps slot text through this and inverts it for ToUnicode.
+    #[serde(default)]
+    pub cmap: std::collections::BTreeMap<String, u16>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
@@ -202,4 +232,7 @@ pub struct Slot {
     /// The structure node the slot's text belongs to; `None` marks an artifact.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub node: Option<usize>,
+    /// The characters this slot may contain, when the template declares them; otherwise the default repertoire.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub charset: Option<String>,
 }

@@ -11,12 +11,13 @@
   align: left,        // left | center | right
   overflow: "error",  // error | clip | shrink | ellipsis: what the runtime does when the text does not fit
   max-length: none,   // the schema's maxLength, informative for now
+  charset: none,      // the characters the slot may contain; none means the exporter's default repertoire
   ..text-args,        // text arguments applied inside the slot: size, weight, style, fill
 ) = text(..text-args.named(), context {
   let d = descent.to-absolute()
   // The box baseline is pinned (`at: bottom`, shifted up by the descent) so content cannot move the line.
   box(width: width, height: height, clip: true, inset: (bottom: d), baseline: (at: bottom, shift: d))[
-    #metadata((name: name, align: repr(align), overflow: overflow, max-length: max-length, descent: d.pt())) <paramdoc-slot>
+    #metadata((name: name, align: repr(align), overflow: overflow, max-length: max-length, charset: charset, descent: d.pt())) <paramdoc-slot>
     #set text(kerning: false, ligatures: false, overhang: false, bottom-edge: "baseline")
     #std.align(align + bottom, value)
   ]

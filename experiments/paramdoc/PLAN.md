@@ -40,6 +40,7 @@ labelled `metadata`; the exporter finds it through the frame's tags and the encl
 3. **Bands and pagination.** Repeating rows, header repetition, page numbers. ✅
 4. **Tagging.** Structure tree assembly; checked with the repo's `inspectPdf`, veraPDF not reachable from this container. ✅
 5. **TypeScript port** of the runtime against the Rust implementation as oracle. ✅
+6. **Export-time font subsetting.** Fonts subset to the static glyphs plus a declared slot repertoire; runtimes parse no fonts. ✅
 
 Re-evaluate after each milestone; stop and discuss on critical findings.
 
@@ -47,7 +48,7 @@ Re-evaluate after each milestone; stop and discuss on critical findings.
 
 ```sh
 cd experiments/paramdoc
-cargo run -p paramdoc-export -- fixtures/certificate --fuzz 200      # exit 0: no leaks
+cargo run -p paramdoc-export -- fixtures/certificate --fuzz 200      # exit 0: no leaks; writes doc.json and fonts/*.subset.*
 cargo run -p paramdoc-export -- fixtures/leak --fuzz 20              # exit 1: the auto-width slot leaks
 cargo run -p paramdoc-export -- fixtures/certificate --reference fixtures/certificate/data.json   # + reference.{json,pdf}
 cargo run -p paramdoc-runtime -- ../../.build/paramdoc/certificate --data fixtures/certificate/data.json \
@@ -83,6 +84,46 @@ Defaults: fonts from `../../fixtures/fonts`, output under `../../.build/paramdoc
 `fonts/`, and `fuzz-0.{json,pdf}` for the first fuzzed sample).
 
 ## Status log
+
+- **M6 done.** The exporter now subsets every font (`subsetter` crate, at export time) to the glyphs the static
+  items use plus the glyphs of each slot's repertoire: the slot's `charset:` if declared, otherwise a default
+  of printable ASCII, Latin-1 and common typography (dashes, quotes, bullet, ellipsis, euro). It rewrites the
+  document's glyph ids to the subset and records in each font record what the runtimes used to parse from the
+  file: program kind (bare CFF, OpenType-CFF or TrueType), units per em, ascender, descender, cap height,
+  bbox, italic angle and flag, the advance of every glyph, and a character → glyph map covering the
+  repertoire and the static text (for ToUnicode). IR v4. Typst's reference glyph ids are translated through
+  the same maps, and fuzz samples are remapped with the baseline's maps before the diff (the subset keeps low
+  ids by coincidence, so only the ligature glyphs had exposed the mismatch).
+  Both runtimes now parse no font at all. The Rust runtime lost ttf-parser and the subsetter, the TypeScript
+  runtime lost its OpenType reader; a character outside the repertoire fails with "declare it with
+  `charset:`". All oracles still pass on every fixture: Typst's layout, the Rust trace, pixels, text extraction,
+  structure roles; the wasm and native PDFs are byte-identical.
+  Trade-offs: the Rust runtime's PDFs grew from 24 kB (per-document subsets) to 49 kB (the repertoire subset),
+  the TypeScript runtime's shrank from 529 kB to 62 kB; `doc.json` grew from 22 kB to 87 kB raw with the
+  advances and the map, which is 6.5 kB gzipped. Subsetting takes about 100–150 ms per export.
+
+### Payload and performance with export-time subsetting (M6 checkpoint)
+
+| Browser payload for the benchmark report | raw | gzip |
+|---|---:|---:|
+| Typst compiler wasm (existing path) | 24.4 MB | 8.95 MB |
+| Rust runtime wasm32 | 509 kB | 178 kB |
+| TypeScript runtime bundle | 16.2 kB | 6.7 kB |
+| `doc.json` | 87 kB | 6.5 kB |
+| two subset fonts | 62 kB | 35 kB |
+| **TypeScript runtime + document + fonts** | **165 kB** | **48 kB** |
+
+| Runtime, 1000 reports, same machine | documents/s | median per document | PDF |
+|---|---:|---:|---:|
+| Typst compiler in Chromium, 4 workers | 50.4 | — | — |
+| Typst compiler in Chromium, 1 worker | 25.5 | — | — |
+| TypeScript runtime in Chromium, main thread | 490–768 | 1.0–1.1 ms | 62 kB |
+| TypeScript runtime in Node | 829–830 | 0.96 ms | 62 kB |
+| Rust runtime as wasm32 in Node | 438–475 | 2.0 ms | 49 kB |
+| Rust runtime native | 583–594 | 1.6 ms | 49 kB |
+
+The TypeScript runtime is now the faster of the two because it writes the small streams uncompressed and
+embeds pre-compressed fonts, while the Rust runtime still deflates every stream per document.
 
 - **M5 done.** `ts/runtime.ts` (about 600 lines, no dependencies, erasable TypeScript so Node 22 runs it with
   `--experimental-strip-types` and esbuild bundles it unchanged) ports the Rust runtime: an OpenType reader for
@@ -202,13 +243,13 @@ Native release timings for a complete fill, fonts parsed and subset included: ce
 transcript 8 ms. (An earlier 77 kB figure from building the CLI binary for wasm32 was wrong: `std::env::args`
 is empty on that target, so the optimiser removed the entire runtime as dead code.)
 
-### Re-evaluation after M5
+### Re-evaluation after M6
 
-All five milestones are built and verified. What remains is productisation, not research: font subsetting for
-the browser path, veraPDF conformance from a machine that can reach it, images and links, variable-height
-rows through variants, a Worker wrapper, and the export step as a Vite plugin fed by `defineTemplate`. The
-one architectural question left open is where subsetting belongs; export time is the answer that keeps the
-TypeScript runtime at 18 kB.
+All six milestones are built and verified; subsetting at export time was the right place, and it made the
+runtimes simpler, not more complex. What remains is productisation, not research: veraPDF conformance from a
+machine that can reach it, images and links, variable-height rows through variants, a Worker wrapper, a
+compact binary form of `doc.json` if its size ever matters, and the export step as a Vite plugin fed by
+`defineTemplate` with the schema's `maxLength` and `pattern` feeding slot sizes and repertoires.
 
 ### Re-evaluation after M4
 

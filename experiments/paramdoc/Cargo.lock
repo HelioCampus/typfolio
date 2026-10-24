@@ -1361,6 +1361,8 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+ "subsetter",
+ "ttf-parser",
  "typst",
  "typst-layout",
  "typst-pdf",
@@ -1384,8 +1386,6 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
- "subsetter",
- "ttf-parser",
 ]
 
 [[package]]
