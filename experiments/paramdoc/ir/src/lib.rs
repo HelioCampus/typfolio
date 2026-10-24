@@ -104,8 +104,10 @@ pub struct Slot {
     pub y: f64,
     pub width: f64,
     pub height: f64,
-    /// Absolute y of the sample text's baseline.
+    /// Absolute y of the text baseline: the box bottom minus `descent`.
     pub baseline: f64,
+    /// Room kept below the baseline for descenders, in points.
+    pub descent: f64,
     /// Absolute x where the sample text started; only meaningful for left alignment.
     pub pen_x: f64,
     pub font: usize,

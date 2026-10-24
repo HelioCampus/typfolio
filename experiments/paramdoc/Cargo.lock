@@ -1378,10 +1378,13 @@ name = "paramdoc-runtime"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "flate2",
  "paramdoc-ir",
  "pdf-writer",
  "serde",
  "serde_json",
+ "sha2",
+ "subsetter",
  "ttf-parser",
 ]
 

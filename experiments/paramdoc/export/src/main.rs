@@ -152,11 +152,18 @@ impl Rect {
     }
 }
 
-struct SlotMeta { name: String, align: String, overflow: String, max_length: Option<u32> }
+struct SlotMeta { name: String, align: String, overflow: String, max_length: Option<u32>, descent: f64 }
 
 struct TextStyle { font: usize, size: f64, fill: ir::Color, pen_x: f64 }
 
-struct SlotRecord { meta: SlotMeta, page: usize, rect: Rect, style: Option<TextStyle>, sample: String, baselines: Vec<f64> }
+/// What Typst itself laid out inside a slot for some data: the runtime compares its own output with this.
+#[derive(serde::Serialize)]
+pub struct ReferenceGlyph { pub id: u16, pub x: f64 }
+
+#[derive(serde::Serialize)]
+pub struct ReferenceSlot { pub name: String, pub baseline: f64, pub size: f64, pub glyphs: Vec<ReferenceGlyph> }
+
+struct SlotRecord { meta: SlotMeta, page: usize, rect: Rect, style: Option<TextStyle>, sample: String, baselines: Vec<f64>, glyphs: Vec<(u16, f64)> }
 
 struct Exporter<'a> {
     fonts: &'a [LoadedFont],
@@ -251,7 +258,13 @@ impl<'a> Exporter<'a> {
             Ok(Value::None) | Err(_) => None,
             other => bail!("slot metadata `max-length` is not an integer: {other:?}"),
         };
-        Ok(SlotMeta { name: string("name")?, align: string("align")?, overflow: string("overflow")?, max_length })
+        let descent = match dict.get("descent") {
+            Ok(Value::Float(f)) => *f,
+            Ok(Value::Int(n)) => *n as f64,
+            Ok(Value::Length(l)) => l.abs.to_pt(),
+            other => bail!("slot metadata `descent` is not a number of points: {other:?}"),
+        };
+        Ok(SlotMeta { name: string("name")?, align: string("align")?, overflow: string("overflow")?, max_length, descent })
     }
 
     /// Pass 1: every slot tag and the clipped box it sits in.
@@ -267,7 +280,7 @@ impl<'a> Exporter<'a> {
                     let elem = content.to_packed::<MetadataElem>().ok_or_else(|| anyhow!("slot label on a non-metadata element"))?;
                     let meta = self.slot_meta(&elem.value)?;
                     let rect = clipped.ok_or_else(|| anyhow!("slot `{}` is not inside a clipped box", meta.name))?;
-                    out.push(SlotRecord { meta, page, rect, style: None, sample: String::new(), baselines: Vec::new() });
+                    out.push(SlotRecord { meta, page, rect, style: None, sample: String::new(), baselines: Vec::new(), glyphs: Vec::new() });
                 }
                 _ => {}
             }
@@ -313,6 +326,11 @@ impl<'a> Exporter<'a> {
                         }
                         if !slot.baselines.iter().any(|b| (b - pt(abs.y)).abs() < 1e-6) { slot.baselines.push(pt(abs.y)); }
                         slot.sample.push_str(&text.text);
+                        let mut pen = pt(abs.x);
+                        for g in &text.glyphs {
+                            slot.glyphs.push((g.id, pen + pt(g.x_offset.at(text.size))));
+                            pen += pt(g.x_advance.at(text.size));
+                        }
                         continue;
                     }
                     items.push(ir::Item::Text {
@@ -343,8 +361,9 @@ impl<'a> Exporter<'a> {
     /// Exports the document. With `strict`, a slot whose sample is empty is an error, because its style
     /// cannot be observed; without it (fuzz builds) such slots get placeholder styles and are reported in
     /// the second return value so the caller can exclude them from the style comparison.
-    fn export(mut self, doc: &PagedDocument, strict: bool) -> Result<(ir::Document, Vec<String>)> {
+    fn export(mut self, doc: &PagedDocument, strict: bool) -> Result<(ir::Document, Vec<String>, Vec<ReferenceSlot>)> {
         let mut unstyled = Vec::new();
+        let mut reference = Vec::new();
         let mut slots = Vec::new();
         for (index, page) in doc.pages().iter().enumerate() {
             self.collect_slots(index, &page.frame, Transform::identity(), None, &mut slots)?;
@@ -360,18 +379,22 @@ impl<'a> Exporter<'a> {
                 None if strict => bail!("slot `{}` has no sample text; give it a non-empty sample value", s.meta.name),
                 None => { unstyled.push(s.meta.name.clone()); TextStyle { font: 0, size: 0.0, fill: ir::Color { r: 0.0, g: 0.0, b: 0.0, a: 1.0 }, pen_x: 0.0 } }
             };
-            // The contract is geometric: the slot's baseline is the box bottom (the dialect aligns the text's
-            // baseline there). The sample only tells us the style; it is checked against the contract.
-            let baseline = s.rect.y + s.rect.h;
+            // The contract is geometric: the slot's baseline is the box bottom minus the declared descent (the
+            // dialect aligns the text's baseline there). The sample only tells us the style; it is checked.
+            let baseline = s.rect.y + s.rect.h - s.meta.descent;
             if strict && s.baselines.len() > 1 {
                 eprintln!("warning: slot `{}`: the sample wrapped to {} lines; the runtime draws a single line", s.meta.name, s.baselines.len());
             }
             if strict && !s.baselines.iter().any(|b| (b - baseline).abs() < 0.01) {
                 eprintln!("warning: slot `{}`: the sample's baseline(s) {:?} are not at the box bottom {baseline:.2}", s.meta.name, s.baselines);
             }
+            reference.push(ReferenceSlot {
+                name: s.meta.name.clone(), baseline: s.baselines.last().copied().unwrap_or(baseline), size: style.size,
+                glyphs: s.glyphs.iter().map(|(id, x)| ReferenceGlyph { id: *id, x: *x }).collect(),
+            });
             Ok(ir::Slot {
                 name: s.meta.name, page: s.page, x: s.rect.x, y: s.rect.y, width: s.rect.w, height: s.rect.h,
-                baseline, pen_x: style.pen_x, font: style.font, size: style.size, fill: style.fill,
+                baseline, descent: s.meta.descent, pen_x: style.pen_x, font: style.font, size: style.size, fill: style.fill,
                 align: s.meta.align, overflow: s.meta.overflow, max_length: s.meta.max_length, sample: s.sample,
             })
         }).collect::<Result<Vec<_>>>()?;
@@ -381,7 +404,7 @@ impl<'a> Exporter<'a> {
             fonts: self.ir_fonts,
             pages,
             slots,
-        }, unstyled))
+        }, unstyled, reference))
     }
 }
 
@@ -478,7 +501,7 @@ fn short(v: &serde_json::Value) -> String {
 // ---------------------------------------------------------------------------------------------------------
 // CLI
 
-struct Args { fixture: PathBuf, data: PathBuf, fonts: PathBuf, out: PathBuf, fuzz: usize, seed: u64 }
+struct Args { fixture: PathBuf, data: PathBuf, fonts: PathBuf, out: PathBuf, fuzz: usize, seed: u64, reference: Option<PathBuf> }
 
 fn parse_args() -> Result<Args> {
     let mut args = std::env::args().skip(1);
@@ -490,6 +513,7 @@ fn parse_args() -> Result<Args> {
         out: PathBuf::from("../../.build/paramdoc").join(name),
         fuzz: 0,
         seed: 1,
+        reference: None,
         fixture,
     };
     while let Some(flag) = args.next() {
@@ -500,27 +524,37 @@ fn parse_args() -> Result<Args> {
             "--out" => parsed.out = value.into(),
             "--fuzz" => parsed.fuzz = value.parse()?,
             "--seed" => parsed.seed = value.parse()?,
+            "--reference" => parsed.reference = Some(value.into()),
             other => bail!("unknown flag {other}"),
         }
     }
     Ok(parsed)
 }
 
-fn build(fixture: &Path, data: &[u8], fonts: &[LoadedFont], strict: bool) -> Result<(PagedDocument, ir::Document, Vec<String>)> {
+struct Built { doc: PagedDocument, exported: ir::Document, unstyled: Vec<String>, reference: Vec<ReferenceSlot> }
+
+fn build(fixture: &Path, data: &[u8], fonts: &[LoadedFont], strict: bool) -> Result<Built> {
     let world = MemWorld::new(fixture, data, fonts)?;
     let doc = compile(&world)?;
-    let (exported, unstyled) = Exporter::new(fonts)?.export(&doc, strict)?;
-    Ok((doc, exported, unstyled))
+    let (exported, unstyled, reference) = Exporter::new(fonts)?.export(&doc, strict)?;
+    Ok(Built { doc, exported, unstyled, reference })
 }
 
-fn main() -> Result<()> {
+fn main() {
+    if let Err(error) = run() {
+        eprintln!("error: {error:#}");
+        std::process::exit(1);
+    }
+}
+
+fn run() -> Result<()> {
     let args = parse_args()?;
     fs::create_dir_all(&args.out)?;
     let fonts = load_fonts(&args.fonts)?;
     let data = fs::read(&args.data).with_context(|| format!("reading {}", args.data.display()))?;
 
     let started = std::time::Instant::now();
-    let (doc, exported, _) = build(&args.fixture, &data, &fonts, true)?;
+    let Built { doc, exported, .. } = build(&args.fixture, &data, &fonts, true)?;
     let compiled_in = started.elapsed();
     let pdf = typst_pdf::pdf(&doc, &PdfOptions::default()).map_err(|e| anyhow!("pdf export failed: {e:?}"))?;
     fs::write(args.out.join("baseline.pdf"), &pdf)?;
@@ -551,6 +585,15 @@ fn main() -> Result<()> {
             slot.name, slot.page, slot.x, slot.y, slot.width, slot.height, slot.baseline, slot.pen_x, slot.font, slot.size, slot.align, slot.sample);
     }
 
+    // Typst's own layout of some other data, for the runtime to compare against: reference.json / reference.pdf.
+    if let Some(path) = &args.reference {
+        let bytes = fs::read(path).with_context(|| format!("reading {}", path.display()))?;
+        let Built { doc, reference, .. } = build(&args.fixture, &bytes, &fonts, false)?;
+        fs::write(args.out.join("reference.json"), serde_json::to_string_pretty(&reference)?)?;
+        fs::write(args.out.join("reference.pdf"), typst_pdf::pdf(&doc, &PdfOptions::default()).map_err(|e| anyhow!("{e:?}"))?)?;
+        println!("reference for {}: {} slot(s) written to reference.json and reference.pdf", path.display(), reference.len());
+    }
+
     if args.fuzz == 0 { return Ok(()); }
     let original: serde_json::Value = serde_json::from_slice(&data)?;
     let baseline = static_view(&exported);
@@ -561,7 +604,7 @@ fn main() -> Result<()> {
         let mut sample = original.clone();
         mutate(&mut sample, &mut rng);
         let bytes = serde_json::to_vec(&sample)?;
-        let (doc, mut fuzzed, unstyled) = match build(&args.fixture, &bytes, &fonts, false) {
+        let Built { doc, exported: mut fuzzed, unstyled, .. } = match build(&args.fixture, &bytes, &fonts, false) {
             Ok(built) => built,
             Err(error) => { leaks += 1; println!("sample {i}: compile failed: {error}"); continue; }
         };
