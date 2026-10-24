@@ -38,7 +38,7 @@ labelled `metadata`; the exporter finds it through the frame's tags and the encl
 2. **Runtime, static pages and text slots.** ✅ Latin only, no tagging. Exit: for the same data, glyph positions
    from the runtime equal Typst's own frames (kerning and ligatures off inside slots), and the PDF opens.
 3. **Bands and pagination.** Repeating rows, header repetition, page numbers. ✅
-4. **Tagging.** Structure tree assembly; checked with the repo's `inspectPdf`, veraPDF not reachable from this container. ✅
+4. **Tagging.** Structure tree assembly; checked with the repo's `inspectPdf` and, since 2026-10-24, with veraPDF: PDF/UA-1 passes on every runtime PDF. ✅
 5. **TypeScript port** of the runtime against the Rust implementation as oracle. ✅
 6. **Export-time font subsetting.** Fonts subset to the static glyphs plus a declared slot repertoire; runtimes parse no fonts. ✅
 
@@ -48,6 +48,7 @@ Re-evaluate after each milestone; stop and discuss on critical findings.
 
 ```sh
 cd experiments/paramdoc
+./check.sh                                                           # the whole proof: 40 checks, about 30 s
 cargo run -p paramdoc-export -- fixtures/certificate --fuzz 200      # exit 0: no leaks; writes doc.json and fonts/*.subset.*
 cargo run -p paramdoc-export -- fixtures/leak --fuzz 20              # exit 1: the auto-width slot leaks
 cargo run -p paramdoc-export -- fixtures/certificate --reference fixtures/certificate/data.json   # + reference.{json,pdf}
@@ -84,6 +85,20 @@ Defaults: fonts from `../../fixtures/fonts`, output under `../../.build/paramdoc
 `fonts/`, and `fuzz-0.{json,pdf}` for the first fuzzed sample).
 
 ## Status log
+
+- **veraPDF done (2026-10-24, on a Mac, from the bundle).** veraPDF 1.30.0 validates every runtime PDF of every
+  fixture (Rust and TypeScript, single and multi-page, ten files) as PDF/UA-1: 106 rules, 1904 checks, no
+  failures, with no change to either runtime. The gaps M4 expected did not apply: `/Tabs` is only required on
+  pages with annotations, and the fixtures have no lists and no links. Under the PDF/UA-2 and WTPDF 1.0
+  accessibility profiles (1724 rules) the only failures are the PDF 2.0 ones: file version 2.0, `pdfuaid:part`
+  2 with `pdfuaid:rev` 2024 (or the WTPDF declaration), and the PDF 2.0 namespace on the Document element;
+  every tagged-PDF containment rule passes. Typst's own PDFs of the same fixtures fail UA-1 on `DisplayDocTitle`
+  and `pdfuaid:part` only. `check.sh` now runs the whole proof (build, exports with fuzzing, both runtimes
+  against Typst and each other, pixels, text, structure, veraPDF) in about 30 s, and `notes/bench/ppmdiff.mjs`
+  replaces the ad-hoc pixel comparison. All earlier results reproduce on this machine (Rust 1.99, Node 24):
+  zero leaks, identical glyphs, identical pixels except the report's one pixel, identical text extraction.
+  Finding: `inspectPdf` sums pdf.js's per-page structure trees, so the two-page transcript reports two Documents
+  and two Tables where there is one of each; a limitation of the inspector, not of the output.
 
 - **M6 done.** The exporter now subsets every font (`subsetter` crate, at export time) to the glyphs the static
   items use plus the glyphs of each slot's repertoire: the slot's `charset:` if declared, otherwise a default
@@ -246,9 +261,9 @@ is empty on that target, so the optimiser removed the entire runtime as dead cod
 ### Re-evaluation after M6
 
 All six milestones are built and verified; subsetting at export time was the right place, and it made the
-runtimes simpler, not more complex. What remains is productisation, not research: veraPDF conformance from a
-machine that can reach it, images and links, variable-height rows through variants, a Worker wrapper, a
-compact binary form of `doc.json` if its size ever matters, and the export step as a Vite plugin fed by
+runtimes simpler, not more complex. What remains is productisation, not research (veraPDF conformance, listed
+here at the time, has since been validated; see the status log): images and links, variable-height rows
+through variants, a Worker wrapper, a compact binary form of `doc.json` if its size ever matters, and the export step as a Vite plugin fed by
 `defineTemplate` with the schema's `maxLength` and `pattern` feeding slot sizes and repertoires.
 
 ### Re-evaluation after M4
