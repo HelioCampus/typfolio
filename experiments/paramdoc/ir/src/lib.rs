@@ -6,15 +6,70 @@
 
 use serde::{Deserialize, Serialize};
 
-pub const VERSION: u32 = 1;
+pub const VERSION: u32 = 2;
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct Document {
     pub version: u32,
     pub title: Option<String>,
     pub fonts: Vec<Font>,
+    /// Fixed pages (a document without bands); empty for a flow document.
     pub pages: Vec<Page>,
+    /// Slots on the fixed pages, in absolute page coordinates.
     pub slots: Vec<Slot>,
+    /// A flow document: blocks the runtime stacks and breaks into pages.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub flow: Option<Flow>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct Flow {
+    pub page_width: f64,
+    pub page_height: f64,
+    /// The page minus its margins: where blocks are stacked.
+    pub area: Area,
+    pub blocks: Vec<Block>,
+    pub bands: Vec<Band>,
+    /// Per-page content at absolute positions, such as a footer.
+    pub overlays: Vec<Fragment>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq)]
+pub struct Area {
+    pub x: f64,
+    pub y: f64,
+    pub width: f64,
+    pub height: f64,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum Block {
+    /// Content between repeat regions; its height is the distance to the next region in the sample.
+    Static { fragment: Fragment },
+    /// One band instance per row of the data array named `band`; `header` names a band repeated at the top
+    /// of each page the rows continue on. `gap` is the vertical space between rows, `header_gap` the space
+    /// between the header and the first row. `sample_rows` is informative only.
+    Repeat { band: String, header: Option<String>, header_gap: f64, gap: f64, sample_rows: usize },
+}
+
+/// A piece of layout with its own slots. Items and slots are relative to the fragment's top-left corner;
+/// `x` is where the fragment sits horizontally on the page, `y` only matters for overlays.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct Fragment {
+    pub x: f64,
+    pub y: f64,
+    pub width: f64,
+    pub height: f64,
+    pub items: Vec<Item>,
+    pub slots: Vec<Slot>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct Band {
+    pub name: String,
+    pub repeat_on_break: bool,
+    pub fragment: Fragment,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
@@ -94,7 +149,8 @@ pub struct Dash {
     pub phase: f64,
 }
 
-/// A hole: a fixed box on a page whose text comes from data at runtime.
+/// A hole: a fixed box whose text comes from data at runtime. On a fixed page the coordinates are absolute;
+/// inside a fragment they are relative to the fragment and `page` is 0.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct Slot {
     pub name: String,

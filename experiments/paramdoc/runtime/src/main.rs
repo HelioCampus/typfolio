@@ -1,22 +1,23 @@
 //! paramdoc-runtime: fills a parametric document with data and writes a PDF. No Typst, no shaper: static
 //! items are drawn as exported, slot text is mapped to glyphs through the font's cmap and advanced by its
 //! horizontal metrics (the dialect turns kerning and ligatures off inside slots, so this matches Typst for
-//! simple scripts).
+//! simple scripts). A flow document is composed page by page: blocks are stacked, rows break to new pages,
+//! header bands repeat, overlays are drawn on every page with the page counters filled.
 //!
 //! Usage: paramdoc-runtime <doc-dir> --data data.json --out out.pdf [--expect reference.json]
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
-use std::io::Write;
 use std::fs;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, anyhow, bail};
-use pdf_writer::types::{CidFontType, FontFlags, LineCapStyle, LineJoinStyle, SystemInfo};
 use flate2::{Compression, write::ZlibEncoder};
+use pdf_writer::types::{CidFontType, FontFlags, LineCapStyle, LineJoinStyle, SystemInfo};
 use pdf_writer::{Content, Filter, Finish, Name, Pdf, Rect, Ref, Str, TextStr};
-use subsetter::GlyphRemapper;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use subsetter::GlyphRemapper;
 use ttf_parser::{Face, GlyphId};
 
 use paramdoc_ir as ir;
@@ -78,16 +79,20 @@ fn text_of(value: &serde_json::Value) -> Result<String> {
     })
 }
 
-struct Filled { item: ir::Item, trace: ReferenceSlot }
+/// A filled slot: the text item to draw (clipped to the slot's box) and what was drawn, for the reference check.
+struct Filled { slot: ir::Slot, item: ir::Item, trace: ReferenceSlot }
 
 /// Lays out one line of slot text: glyphs from the cmap, advances from hmtx, alignment from the slot,
-/// and the slot's overflow policy when the line is wider than the box.
-fn fill_slot(slot: &ir::Slot, text: &str, font: &LoadedFont) -> Result<Filled> {
+/// and the slot's overflow policy when the line is wider than the box. `slot` is in absolute coordinates.
+fn fill_slot(slot: &ir::Slot, text: &str, font: &LoadedFont, trace_name: String) -> Result<Filled> {
+    if let Some(max) = slot.max_length && text.chars().count() > max as usize {
+        bail!("slot `{trace_name}`: {text:?} has {} characters, max-length is {max}", text.chars().count());
+    }
     let shape = |text: &str, size: f64| -> Result<(Vec<ir::Glyph>, f64)> {
         let mut glyphs = Vec::new();
         let mut width = 0.0;
         for c in text.chars() {
-            let id = font.glyph(c).ok_or_else(|| anyhow!("slot `{}`: the font has no glyph for {c:?} (U+{:04X})", slot.name, c as u32))?;
+            let id = font.glyph(c).ok_or_else(|| anyhow!("slot `{trace_name}`: the font has no glyph for {c:?} (U+{:04X})", c as u32))?;
             let advance = font.advance(id) * size;
             glyphs.push(ir::Glyph { id, x_advance: advance, x_offset: 0.0, y_offset: 0.0 });
             width += advance;
@@ -99,11 +104,11 @@ fn fill_slot(slot: &ir::Slot, text: &str, font: &LoadedFont) -> Result<Filled> {
     let mut shown = text.to_string();
     if width > slot.width + 1e-6 {
         match slot.overflow.as_str() {
-            "error" => bail!("slot `{}`: {text:?} is {width:.2} pt wide but the slot is {:.2} pt; declare an overflow policy or a smaller max-length", slot.name, slot.width),
+            "error" => bail!("slot `{trace_name}`: {text:?} is {width:.2} pt wide but the slot is {:.2} pt; declare an overflow policy or a smaller max-length", slot.width),
             "clip" => {} // the box clips anyway, as it does in Typst
             "shrink" => {
                 let factor = slot.width / width;
-                if factor < 0.5 { bail!("slot `{}`: shrinking {text:?} to fit would need {factor:.2}x; the limit is 0.5x", slot.name); }
+                if factor < 0.5 { bail!("slot `{trace_name}`: shrinking {text:?} to fit would need {factor:.2}x; the limit is 0.5x"); }
                 size *= factor;
                 (glyphs, width) = shape(text, size)?;
             }
@@ -117,21 +122,130 @@ fn fill_slot(slot: &ir::Slot, text: &str, font: &LoadedFont) -> Result<Filled> {
                     if width <= slot.width || chars.is_empty() { break; }
                 }
             }
-            other => bail!("slot `{}`: unknown overflow policy {other:?}", slot.name),
+            other => bail!("slot `{trace_name}`: unknown overflow policy {other:?}"),
         }
     }
     let x = match slot.align.as_str() {
         "left" => slot.x,
         "center" => slot.x + (slot.width - width) / 2.0,
         "right" => slot.x + slot.width - width,
-        other => bail!("slot `{}`: unknown alignment {other:?}", slot.name),
+        other => bail!("slot `{trace_name}`: unknown alignment {other:?}"),
     };
     let mut pen = x;
     let trace_glyphs = glyphs.iter().map(|g| { let at = pen; pen += g.x_advance; ReferenceGlyph { id: g.id, x: at } }).collect();
     Ok(Filled {
+        slot: slot.clone(),
         item: ir::Item::Text { x, y: slot.baseline, font: slot.font, size, fill: slot.fill, text: shown, glyphs },
-        trace: ReferenceSlot { name: slot.name.clone(), baseline: slot.baseline, size, glyphs: trace_glyphs },
+        trace: ReferenceSlot { name: trace_name, baseline: slot.baseline, size, glyphs: trace_glyphs },
     })
+}
+
+// ---------------------------------------------------------------------------------------------------------
+// Composition
+
+/// One output page: static items in absolute coordinates and the slots filled on it.
+struct Composed { width: f64, height: f64, items: Vec<ir::Item>, fills: Vec<Filled> }
+
+/// Values a slot can be filled from: a data object plus, on overlays, the page counters.
+struct Scope<'a> { data: &'a serde_json::Value, counters: Option<(usize, usize)> }
+
+impl Scope<'_> {
+    fn text(&self, name: &str) -> Result<String> {
+        if let Some((number, count)) = self.counters {
+            if name == "page-number" { return Ok(number.to_string()); }
+            if name == "page-count" { return Ok(count.to_string()); }
+        }
+        let value = self.data.get(name).ok_or_else(|| anyhow!("data has no value for slot `{name}`"))?;
+        text_of(value)
+    }
+}
+
+fn clip_ops(width: f64, height: f64) -> Vec<ir::PathOp> {
+    vec![ir::PathOp::Move { to: [0.0, 0.0] }, ir::PathOp::Line { to: [width, 0.0] }, ir::PathOp::Line { to: [width, height] }, ir::PathOp::Line { to: [0.0, height] }, ir::PathOp::Close]
+}
+
+/// Draws a fragment with its top at `top` and fills its slots from `scope`.
+fn place(fragment: &ir::Fragment, top: f64, scope: &Scope, fonts: &[LoadedFont], prefix: &str, clip: bool, page: &mut Composed) -> Result<()> {
+    page.items.push(ir::Item::Group {
+        x: fragment.x, y: top, transform: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+        clip: clip.then(|| clip_ops(fragment.width, fragment.height)), items: fragment.items.clone(),
+    });
+    for slot in &fragment.slots {
+        let mut absolute = slot.clone();
+        absolute.x += fragment.x; absolute.pen_x += fragment.x;
+        absolute.y += top; absolute.baseline += top;
+        let text = scope.text(&slot.name)?;
+        page.fills.push(fill_slot(&absolute, &text, &fonts[slot.font], format!("{prefix}{}", slot.name))?);
+    }
+    Ok(())
+}
+
+fn compose_fixed(doc: &ir::Document, data: &serde_json::Value, fonts: &[LoadedFont]) -> Result<Vec<Composed>> {
+    let scope = Scope { data, counters: None };
+    let mut pages = Vec::new();
+    for (index, page) in doc.pages.iter().enumerate() {
+        let mut composed = Composed { width: page.width, height: page.height, items: page.items.clone(), fills: Vec::new() };
+        for slot in doc.slots.iter().filter(|s| s.page == index) {
+            composed.fills.push(fill_slot(slot, &scope.text(&slot.name)?, &fonts[slot.font], slot.name.clone())?);
+        }
+        pages.push(composed);
+    }
+    Ok(pages)
+}
+
+fn compose_flow(flow: &ir::Flow, data: &serde_json::Value, fonts: &[LoadedFont]) -> Result<Vec<Composed>> {
+    const EPS: f64 = 1e-6;
+    let area = flow.area;
+    let bottom = area.y + area.height;
+    let band = |name: &str| flow.bands.iter().find(|b| b.name == name).ok_or_else(|| anyhow!("unknown band `{name}`"));
+    let new_page = || Composed { width: flow.page_width, height: flow.page_height, items: Vec::new(), fills: Vec::new() };
+    let scope = Scope { data, counters: None };
+
+    let mut pages = vec![new_page()];
+    let mut cursor = area.y;
+    for block in &flow.blocks {
+        match block {
+            ir::Block::Static { fragment } => {
+                if cursor + fragment.height > bottom + EPS && cursor > area.y + EPS { pages.push(new_page()); cursor = area.y; }
+                place(fragment, cursor, &scope, fonts, "", false, pages.last_mut().unwrap())?;
+                cursor += fragment.height;
+            }
+            ir::Block::Repeat { band: name, header, header_gap, gap, .. } => {
+                let rows = data.get(name).and_then(|v| v.as_array()).ok_or_else(|| anyhow!("data has no array `{name}` for the repeat region"))?;
+                let row_band = band(name)?;
+                let header_band = header.as_deref().map(band).transpose()?;
+                let header_height = header_band.map(|h| h.fragment.height + header_gap).unwrap_or(0.0);
+                let first_row = if rows.is_empty() { 0.0 } else { row_band.fragment.height };
+                if cursor + header_height + first_row > bottom + EPS && cursor > area.y + EPS { pages.push(new_page()); cursor = area.y; }
+                if let Some(h) = header_band {
+                    place(&h.fragment, cursor, &scope, fonts, &format!("{}.", h.name), true, pages.last_mut().unwrap())?;
+                    cursor += header_height;
+                }
+                for (i, row) in rows.iter().enumerate() {
+                    if cursor + row_band.fragment.height > bottom + EPS {
+                        pages.push(new_page());
+                        cursor = area.y;
+                        if let Some(h) = header_band {
+                            place(&h.fragment, cursor, &scope, fonts, &format!("{}.", h.name), true, pages.last_mut().unwrap())?;
+                            cursor += header_height;
+                        }
+                    }
+                    let row_scope = Scope { data: row, counters: None };
+                    place(&row_band.fragment, cursor, &row_scope, fonts, &format!("{name}[{i}]."), true, pages.last_mut().unwrap())?;
+                    cursor += row_band.fragment.height;
+                    if i + 1 < rows.len() { cursor += gap; }
+                }
+            }
+        }
+    }
+    let count = pages.len();
+    for (index, page) in pages.iter_mut().enumerate() {
+        let scope = Scope { data, counters: Some((index + 1, count)) };
+        for overlay in &flow.overlays {
+            place(overlay, overlay.y, &scope, fonts, &format!("page[{index}]."), true, page)?;
+        }
+    }
+    Ok(pages)
 }
 
 // ---------------------------------------------------------------------------------------------------------
@@ -180,14 +294,8 @@ impl Writer<'_> {
                 ir::Item::Group { x, y, transform, clip, items } => {
                     content.save_state();
                     content.transform([1.0, 0.0, 0.0, 1.0, *x as f32, *y as f32]);
-                    if *transform != [1.0, 0.0, 0.0, 1.0, 0.0, 0.0] {
-                        content.transform(transform.map(|v| v as f32));
-                    }
-                    if let Some(ops) = clip {
-                        path_ops(content, ops);
-                        content.clip_nonzero();
-                        content.end_path();
-                    }
+                    if *transform != [1.0, 0.0, 0.0, 1.0, 0.0, 0.0] { content.transform(transform.map(|v| v as f32)); }
+                    if let Some(ops) = clip { path_ops(content, ops); content.clip_nonzero(); content.end_path(); }
                     self.emit(content, items);
                     content.restore_state();
                 }
@@ -203,9 +311,7 @@ impl Writer<'_> {
                         content.set_line_cap(match stroke.cap.as_str() { "round" => LineCapStyle::RoundCap, "square" => LineCapStyle::ProjectingSquareCap, _ => LineCapStyle::ButtCap });
                         content.set_line_join(match stroke.join.as_str() { "round" => LineJoinStyle::RoundJoin, "bevel" => LineJoinStyle::BevelJoin, _ => LineJoinStyle::MiterJoin });
                         content.set_miter_limit(stroke.miter_limit as f32);
-                        if let Some(dash) = &stroke.dash {
-                            content.set_dash_pattern(dash.array.iter().map(|v| *v as f32), dash.phase as f32);
-                        }
+                        if let Some(dash) = &stroke.dash { content.set_dash_pattern(dash.array.iter().map(|v| *v as f32), dash.phase as f32); }
                     }
                     match geometry {
                         ir::Geometry::Line { to } => { content.move_to(0.0, 0.0); content.line_to(to[0] as f32, to[1] as f32); }
@@ -255,7 +361,7 @@ impl Writer<'_> {
     }
 }
 
-fn write_pdf(doc: &ir::Document, fonts: &[LoadedFont], filled: &[(usize, Filled)]) -> Result<Vec<u8>> {
+fn write_pdf(doc: &ir::Document, fonts: &[LoadedFont], pages: &[Composed]) -> Result<Vec<u8>> {
     let mut pdf = Pdf::new();
     let mut next = 1;
     let mut alloc = || { let r = Ref::new(next); next += 1; r };
@@ -263,16 +369,18 @@ fn write_pdf(doc: &ir::Document, fonts: &[LoadedFont], filled: &[(usize, Filled)
     let pages_id = alloc();
     let info = alloc();
     let font_refs: Vec<Ref> = (0..fonts.len()).map(|_| alloc()).collect();
-    let page_ids: Vec<Ref> = (0..doc.pages.len()).map(|_| alloc()).collect();
+    let page_ids: Vec<Ref> = (0..pages.len()).map(|_| alloc()).collect();
 
     pdf.catalog(catalog).pages(pages_id);
-    pdf.pages(pages_id).kids(page_ids.iter().copied()).count(doc.pages.len() as i32);
+    pdf.pages(pages_id).kids(page_ids.iter().copied()).count(pages.len() as i32);
     if let Some(title) = &doc.title { pdf.document_info(info).title(TextStr(title)); }
 
     // Glyphs actually used, per font: the embedded font programs are subset to them and remapped.
     let mut used: Vec<BTreeSet<u16>> = vec![BTreeSet::new(); fonts.len()];
-    for page in &doc.pages { collect_glyphs(&page.items, &mut used); }
-    for (_, fill) in filled { collect_glyphs(std::slice::from_ref(&fill.item), &mut used); }
+    for page in pages {
+        collect_glyphs(&page.items, &mut used);
+        for fill in &page.fills { collect_glyphs(std::slice::from_ref(&fill.item), &mut used); }
+    }
     let mut remaps: Vec<HashMap<u16, u16>> = Vec::new();
 
     for (i, font) in fonts.iter().enumerate() {
@@ -334,15 +442,15 @@ fn write_pdf(doc: &ir::Document, fonts: &[LoadedFont], filled: &[(usize, Filled)
     }
 
     let mut writer = Writer { fonts, remaps: &remaps, warned_images: false };
-    for (index, page) in doc.pages.iter().enumerate() {
+    for (index, page) in pages.iter().enumerate() {
         let content_id = alloc();
         let mut content = Content::new();
         content.transform([1.0, 0.0, 0.0, -1.0, 0.0, page.height as f32]);
         writer.emit(&mut content, &page.items);
         // Slot text is clipped to its box, exactly as Typst clips the box in the baseline document.
-        for (slot, fill) in filled.iter().filter(|(p, _)| *p == index).map(|(_, f)| (doc.slots.iter().find(|s| s.name == f.trace.name).expect("slot"), f)) {
+        for fill in &page.fills {
             content.save_state();
-            content.rect(slot.x as f32, slot.y as f32, slot.width as f32, slot.height as f32);
+            content.rect(fill.slot.x as f32, fill.slot.y as f32, fill.slot.width as f32, fill.slot.height as f32);
             content.clip_nonzero();
             content.end_path();
             writer.emit(&mut content, std::slice::from_ref(&fill.item));
@@ -397,6 +505,9 @@ fn compare(trace: &[ReferenceSlot], reference: &[ReferenceSlot]) -> Vec<String> 
             if (a.x - b.x).abs() > 1e-3 { problems.push(format!("{}: glyph {i} (id {}) at x {:.4} vs Typst {:.4}", slot.name, a.id, a.x, b.x)); break; }
         }
     }
+    for expected in reference {
+        if !trace.iter().any(|s| s.name == expected.name) { problems.push(format!("{}: in the reference but not drawn", expected.name)); }
+    }
     problems
 }
 
@@ -417,22 +528,19 @@ fn run() -> Result<()> {
     let fonts = load_fonts(&doc, &args.dir, &mut storage)?;
     let loaded_in = started.elapsed();
 
-    let mut filled = Vec::new();
-    for slot in &doc.slots {
-        let value = data.get(&slot.name).ok_or_else(|| anyhow!("data has no value for slot `{}`", slot.name))?;
-        let text = text_of(value)?;
-        if let Some(max) = slot.max_length && text.chars().count() > max as usize {
-            bail!("slot `{}`: {text:?} has {} characters, max-length is {max}", slot.name, text.chars().count());
-        }
-        filled.push((slot.page, fill_slot(slot, &text, &fonts[slot.font])?));
-    }
-    let pdf = write_pdf(&doc, &fonts, &filled)?;
+    let composed_at = std::time::Instant::now();
+    let pages = match &doc.flow {
+        Some(flow) => compose_flow(flow, &data, &fonts)?,
+        None => compose_fixed(&doc, &data, &fonts)?,
+    };
+    let composed_in = composed_at.elapsed();
+    let pdf = write_pdf(&doc, &fonts, &pages)?;
     let total = started.elapsed();
     fs::write(&args.out, &pdf)?;
-    let trace = FillTrace { slots: filled.iter().map(|(_, f)| f.trace.clone()).collect() };
+    let trace = FillTrace { slots: pages.iter().flat_map(|p| p.fills.iter().map(|f| f.trace.clone())).collect() };
     fs::write(args.out.with_extension("trace.json"), serde_json::to_string_pretty(&trace)?)?;
-    println!("filled {} slot(s) on {} page(s) and wrote {} bytes to {} in {total:.1?} (fonts loaded in {loaded_in:.1?})",
-        doc.slots.len(), doc.pages.len(), pdf.len(), args.out.display());
+    println!("filled {} slot(s) on {} page(s) and wrote {} bytes to {} in {total:.1?} (fonts {loaded_in:.1?}, compose {composed_in:.1?})",
+        trace.slots.len(), pages.len(), pdf.len(), args.out.display());
 
     if let Some(expect) = &args.expect {
         let reference: Vec<ReferenceSlot> = serde_json::from_slice(&fs::read(expect).with_context(|| format!("reading {}", expect.display()))?)?;

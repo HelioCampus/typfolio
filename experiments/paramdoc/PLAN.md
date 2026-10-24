@@ -36,8 +36,8 @@ labelled `metadata`; the exporter finds it through the frame's tags and the encl
    the fixture, and a deliberate leak (an `auto`-width slot) detected. ✅
 2. **Runtime, static pages and text slots.** ✅ Latin only, no tagging. Exit: for the same data, glyph positions
    from the runtime equal Typst's own frames (kerning and ligatures off inside slots), and the PDF opens.
-3. **Bands and pagination.** Repeating rows, header repetition, page numbers. ⟵ current
-4. **Tagging.** Structure tree assembly, checked with veraPDF.
+3. **Bands and pagination.** Repeating rows, header repetition, page numbers. ✅
+4. **Tagging.** Structure tree assembly, checked with veraPDF. ⟵ next
 5. **TypeScript port** of the runtime against the Rust implementation as oracle.
 
 Re-evaluate after each milestone; stop and discuss on critical findings.
@@ -52,12 +52,57 @@ cargo run -p paramdoc-export -- fixtures/certificate --reference fixtures/certif
 cargo run -p paramdoc-runtime -- ../../.build/paramdoc/certificate --data fixtures/certificate/data.json \
   --out ../../.build/paramdoc/certificate/runtime.pdf --expect ../../.build/paramdoc/certificate/reference.json
 cargo run -p paramdoc-runtime -- ../../.build/paramdoc/policies --data fixtures/policies/data-long.json --out ../../.build/paramdoc/policies/long.pdf
+# flow document: 3 sample rows checked against Typst, then 42 rows paginated by the runtime
+cargo run -p paramdoc-export -- fixtures/transcript --fuzz 100 --reference fixtures/transcript/data.json
+cargo run -p paramdoc-runtime -- ../../.build/paramdoc/transcript --data fixtures/transcript/data.json \
+  --out ../../.build/paramdoc/transcript/runtime.pdf --expect ../../.build/paramdoc/transcript/reference.json
+cargo run -p paramdoc-runtime -- ../../.build/paramdoc/transcript --data fixtures/transcript/data-long.json --out ../../.build/paramdoc/transcript/long.pdf
 ```
 
 Defaults: fonts from `../../fixtures/fonts`, output under `../../.build/paramdoc/<fixture>/` (`doc.json`, `baseline.pdf`,
 `fonts/`, and `fuzz-0.{json,pdf}` for the first fuzzed sample).
 
 ## Status log
+
+- **M3 done.** Dialect: `paged(margin:, footer:)` records the flow area in the page foreground, `band(name, body,
+  repeat-on-break:)` is a clipped block, `repeat(name, rows, make)` emits one band per sample row, `overlay(body)`
+  marks per-page content with `page-number` / `page-count` counter slots. Exporter: flattens the single sample
+  page into atoms (unclipped translation-only groups are inlined, clipped or transformed groups stay whole),
+  classifies atoms as band, overlay or static by their tag, sorts by y and segments into static blocks (items
+  relative to the block top, height = distance to the next region), repeat regions (header band, row band, row
+  gap, header gap) and overlays; checks that all row instances have one size and gap. IR v2 adds `flow`.
+  Runtime: stacks blocks, breaks a page when a row or block does not fit, repeats the header band, fills
+  overlays with counters in a second pass.
+  Transcript fixture: with the 3 sample rows the runtime equals Typst glyph for glyph and pixel for pixel at
+  150 dpi; with 42 rows it writes 2 pages (17.8 kB) with the header repeated and "Page 2 of 2"; composition
+  takes 0.5–5 ms, the rest of the ~50 ms is font parsing in a debug build. Fuzz with 1–6 rows and random
+  strings: 0 leaks in 100 samples. Certificate and leak fixtures unchanged.
+  Findings that changed the design:
+  - Typst's optical margin alignment (`text.overhang`) lets trailing punctuation hang into the margin even in
+    unjustified text, so a centred "A-" sat 1 pt right of the runtime's position. Slots set `overhang: false`.
+    Found by the reference comparison.
+  - Slots bind to data by name, so a slot's name must equal its data key (`total_credits`).
+  - Static blocks must take slots from a half-plane starting at x = 0, not from a sentinel rectangle, or slot
+    x positions pick up the sentinel.
+
+### Re-evaluation after M3
+
+Demonstrated: for documents made of fixed slots and fixed-height repeating rows, a runtime with no typesetter
+reproduces Typst's output exactly, paginates, and is small (see the size figures below). The exporter's
+fuzz-and-diff check is the safety net that makes the dialect honest; it found three real leaks so far.
+Not demonstrated, in order of risk: tagged PDF and PDF/UA (M4), complex scripts (the runtime has no shaper),
+variable-height rows (needs variants), images and links (recorded, not drawn), font subsetting at export time
+for the browser payload, and the TypeScript port (M5).
+
+### M4 design (tagging)
+
+Typst frames carry `Tag::Start`/`Tag::End` items for every element, so the exporter can emit per fragment a
+structure skeleton: a tree of element kinds (heading level, paragraph, table, row, cell, figure with alt text)
+whose leaves reference the items they cover. The runtime assigns marked-content ids per page while emitting,
+wraps covered items in `BDC`/`EMC`, builds the structure tree, parent tree, `MarkInfo`, language, title and
+ToUnicode CMaps (needed for text extraction anyway), and for repeat regions assembles `Table` → `TR` → `TH`/`TD`
+from the header and row fragments. Check: `inspectPdf` from `@typfolio/dev-tools` on the runtime's PDFs
+against Typst's, then veraPDF for conformance (not installed in this container).
 
 - **M2 done.** `runtime/` reads `doc.json` and the fonts, maps slot text to glyphs through the font's cmap and
   advances it with `hmtx`, applies alignment and the overflow policy (`error`, `clip`, `shrink`, `ellipsis`),

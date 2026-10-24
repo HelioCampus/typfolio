@@ -1,7 +1,7 @@
 //! paramdoc-export: compiles a slot-dialect template with Typst, exports its frames as a parametric document
 //! and checks that nothing outside the declared slots depends on the data.
 //!
-//! Usage: paramdoc-export <fixture-dir> [--data file.json] [--fonts dir] [--out dir] [--fuzz N] [--seed S]
+//! Usage: paramdoc-export <fixture-dir> [--data f] [--fonts d] [--out d] [--fuzz N] [--seed S] [--reference data.json]
 
 use std::collections::HashMap;
 use std::fs;
@@ -13,13 +13,13 @@ use typst::diag::{FileError, FileResult, SourceDiagnostic, Warned};
 use typst::foundations::{Bytes, Datetime, Duration, Label, Value};
 use typst::introspection::{MetadataElem, Tag};
 use typst::layout::{Abs, Frame, FrameItem, Point, Size, Transform};
-use typst_layout::PagedDocument;
 use typst::model::Document as _;
 use typst::syntax::{FileId, RootedPath, Source, VirtualPath, VirtualRoot};
-use typst::text::{Font, FontBook};
+use typst::text::{Font, FontBook, TextItem};
 use typst::utils::{LazyHash, PicoStr};
-use typst::visualize::{Curve, CurveItem, FixedStroke, Geometry, ImageKind, Paint, Shape};
+use typst::visualize::{Curve, CurveItem, FixedStroke, Geometry, Image, ImageKind, Paint, Shape};
 use typst::{Library, LibraryExt, World, WorldExt};
+use typst_layout::PagedDocument;
 use typst_pdf::PdfOptions;
 
 use paramdoc_ir as ir;
@@ -27,11 +27,7 @@ use paramdoc_ir as ir;
 // ---------------------------------------------------------------------------------------------------------
 // World
 
-struct LoadedFont {
-    font: Font,
-    file: String,
-    sha256: String,
-}
+struct LoadedFont { font: Font, file: String, sha256: String }
 
 struct MemWorld {
     library: LazyHash<Library>,
@@ -140,42 +136,40 @@ fn format_diag(world: &MemWorld, diag: &SourceDiagnostic) -> String {
 }
 
 // ---------------------------------------------------------------------------------------------------------
-// Export
+// Geometry and item conversion
 
 #[derive(Clone, Copy, Debug)]
 struct Rect { x: f64, y: f64, w: f64, h: f64 }
 
 impl Rect {
+    const EPS: f64 = 1e-6;
     fn same(&self, other: &Rect) -> bool {
-        const EPS: f64 = 1e-6;
-        (self.x - other.x).abs() < EPS && (self.y - other.y).abs() < EPS && (self.w - other.w).abs() < EPS && (self.h - other.h).abs() < EPS
+        (self.x - other.x).abs() < Self::EPS && (self.y - other.y).abs() < Self::EPS && (self.w - other.w).abs() < Self::EPS && (self.h - other.h).abs() < Self::EPS
     }
-}
-
-struct SlotMeta { name: String, align: String, overflow: String, max_length: Option<u32>, descent: f64 }
-
-struct TextStyle { font: usize, size: f64, fill: ir::Color, pen_x: f64 }
-
-/// What Typst itself laid out inside a slot for some data: the runtime compares its own output with this.
-#[derive(serde::Serialize)]
-pub struct ReferenceGlyph { pub id: u16, pub x: f64 }
-
-#[derive(serde::Serialize)]
-pub struct ReferenceSlot { pub name: String, pub baseline: f64, pub size: f64, pub glyphs: Vec<ReferenceGlyph> }
-
-struct SlotRecord { meta: SlotMeta, page: usize, rect: Rect, style: Option<TextStyle>, sample: String, baselines: Vec<f64>, glyphs: Vec<(u16, f64)> }
-
-struct Exporter<'a> {
-    fonts: &'a [LoadedFont],
-    ir_fonts: Vec<ir::Font>,
-    ir_font_of: HashMap<(usize, u32), usize>,
-    slot_label: Label,
+    fn bottom(&self) -> f64 { self.y + self.h }
+    /// Whether `inner` lies inside this rectangle (with a small tolerance).
+    fn encloses(&self, inner: &Rect) -> bool {
+        inner.x >= self.x - 0.01 && inner.y >= self.y - 0.01 && inner.x + inner.w <= self.x + self.w + 0.01 && inner.bottom() <= self.bottom() + 0.01
+    }
 }
 
 fn pt(a: Abs) -> f64 { a.to_pt() }
 fn point(p: Point) -> [f64; 2] { [pt(p.x), pt(p.y)] }
-
 fn matrix(t: Transform) -> [f64; 6] { [t.sx.get(), t.ky.get(), t.kx.get(), t.sy.get(), pt(t.tx), pt(t.ty)] }
+
+fn is_translation(t: Transform) -> bool {
+    (t.sx.get() - 1.0).abs() < 1e-9 && (t.sy.get() - 1.0).abs() < 1e-9 && t.kx.get().abs() < 1e-9 && t.ky.get().abs() < 1e-9
+}
+
+/// Maps a point through a transform: `x' = sx·x + kx·y + tx`, `y' = ky·x + sy·y + ty`.
+fn apply(t: Transform, p: Point) -> Point {
+    Point::new(t.sx.get() * p.x + t.kx.get() * p.y + t.tx, t.ky.get() * p.x + t.sy.get() * p.y + t.ty)
+}
+
+/// Absolute transform of a child frame placed at `pos` inside a parent with absolute transform `acc`.
+fn child_transform(acc: Transform, pos: Point, own: Transform) -> Transform {
+    acc.pre_concat(Transform::translate(pos.x, pos.y)).pre_concat(own)
+}
 
 fn curve_ops(curve: &Curve) -> Vec<ir::PathOp> {
     curve.0.iter().map(|item| match item {
@@ -188,10 +182,7 @@ fn curve_ops(curve: &Curve) -> Vec<ir::PathOp> {
 
 fn color(paint: &Paint) -> Result<ir::Color> {
     match paint {
-        Paint::Solid(c) => {
-            let rgb = c.to_rgb();
-            Ok(ir::Color { r: rgb.red, g: rgb.green, b: rgb.blue, a: rgb.alpha })
-        }
+        Paint::Solid(c) => { let rgb = c.to_rgb(); Ok(ir::Color { r: rgb.red, g: rgb.green, b: rgb.blue, a: rgb.alpha }) }
         other => bail!("unsupported paint (only solid colours for now): {other:?}"),
     }
 }
@@ -207,7 +198,7 @@ fn stroke(s: &FixedStroke) -> Result<ir::Stroke> {
     })
 }
 
-fn shape(pos: Point, s: &Shape) -> Result<ir::Item> {
+fn shape_item(pos: Point, s: &Shape) -> Result<ir::Item> {
     let geometry = match &s.geometry {
         Geometry::Line(to) => ir::Geometry::Line { to: point(*to) },
         Geometry::Rect(size) => ir::Geometry::Rect { width: pt(size.x), height: pt(size.y) },
@@ -220,20 +211,76 @@ fn shape(pos: Point, s: &Shape) -> Result<ir::Item> {
     })
 }
 
-/// Absolute transform of a child frame placed at `pos` inside a parent with absolute transform `acc`.
-/// Maps a point through a transform: `x' = sx·x + kx·y + tx`, `y' = ky·x + sy·y + ty`.
-fn apply(t: Transform, p: Point) -> Point {
-    Point::new(t.sx.get() * p.x + t.kx.get() * p.y + t.tx, t.ky.get() * p.x + t.sy.get() * p.y + t.ty)
+fn shape_bbox(abs: Point, s: &Shape) -> Rect {
+    let b = s.bbox(true);
+    Rect { x: pt(abs.x) + pt(b.min.x), y: pt(abs.y) + pt(b.min.y), w: pt(b.max.x - b.min.x), h: pt(b.max.y - b.min.y) }
 }
 
-fn child_transform(acc: Transform, pos: Point, own: Transform) -> Transform {
-    acc.pre_concat(Transform::translate(pos.x, pos.y)).pre_concat(own)
+fn image_item(pos: Point, image: &Image, size: Size) -> ir::Item {
+    let (format, sha256) = match image.kind() {
+        ImageKind::Raster(raster) => (format!("{:?}", raster.format()).to_ascii_lowercase(), hex(&Sha256::digest(raster.data()))),
+        ImageKind::Svg(_) => ("svg".to_string(), String::new()),
+        ImageKind::Pdf(_) => ("pdf".to_string(), String::new()),
+    };
+    ir::Item::Image { x: pt(pos.x), y: pt(pos.y), width: pt(size.x), height: pt(size.y), format, sha256 }
+}
+
+fn shift(item: &mut ir::Item, dx: f64, dy: f64) {
+    match item {
+        ir::Item::Group { x, y, .. } | ir::Item::Text { x, y, .. } | ir::Item::Shape { x, y, .. } | ir::Item::Image { x, y, .. } => { *x += dx; *y += dy; }
+    }
+}
+
+// ---------------------------------------------------------------------------------------------------------
+// Tags found in the frames
+
+struct SlotMeta { name: String, align: String, overflow: String, max_length: Option<u32>, descent: f64 }
+struct TextStyle { font: usize, size: f64, fill: ir::Color, pen_x: f64 }
+struct SlotRecord { meta: SlotMeta, page: usize, rect: Rect, style: Option<TextStyle>, sample: String, baselines: Vec<f64>, glyphs: Vec<(u16, f64)> }
+struct BandTag { name: String, repeat_on_break: bool, page: usize, rect: Rect }
+struct OverlayTag { page: usize, rect: Rect }
+struct Margins { top: f64, bottom: f64, left: f64, right: f64 }
+
+#[derive(Default)]
+struct Tags { slots: Vec<SlotRecord>, bands: Vec<BandTag>, overlays: Vec<OverlayTag>, pages: Option<Margins> }
+
+/// What Typst itself laid out inside a slot for some data: the runtime compares its own output with this.
+#[derive(serde::Serialize)]
+pub struct ReferenceGlyph { pub id: u16, pub x: f64 }
+
+#[derive(serde::Serialize)]
+pub struct ReferenceSlot { pub name: String, pub baseline: f64, pub size: f64, pub glyphs: Vec<ReferenceGlyph> }
+
+/// A top-level piece of the sample page after flattening: a leaf item, or a clipped/transformed group.
+struct Atom { rect: Rect, item: ir::Item, kind: AtomKind }
+
+enum AtomKind { Static, Band { name: String, repeat_on_break: bool }, Overlay }
+
+struct Labels { slot: Label, band: Label, overlay: Label, pages: Label }
+
+struct Exporter<'a> {
+    fonts: &'a [LoadedFont],
+    ir_fonts: Vec<ir::Font>,
+    ir_font_of: HashMap<(usize, u32), usize>,
+    labels: Labels,
+}
+
+fn dict_number(dict: &typst::foundations::Dict, key: &str) -> Result<f64> {
+    match dict.get(key) {
+        Ok(Value::Float(f)) => Ok(*f),
+        Ok(Value::Int(n)) => Ok(*n as f64),
+        Ok(Value::Length(l)) => Ok(l.abs.to_pt()),
+        other => bail!("metadata `{key}` is not a number of points: {other:?}"),
+    }
 }
 
 impl<'a> Exporter<'a> {
     fn new(fonts: &'a [LoadedFont]) -> Result<Self> {
-        let slot_label = Label::new(PicoStr::intern("paramdoc-slot")).ok_or_else(|| anyhow!("empty label"))?;
-        Ok(Self { fonts, ir_fonts: Vec::new(), ir_font_of: HashMap::new(), slot_label })
+        let label = |name: &str| Label::new(PicoStr::intern(name)).ok_or_else(|| anyhow!("empty label"));
+        Ok(Self {
+            fonts, ir_fonts: Vec::new(), ir_font_of: HashMap::new(),
+            labels: Labels { slot: label("paramdoc-slot")?, band: label("paramdoc-band")?, overlay: label("paramdoc-overlay")?, pages: label("paramdoc-pages")? },
+        })
     }
 
     fn font_id(&mut self, font: &Font) -> Result<usize> {
@@ -248,6 +295,18 @@ impl<'a> Exporter<'a> {
         Ok(id)
     }
 
+    fn text_item(&mut self, pos: Point, text: &TextItem) -> Result<ir::Item> {
+        Ok(ir::Item::Text {
+            x: pt(pos.x), y: pt(pos.y), font: self.font_id(text.font.font())?, size: pt(text.size), fill: color(&text.fill)?, text: text.text.to_string(),
+            glyphs: text.glyphs.iter().map(|g| ir::Glyph {
+                id: g.id,
+                x_advance: pt(g.x_advance.at(text.size)),
+                x_offset: pt(g.x_offset.at(text.size)),
+                y_offset: pt(g.y_offset.at(text.size)),
+            }).collect(),
+        })
+    }
+
     fn slot_meta(&self, value: &Value) -> Result<SlotMeta> {
         let Value::Dict(dict) = value else { bail!("slot metadata is not a dictionary: {value:?}") };
         let string = |key: &str| -> Result<String> {
@@ -258,29 +317,44 @@ impl<'a> Exporter<'a> {
             Ok(Value::None) | Err(_) => None,
             other => bail!("slot metadata `max-length` is not an integer: {other:?}"),
         };
-        let descent = match dict.get("descent") {
-            Ok(Value::Float(f)) => *f,
-            Ok(Value::Int(n)) => *n as f64,
-            Ok(Value::Length(l)) => l.abs.to_pt(),
-            other => bail!("slot metadata `descent` is not a number of points: {other:?}"),
-        };
-        Ok(SlotMeta { name: string("name")?, align: string("align")?, overflow: string("overflow")?, max_length, descent })
+        Ok(SlotMeta { name: string("name")?, align: string("align")?, overflow: string("overflow")?, max_length, descent: dict_number(dict, "descent")? })
     }
 
-    /// Pass 1: every slot tag and the clipped box it sits in.
-    fn collect_slots(&self, page: usize, frame: &Frame, acc: Transform, clipped: Option<Rect>, out: &mut Vec<SlotRecord>) -> Result<()> {
+    fn rect_of(&self, t: Transform, size: Size) -> Result<Rect> {
+        if !is_translation(t) { bail!("a clipped group with a non-translation transform is not supported yet: {t:?}"); }
+        let origin = apply(t, Point::zero());
+        Ok(Rect { x: pt(origin.x), y: pt(origin.y), w: pt(size.x), h: pt(size.y) })
+    }
+
+    /// Pass 1: every dialect tag and the clipped box it sits in.
+    fn collect_tags(&self, page: usize, frame: &Frame, acc: Transform, clipped: Option<Rect>, tags: &mut Tags) -> Result<()> {
         for (pos, item) in frame.items() {
             match item {
                 FrameItem::Group(group) => {
                     let t = child_transform(acc, *pos, group.transform);
                     let rect = if group.clip.is_some() { Some(self.rect_of(t, group.frame.size())?) } else { clipped };
-                    self.collect_slots(page, &group.frame, t, rect, out)?;
+                    self.collect_tags(page, &group.frame, t, rect, tags)?;
                 }
-                FrameItem::Tag(Tag::Start(content, _)) if content.label() == Some(self.slot_label) => {
-                    let elem = content.to_packed::<MetadataElem>().ok_or_else(|| anyhow!("slot label on a non-metadata element"))?;
-                    let meta = self.slot_meta(&elem.value)?;
-                    let rect = clipped.ok_or_else(|| anyhow!("slot `{}` is not inside a clipped box", meta.name))?;
-                    out.push(SlotRecord { meta, page, rect, style: None, sample: String::new(), baselines: Vec::new(), glyphs: Vec::new() });
+                FrameItem::Tag(Tag::Start(content, _)) if content.label().is_some() => {
+                    let label = content.label().unwrap();
+                    let value = || content.to_packed::<MetadataElem>().map(|m| &m.value).ok_or_else(|| anyhow!("dialect label on a non-metadata element"));
+                    if label == self.labels.slot {
+                        let meta = self.slot_meta(value()?)?;
+                        let rect = clipped.ok_or_else(|| anyhow!("slot `{}` is not inside a clipped box", meta.name))?;
+                        tags.slots.push(SlotRecord { meta, page, rect, style: None, sample: String::new(), baselines: Vec::new(), glyphs: Vec::new() });
+                    } else if label == self.labels.band {
+                        let Value::Dict(dict) = value()? else { bail!("band metadata is not a dictionary") };
+                        let name = match dict.get("name") { Ok(Value::Str(s)) => s.as_str().to_string(), other => bail!("band `name` is not a string: {other:?}") };
+                        let repeat_on_break = matches!(dict.get("repeat-on-break"), Ok(Value::Bool(true)));
+                        let rect = clipped.ok_or_else(|| anyhow!("band `{name}` is not inside a clipped block"))?;
+                        tags.bands.push(BandTag { name, repeat_on_break, page, rect });
+                    } else if label == self.labels.overlay {
+                        let rect = clipped.ok_or_else(|| anyhow!("overlay is not inside a clipped box"))?;
+                        tags.overlays.push(OverlayTag { page, rect });
+                    } else if label == self.labels.pages {
+                        let Value::Dict(dict) = value()? else { bail!("pages metadata is not a dictionary") };
+                        tags.pages = Some(Margins { top: dict_number(dict, "top")?, bottom: dict_number(dict, "bottom")?, left: dict_number(dict, "left")?, right: dict_number(dict, "right")? });
+                    }
                 }
                 _ => {}
             }
@@ -288,16 +362,9 @@ impl<'a> Exporter<'a> {
         Ok(())
     }
 
-    fn rect_of(&self, t: Transform, size: Size) -> Result<Rect> {
-        let translation_only = (t.sx.get() - 1.0).abs() < 1e-9 && (t.sy.get() - 1.0).abs() < 1e-9 && t.kx.get().abs() < 1e-9 && t.ky.get().abs() < 1e-9;
-        if !translation_only { bail!("a clipped group with a non-translation transform is not supported yet: {t:?}"); }
-        let origin = apply(t, Point::zero());
-        Ok(Rect { x: pt(origin.x), y: pt(origin.y), w: pt(size.x), h: pt(size.y) })
-    }
-
-    /// Pass 2: static items. Everything inside a slot's clipped box is dynamic: its text only informs the
-    /// slot's style and is otherwise dropped. Membership is by frame hierarchy, not geometry, so a run that
-    /// starts exactly at a slot's edge is never mistaken for slot content.
+    /// Pass 2: static items of a frame, relative to the frame. Everything inside a slot's clipped box is
+    /// dynamic: its text only informs the slot's style and is otherwise dropped. Membership is by frame
+    /// hierarchy, not geometry, so a run that starts exactly at a slot's edge is never mistaken for slot content.
     fn export_frame(&mut self, page: usize, frame: &Frame, acc: Transform, slots: &mut [SlotRecord], current: Option<usize>) -> Result<Vec<ir::Item>> {
         let mut items = Vec::new();
         for (pos, item) in frame.items() {
@@ -310,20 +377,14 @@ impl<'a> Exporter<'a> {
                         if let Some(index) = slots.iter().position(|s| s.page == page && s.rect.same(&rect)) { inside = Some(index); }
                     }
                     let inner = self.export_frame(page, &group.frame, t, slots, inside)?;
-                    items.push(ir::Item::Group {
-                        x: pt(pos.x), y: pt(pos.y), transform: matrix(group.transform),
-                        clip: group.clip.as_ref().map(curve_ops), items: inner,
-                    });
+                    items.push(ir::Item::Group { x: pt(pos.x), y: pt(pos.y), transform: matrix(group.transform), clip: group.clip.as_ref().map(curve_ops), items: inner });
                 }
                 FrameItem::Text(text) => {
-                    let font = self.font_id(text.font.font())?;
-                    let fill = color(&text.fill)?;
                     if let Some(index) = current {
                         let abs = apply(acc, *pos);
+                        let font = self.font_id(text.font.font())?;
                         let slot = &mut slots[index];
-                        if slot.style.is_none() {
-                            slot.style = Some(TextStyle { font, size: pt(text.size), fill, pen_x: pt(abs.x) });
-                        }
+                        if slot.style.is_none() { slot.style = Some(TextStyle { font, size: pt(text.size), fill: color(&text.fill)?, pen_x: pt(abs.x) }); }
                         if !slot.baselines.iter().any(|b| (b - pt(abs.y)).abs() < 1e-6) { slot.baselines.push(pt(abs.y)); }
                         slot.sample.push_str(&text.text);
                         let mut pen = pt(abs.x);
@@ -333,47 +394,66 @@ impl<'a> Exporter<'a> {
                         }
                         continue;
                     }
-                    items.push(ir::Item::Text {
-                        x: pt(pos.x), y: pt(pos.y), font, size: pt(text.size), fill, text: text.text.to_string(),
-                        glyphs: text.glyphs.iter().map(|g| ir::Glyph {
-                            id: g.id,
-                            x_advance: pt(g.x_advance.at(text.size)),
-                            x_offset: pt(g.x_offset.at(text.size)),
-                            y_offset: pt(g.y_offset.at(text.size)),
-                        }).collect(),
-                    });
+                    items.push(self.text_item(*pos, text)?);
                 }
-                FrameItem::Shape(s, _) => items.push(shape(*pos, s)?),
-                FrameItem::Image(image, size, _) => {
-                    let (format, sha256) = match image.kind() {
-                        ImageKind::Raster(raster) => (format!("{:?}", raster.format()).to_ascii_lowercase(), hex(&Sha256::digest(raster.data()))),
-                        ImageKind::Svg(_) => ("svg".to_string(), String::new()),
-                        ImageKind::Pdf(_) => ("pdf".to_string(), String::new()),
-                    };
-                    items.push(ir::Item::Image { x: pt(pos.x), y: pt(pos.y), width: pt(size.x), height: pt(size.y), format, sha256 });
-                }
+                FrameItem::Shape(s, _) => items.push(shape_item(*pos, s)?),
+                FrameItem::Image(image, size, _) => items.push(image_item(*pos, image, *size)),
                 FrameItem::Link(..) | FrameItem::Tag(..) => {}
             }
         }
         Ok(items)
     }
 
-    /// Exports the document. With `strict`, a slot whose sample is empty is an error, because its style
-    /// cannot be observed; without it (fuzz builds) such slots get placeholder styles and are reported in
-    /// the second return value so the caller can exclude them from the style comparison.
-    fn export(mut self, doc: &PagedDocument, strict: bool) -> Result<(ir::Document, Vec<String>, Vec<ReferenceSlot>)> {
+    /// The sample page as a flat list of atoms in absolute coordinates: unclipped translation-only groups
+    /// are flattened; clipped or transformed groups (slots, bands, overlays, boxes) stay whole.
+    fn flatten(&mut self, page: usize, frame: &Frame, acc: Transform, slots: &mut [SlotRecord], bands: &[BandTag], overlays: &[OverlayTag], out: &mut Vec<Atom>) -> Result<()> {
+        for (pos, item) in frame.items() {
+            match item {
+                FrameItem::Group(group) => {
+                    let t = child_transform(acc, *pos, group.transform);
+                    if group.clip.is_none() && is_translation(group.transform) {
+                        self.flatten(page, &group.frame, t, slots, bands, overlays, out)?;
+                        continue;
+                    }
+                    let origin = apply(t, Point::zero());
+                    let rect = Rect { x: pt(origin.x), y: pt(origin.y), w: pt(group.frame.width()), h: pt(group.frame.height()) };
+                    let current = slots.iter().position(|s| s.page == page && s.rect.same(&rect));
+                    let inner = self.export_frame(page, &group.frame, t, slots, current)?;
+                    let kind = if let Some(b) = bands.iter().find(|b| b.page == page && b.rect.same(&rect)) {
+                        AtomKind::Band { name: b.name.clone(), repeat_on_break: b.repeat_on_break }
+                    } else if overlays.iter().any(|o| o.page == page && o.rect.same(&rect)) {
+                        AtomKind::Overlay
+                    } else { AtomKind::Static };
+                    out.push(Atom { rect, item: ir::Item::Group { x: rect.x, y: rect.y, transform: matrix(group.transform), clip: group.clip.as_ref().map(curve_ops), items: inner }, kind });
+                }
+                FrameItem::Text(text) => {
+                    let abs = apply(acc, *pos);
+                    let size = pt(text.size);
+                    let width: f64 = text.glyphs.iter().map(|g| pt(g.x_advance.at(text.size))).sum();
+                    let item = self.text_item(abs, text)?;
+                    out.push(Atom { rect: Rect { x: pt(abs.x), y: pt(abs.y) - 0.8 * size, w: width, h: 1.05 * size }, item, kind: AtomKind::Static });
+                }
+                FrameItem::Shape(s, _) => {
+                    let abs = apply(acc, *pos);
+                    out.push(Atom { rect: shape_bbox(abs, s), item: shape_item(abs, s)?, kind: AtomKind::Static });
+                }
+                FrameItem::Image(image, size, _) => {
+                    let abs = apply(acc, *pos);
+                    out.push(Atom { rect: Rect { x: pt(abs.x), y: pt(abs.y), w: pt(size.x), h: pt(size.y) }, item: image_item(abs, image, *size), kind: AtomKind::Static });
+                }
+                FrameItem::Link(..) | FrameItem::Tag(..) => {}
+            }
+        }
+        Ok(())
+    }
+
+    /// Slot records to absolute slots plus their reference layouts. A slot whose sample is empty shows no
+    /// style: with `strict` that is an error, otherwise it gets placeholders and is listed in `unstyled`.
+    fn finish_slots(&self, records: Vec<SlotRecord>, strict: bool) -> Result<(Vec<ir::Slot>, Vec<String>, Vec<ReferenceSlot>)> {
         let mut unstyled = Vec::new();
         let mut reference = Vec::new();
         let mut slots = Vec::new();
-        for (index, page) in doc.pages().iter().enumerate() {
-            self.collect_slots(index, &page.frame, Transform::identity(), None, &mut slots)?;
-        }
-        let mut pages = Vec::new();
-        for (index, page) in doc.pages().iter().enumerate() {
-            let items = self.export_frame(index, &page.frame, Transform::identity(), &mut slots, None)?;
-            pages.push(ir::Page { width: pt(page.frame.width()), height: pt(page.frame.height()), items });
-        }
-        let slots = slots.into_iter().map(|s| {
+        for s in records {
             let style = match s.style {
                 Some(style) => style,
                 None if strict => bail!("slot `{}` has no sample text; give it a non-empty sample value", s.meta.name),
@@ -381,32 +461,186 @@ impl<'a> Exporter<'a> {
             };
             // The contract is geometric: the slot's baseline is the box bottom minus the declared descent (the
             // dialect aligns the text's baseline there). The sample only tells us the style; it is checked.
-            let baseline = s.rect.y + s.rect.h - s.meta.descent;
+            let baseline = s.rect.bottom() - s.meta.descent;
             if strict && s.baselines.len() > 1 {
                 eprintln!("warning: slot `{}`: the sample wrapped to {} lines; the runtime draws a single line", s.meta.name, s.baselines.len());
             }
             if strict && !s.baselines.iter().any(|b| (b - baseline).abs() < 0.01) {
-                eprintln!("warning: slot `{}`: the sample's baseline(s) {:?} are not at the box bottom {baseline:.2}", s.meta.name, s.baselines);
+                eprintln!("warning: slot `{}`: the sample's baseline(s) {:?} are not at the box bottom minus descent ({baseline:.2})", s.meta.name, s.baselines);
             }
             reference.push(ReferenceSlot {
                 name: s.meta.name.clone(), baseline: s.baselines.last().copied().unwrap_or(baseline), size: style.size,
                 glyphs: s.glyphs.iter().map(|(id, x)| ReferenceGlyph { id: *id, x: *x }).collect(),
             });
-            Ok(ir::Slot {
+            slots.push(ir::Slot {
                 name: s.meta.name, page: s.page, x: s.rect.x, y: s.rect.y, width: s.rect.w, height: s.rect.h,
                 baseline, descent: s.meta.descent, pen_x: style.pen_x, font: style.font, size: style.size, fill: style.fill,
                 align: s.meta.align, overflow: s.meta.overflow, max_length: s.meta.max_length, sample: s.sample,
-            })
-        }).collect::<Result<Vec<_>>>()?;
-        Ok((ir::Document {
-            version: ir::VERSION,
-            title: doc.info().title.as_ref().map(|t| t.to_string()),
-            fonts: self.ir_fonts,
-            pages,
-            slots,
-        }, unstyled, reference))
+            });
+        }
+        Ok((slots, unstyled, reference))
+    }
+
+    fn export(self, doc: &PagedDocument, strict: bool) -> Result<Exported> {
+        let mut tags = Tags::default();
+        for (index, page) in doc.pages().iter().enumerate() {
+            self.collect_tags(index, &page.frame, Transform::identity(), None, &mut tags)?;
+        }
+        let title = doc.info().title.as_ref().map(|t| t.to_string());
+        if tags.pages.is_some() { self.export_flow(doc, tags, title, strict) } else { self.export_fixed(doc, tags, title, strict) }
+    }
+
+    /// A document without bands: fixed pages with absolute slots.
+    fn export_fixed(mut self, doc: &PagedDocument, mut tags: Tags, title: Option<String>, strict: bool) -> Result<Exported> {
+        if !tags.bands.is_empty() { bail!("bands need a `paged` wrapper so the runtime knows the flow area"); }
+        let mut pages = Vec::new();
+        for (index, page) in doc.pages().iter().enumerate() {
+            let items = self.export_frame(index, &page.frame, Transform::identity(), &mut tags.slots, None)?;
+            pages.push(ir::Page { width: pt(page.frame.width()), height: pt(page.frame.height()), items });
+        }
+        let (slots, unstyled, reference) = self.finish_slots(tags.slots, strict)?;
+        Ok(Exported { doc: ir::Document { version: ir::VERSION, title, fonts: self.ir_fonts, pages, slots, flow: None }, unstyled, reference })
+    }
+
+    /// A flow document: the single sample page segmented into static blocks, repeat regions and overlays.
+    fn export_flow(mut self, doc: &PagedDocument, mut tags: Tags, title: Option<String>, strict: bool) -> Result<Exported> {
+        if doc.pages().len() != 1 { bail!("a flow template's sample must fit on one page; it has {} pages (use fewer sample rows)", doc.pages().len()); }
+        let page = &doc.pages()[0];
+        let margins = tags.pages.take().expect("flow mode has margins");
+        let (page_width, page_height) = (pt(page.frame.width()), pt(page.frame.height()));
+        let area = ir::Area { x: margins.left, y: margins.top, width: page_width - margins.left - margins.right, height: page_height - margins.top - margins.bottom };
+
+        let mut atoms = Vec::new();
+        self.flatten(0, &page.frame, Transform::identity(), &mut tags.slots, &tags.bands, &tags.overlays, &mut atoms)?;
+        let (abs_slots, unstyled, references) = self.finish_slots(tags.slots, strict)?;
+        atoms.sort_by(|a, b| a.rect.y.partial_cmp(&b.rect.y).unwrap_or(std::cmp::Ordering::Equal));
+        let (overlay_atoms, flow_atoms): (Vec<Atom>, Vec<Atom>) = atoms.into_iter().partition(|a| matches!(a.kind, AtomKind::Overlay));
+
+        // Where each absolute slot ends up, for naming the reference and for assignment.
+        enum Owner { Band { name: String, instance: Option<usize> }, Overlay, Flow }
+        let mut owners: Vec<Owner> = abs_slots.iter().map(|_| Owner::Flow).collect();
+        let mut taken = vec![false; abs_slots.len()];
+        let take_inside = |rect: &Rect, taken: &mut Vec<bool>, owners: &mut Vec<Owner>, owner: &dyn Fn() -> Owner| -> Vec<ir::Slot> {
+            let mut out = Vec::new();
+            for (i, slot) in abs_slots.iter().enumerate() {
+                let slot_rect = Rect { x: slot.x, y: slot.y, w: slot.width, h: slot.height };
+                if !taken[i] && rect.encloses(&slot_rect) {
+                    taken[i] = true;
+                    owners[i] = owner();
+                    let mut relative = slot.clone();
+                    relative.page = 0;
+                    relative.x -= rect.x; relative.y -= rect.y; relative.baseline -= rect.y; relative.pen_x -= rect.x;
+                    out.push(relative);
+                }
+            }
+            out
+        };
+        let fragment_of = |atom: &Atom, slots: Vec<ir::Slot>, y: f64| -> Result<ir::Fragment> {
+            let ir::Item::Group { items, .. } = &atom.item else { bail!("a band or overlay atom is not a group") };
+            Ok(ir::Fragment { x: atom.rect.x, y, width: atom.rect.w, height: atom.rect.h, items: items.clone(), slots })
+        };
+
+        let mut blocks = Vec::new();
+        let mut bands: Vec<ir::Band> = Vec::new();
+        let mut pending: Vec<&Atom> = Vec::new();
+        let mut prev_bottom = area.y;
+        let mut instances: HashMap<String, usize> = HashMap::new();
+
+        let mut i = 0;
+        while i < flow_atoms.len() {
+            let atom = &flow_atoms[i];
+            let AtomKind::Band { name, repeat_on_break } = &atom.kind else { pending.push(atom); i += 1; continue };
+            // Everything above this region is a static block ending where the region starts.
+            let top = prev_bottom;
+            let bottom = atom.rect.y;
+            if bottom < top - 0.01 { bail!("band `{name}` at y {bottom:.2} overlaps the content before it (ends at {top:.2})"); }
+            if !pending.is_empty() || bottom > top + 1e-6 {
+                blocks.push(ir::Block::Static { fragment: static_fragment(&pending, top, bottom - top, page_width, &mut |rect| take_inside(rect, &mut taken, &mut owners, &|| Owner::Flow)) });
+                pending.clear();
+            }
+            let mut header = None;
+            let mut header_gap = 0.0;
+            let mut j = i;
+            if *repeat_on_break {
+                if bands.iter().any(|b| &b.name == name) { bail!("header band `{name}` appears twice"); }
+                let slots = take_inside(&atom.rect, &mut taken, &mut owners, &|| Owner::Band { name: name.clone(), instance: None });
+                bands.push(ir::Band { name: name.clone(), repeat_on_break: true, fragment: fragment_of(atom, slots, 0.0)? });
+                header = Some(name.clone());
+                j += 1;
+                let next = flow_atoms.get(j).ok_or_else(|| anyhow!("header band `{name}` is not followed by row bands"))?;
+                header_gap = { let g = next.rect.y - atom.rect.bottom(); if g.abs() < 0.01 { 0.0 } else { g } };
+            }
+            let AtomKind::Band { name: row_name, repeat_on_break: false } = &flow_atoms.get(j).map(|a| &a.kind).ok_or_else(|| anyhow!("expected row bands"))? else {
+                bail!("header band `{name}` must be followed directly by its row bands")
+            };
+            let first = &flow_atoms[j];
+            let mut k = j;
+            let mut gap = 0.0;
+            let mut count = 0;
+            while let Some(a) = flow_atoms.get(k) && matches!(&a.kind, AtomKind::Band { name, repeat_on_break: false } if name == row_name) {
+                if count == 0 {
+                    if bands.iter().any(|b| &b.name == row_name) { bail!("band `{row_name}` is used in two repeat regions"); }
+                    let slots = take_inside(&a.rect, &mut taken, &mut owners, &|| Owner::Band { name: row_name.clone(), instance: Some(0) });
+                    bands.push(ir::Band { name: row_name.clone(), repeat_on_break: false, fragment: fragment_of(a, slots, 0.0)? });
+                } else {
+                    if (a.rect.h - first.rect.h).abs() > 0.01 || (a.rect.w - first.rect.w).abs() > 0.01 || (a.rect.x - first.rect.x).abs() > 0.01 {
+                        bail!("band `{row_name}`: instance {count} is {:.2} x {:.2} at x {:.2}, the first is {:.2} x {:.2} at x {:.2}; rows must have a fixed size", a.rect.w, a.rect.h, a.rect.x, first.rect.w, first.rect.h, first.rect.x);
+                    }
+                    let this_gap = { let g = a.rect.y - flow_atoms[k - 1].rect.bottom(); if g.abs() < 0.01 { 0.0 } else { g } };
+                    if count == 1 { gap = this_gap; } else if (this_gap - gap).abs() > 0.01 { bail!("band `{row_name}`: the gap between rows varies ({gap:.2} vs {this_gap:.2})"); }
+                    // Slots of later instances are not exported, only accounted for.
+                    let n = take_inside(&a.rect, &mut taken, &mut owners, &|| Owner::Band { name: row_name.clone(), instance: Some(count) }).len();
+                    if n != bands.last().unwrap().fragment.slots.len() { bail!("band `{row_name}`: instance {count} has {n} slots, the first has {}", bands.last().unwrap().fragment.slots.len()); }
+                }
+                count += 1;
+                k += 1;
+            }
+            instances.insert(row_name.clone(), count);
+            blocks.push(ir::Block::Repeat { band: row_name.clone(), header, header_gap, gap, sample_rows: count });
+            prev_bottom = flow_atoms[k - 1].rect.bottom();
+            i = k;
+        }
+        if !pending.is_empty() {
+            let bottom = pending.iter().map(|a| a.rect.bottom()).fold(prev_bottom, f64::max);
+            blocks.push(ir::Block::Static { fragment: static_fragment(&pending, prev_bottom, bottom - prev_bottom, page_width, &mut |rect| take_inside(rect, &mut taken, &mut owners, &|| Owner::Flow)) });
+        }
+        let mut overlays = Vec::new();
+        for atom in &overlay_atoms {
+            let slots = take_inside(&atom.rect, &mut taken, &mut owners, &|| Owner::Overlay);
+            overlays.push(fragment_of(atom, slots, atom.rect.y)?);
+        }
+        if let Some(i) = taken.iter().position(|t| !t) { bail!("slot `{}` is not inside any block, band or overlay", abs_slots[i].name); }
+
+        let reference = references.into_iter().zip(&owners).map(|(mut r, owner)| {
+            r.name = match owner {
+                Owner::Band { name, instance: Some(i) } => format!("{name}[{i}].{}", r.name),
+                Owner::Band { name, instance: None } => format!("{name}.{}", r.name),
+                Owner::Overlay => format!("page[0].{}", r.name),
+                Owner::Flow => r.name,
+            };
+            r
+        }).collect();
+        let _ = instances;
+        Ok(Exported {
+            doc: ir::Document {
+                version: ir::VERSION, title, fonts: self.ir_fonts, pages: Vec::new(), slots: Vec::new(),
+                flow: Some(ir::Flow { page_width, page_height, area, blocks, bands, overlays }),
+            },
+            unstyled, reference,
+        })
     }
 }
+
+/// A static block from the atoms between two regions: items shifted so that `top` becomes 0; slots taken
+/// from the vertical range.
+fn static_fragment(atoms: &[&Atom], top: f64, height: f64, width: f64, take: &mut dyn FnMut(&Rect) -> Vec<ir::Slot>) -> ir::Fragment {
+    let items = atoms.iter().map(|a| { let mut item = a.item.clone(); shift(&mut item, 0.0, -top); item }).collect();
+    // The fragment spans the page width from x = 0, so slot x positions stay absolute.
+    let slots = take(&Rect { x: 0.0, y: top, w: 1e9, h: height.max(0.0) });
+    ir::Fragment { x: 0.0, y: 0.0, width, height, items, slots }
+}
+
+struct Exported { doc: ir::Document, unstyled: Vec<String>, reference: Vec<ReferenceSlot> }
 
 // ---------------------------------------------------------------------------------------------------------
 // Fuzz and diff
@@ -426,6 +660,8 @@ impl Rng {
 
 const CHARSET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz 0123456789-.,'";
 
+/// Random data of the same shape: strings of random length (up to twice the sample's), random numbers,
+/// arrays of 1 to 2N rows cloned from the sample rows and mutated.
 fn mutate(value: &mut serde_json::Value, rng: &mut Rng) {
     match value {
         serde_json::Value::String(s) => {
@@ -435,35 +671,40 @@ fn mutate(value: &mut serde_json::Value, rng: &mut Rng) {
         }
         serde_json::Value::Number(_) => *value = serde_json::Value::from(rng.below(1000)),
         serde_json::Value::Bool(b) => *b = !*b,
-        serde_json::Value::Array(items) => items.iter_mut().for_each(|v| mutate(v, rng)),
+        serde_json::Value::Array(items) => {
+            if items.is_empty() { return; }
+            let n = 1 + rng.below(2 * items.len() as u64) as usize;
+            let template = items.clone();
+            *items = (0..n).map(|i| template[i % template.len()].clone()).collect();
+            items.iter_mut().for_each(|v| mutate(v, rng));
+        }
         serde_json::Value::Object(map) => map.values_mut().for_each(|v| mutate(v, rng)),
         serde_json::Value::Null => {}
     }
 }
 
-/// The layout contract: everything except what the data is allowed to change. Font references are resolved
-/// to the font's identity, because the table is built from what the frames use and a slot with an empty
-/// sample uses nothing; the table itself is left out.
+/// The layout contract: everything except what the data is allowed to change. Samples, pen positions and
+/// sample row counts are stripped; font references are resolved to the font's identity, because the table
+/// is built from what the frames use and a slot with an empty sample uses nothing; the table is left out.
 fn static_view(doc: &ir::Document) -> serde_json::Value {
-    let mut doc = doc.clone();
-    for slot in &mut doc.slots { slot.sample.clear(); slot.pen_x = 0.0; }
     let identities: Vec<String> = doc.fonts.iter().map(|f| format!("{}#{}@{}", f.family, f.index, &f.sha256[..8])).collect();
     let mut value = serde_json::to_value(doc).expect("serializable");
-    fn resolve(value: &mut serde_json::Value, identities: &[String]) {
+    fn strip(value: &mut serde_json::Value, identities: &[String]) {
         match value {
             serde_json::Value::Object(map) => {
+                map.remove("sample"); map.remove("pen_x"); map.remove("sample_rows");
                 if let Some(serde_json::Value::Number(n)) = map.get("font")
                     && let Some(identity) = n.as_u64().and_then(|i| identities.get(i as usize))
                 {
                     map.insert("font".into(), serde_json::Value::String(identity.clone()));
                 }
-                map.values_mut().for_each(|v| resolve(v, identities));
+                map.values_mut().for_each(|v| strip(v, identities));
             }
-            serde_json::Value::Array(items) => items.iter_mut().for_each(|v| resolve(v, identities)),
+            serde_json::Value::Array(items) => items.iter_mut().for_each(|v| strip(v, identities)),
             _ => {}
         }
     }
-    resolve(&mut value, &identities);
+    strip(&mut value, &identities);
     value.as_object_mut().expect("document object").remove("fonts");
     value
 }
@@ -505,7 +746,7 @@ struct Args { fixture: PathBuf, data: PathBuf, fonts: PathBuf, out: PathBuf, fuz
 
 fn parse_args() -> Result<Args> {
     let mut args = std::env::args().skip(1);
-    let fixture = PathBuf::from(args.next().ok_or_else(|| anyhow!("usage: paramdoc-export <fixture-dir> [--data f] [--fonts d] [--out d] [--fuzz N] [--seed S]"))?);
+    let fixture = PathBuf::from(args.next().ok_or_else(|| anyhow!("usage: paramdoc-export <fixture-dir> [--data f] [--fonts d] [--out d] [--fuzz N] [--seed S] [--reference data.json]"))?);
     let name = fixture.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| "doc".into());
     let mut parsed = Args {
         data: fixture.join("data.json"),
@@ -531,13 +772,57 @@ fn parse_args() -> Result<Args> {
     Ok(parsed)
 }
 
-struct Built { doc: PagedDocument, exported: ir::Document, unstyled: Vec<String>, reference: Vec<ReferenceSlot> }
-
-fn build(fixture: &Path, data: &[u8], fonts: &[LoadedFont], strict: bool) -> Result<Built> {
+fn build(fixture: &Path, data: &[u8], fonts: &[LoadedFont], strict: bool) -> Result<(PagedDocument, Exported)> {
     let world = MemWorld::new(fixture, data, fonts)?;
     let doc = compile(&world)?;
-    let (exported, unstyled, reference) = Exporter::new(fonts)?.export(&doc, strict)?;
-    Ok(Built { doc, exported, unstyled, reference })
+    let exported = Exporter::new(fonts)?.export(&doc, strict)?;
+    Ok((doc, exported))
+}
+
+fn count(items: &[ir::Item]) -> (usize, usize, usize) {
+    items.iter().fold((0, 0, 0), |(t, s, g), item| match item {
+        ir::Item::Text { .. } => (t + 1, s, g),
+        ir::Item::Shape { .. } => (t, s + 1, g),
+        ir::Item::Group { items, .. } => { let (a, b, c) = count(items); (t + a, s + b, g + 1 + c) }
+        ir::Item::Image { .. } => (t, s, g),
+    })
+}
+
+fn describe_slot(slot: &ir::Slot, indent: &str) {
+    println!("{indent}slot {:<14} rect ({:.2}, {:.2}) {:.2} x {:.2}  baseline y {:.2}  font #{} {:.1}pt  align {:<6} sample {:?}",
+        slot.name, slot.x, slot.y, slot.width, slot.height, slot.baseline, slot.font, slot.size, slot.align, slot.sample);
+}
+
+fn describe(exported: &ir::Document) {
+    for (i, page) in exported.pages.iter().enumerate() {
+        let (t, s, g) = count(&page.items);
+        println!("  page {i}: {:.1} x {:.1} pt, {t} static text runs, {s} shapes, {g} groups", page.width, page.height);
+    }
+    for slot in &exported.slots { describe_slot(slot, "  "); }
+    if let Some(flow) = &exported.flow {
+        println!("  flow: page {:.1} x {:.1} pt, area x {:.1} y {:.1} w {:.1} h {:.1}", flow.page_width, flow.page_height, flow.area.x, flow.area.y, flow.area.width, flow.area.height);
+        for block in &flow.blocks {
+            match block {
+                ir::Block::Static { fragment } => {
+                    let (t, s, g) = count(&fragment.items);
+                    println!("  static block: height {:.2}, {t} text runs, {s} shapes, {g} groups, {} slot(s)", fragment.height, fragment.slots.len());
+                    for slot in &fragment.slots { describe_slot(slot, "    "); }
+                }
+                ir::Block::Repeat { band, header, header_gap, gap, sample_rows } => {
+                    println!("  repeat `{band}`: header {header:?} (gap after {header_gap:.2}), row gap {gap:.2}, {sample_rows} sample row(s)");
+                }
+            }
+        }
+        for band in &flow.bands {
+            let (t, s, g) = count(&band.fragment.items);
+            println!("  band `{}`{}: x {:.2} w {:.2} h {:.2}, {t} text runs, {s} shapes, {g} groups, {} slot(s)", band.name, if band.repeat_on_break { " (repeat on break)" } else { "" }, band.fragment.x, band.fragment.width, band.fragment.height, band.fragment.slots.len());
+            for slot in &band.fragment.slots { describe_slot(slot, "    "); }
+        }
+        for overlay in &flow.overlays {
+            println!("  overlay: ({:.2}, {:.2}) {:.2} x {:.2}, {} slot(s)", overlay.x, overlay.y, overlay.width, overlay.height, overlay.slots.len());
+            for slot in &overlay.slots { describe_slot(slot, "    "); }
+        }
+    }
 }
 
 fn main() {
@@ -554,7 +839,7 @@ fn run() -> Result<()> {
     let data = fs::read(&args.data).with_context(|| format!("reading {}", args.data.display()))?;
 
     let started = std::time::Instant::now();
-    let Built { doc, exported, .. } = build(&args.fixture, &data, &fonts, true)?;
+    let (doc, Exported { doc: exported, .. }) = build(&args.fixture, &data, &fonts, true)?;
     let compiled_in = started.elapsed();
     let pdf = typst_pdf::pdf(&doc, &PdfOptions::default()).map_err(|e| anyhow!("pdf export failed: {e:?}"))?;
     fs::write(args.out.join("baseline.pdf"), &pdf)?;
@@ -565,30 +850,14 @@ fn run() -> Result<()> {
         let source = fonts.iter().find(|f| f.file == font.file).expect("exported font was loaded");
         fs::write(font_dir.join(&font.file), source.font.data().as_ref() as &[u8])?;
     }
-
-    fn count(items: &[ir::Item]) -> (usize, usize, usize) {
-        items.iter().fold((0, 0, 0), |(t, s, g), item| match item {
-            ir::Item::Text { .. } => (t + 1, s, g),
-            ir::Item::Shape { .. } => (t, s + 1, g),
-            ir::Item::Group { items, .. } => { let (a, b, c) = count(items); (t + a, s + b, g + 1 + c) }
-            ir::Item::Image { .. } => (t, s, g),
-        })
-    }
-    println!("compiled and exported in {compiled_in:.1?}: {} page(s), {} font(s), {} slot(s), baseline PDF {} bytes",
-        exported.pages.len(), exported.fonts.len(), exported.slots.len(), pdf.len());
-    for (i, page) in exported.pages.iter().enumerate() {
-        let (t, s, g) = count(&page.items);
-        println!("  page {i}: {:.1} x {:.1} pt, {t} static text runs, {s} shapes, {g} groups", page.width, page.height);
-    }
-    for slot in &exported.slots {
-        println!("  slot {:<10} page {} rect ({:.2}, {:.2}) {:.2} x {:.2}  baseline y {:.2}  pen x {:.2}  font #{} {:.1}pt  align {:<6} sample {:?}",
-            slot.name, slot.page, slot.x, slot.y, slot.width, slot.height, slot.baseline, slot.pen_x, slot.font, slot.size, slot.align, slot.sample);
-    }
+    println!("compiled and exported in {compiled_in:.1?}: {} font(s), baseline PDF {} bytes, {}",
+        exported.fonts.len(), pdf.len(), if exported.flow.is_some() { "flow document" } else { "fixed pages" });
+    describe(&exported);
 
     // Typst's own layout of some other data, for the runtime to compare against: reference.json / reference.pdf.
     if let Some(path) = &args.reference {
         let bytes = fs::read(path).with_context(|| format!("reading {}", path.display()))?;
-        let Built { doc, reference, .. } = build(&args.fixture, &bytes, &fonts, false)?;
+        let (doc, Exported { reference, .. }) = build(&args.fixture, &bytes, &fonts, false)?;
         fs::write(args.out.join("reference.json"), serde_json::to_string_pretty(&reference)?)?;
         fs::write(args.out.join("reference.pdf"), typst_pdf::pdf(&doc, &PdfOptions::default()).map_err(|e| anyhow!("{e:?}"))?)?;
         println!("reference for {}: {} slot(s) written to reference.json and reference.pdf", path.display(), reference.len());
@@ -604,21 +873,24 @@ fn run() -> Result<()> {
         let mut sample = original.clone();
         mutate(&mut sample, &mut rng);
         let bytes = serde_json::to_vec(&sample)?;
-        let Built { doc, exported: mut fuzzed, unstyled, .. } = match build(&args.fixture, &bytes, &fonts, false) {
+        let (doc, Exported { doc: mut fuzzed, unstyled, .. }) = match build(&args.fixture, &bytes, &fonts, false) {
             Ok(built) => built,
             Err(error) => { leaks += 1; println!("sample {i}: compile failed: {error}"); continue; }
         };
         // An empty sample shows no style; copy the baseline's so only the geometry is compared for that slot.
         for name in &unstyled {
-            let Some(from) = exported.slots.iter().find(|s| &s.name == name) else { continue };
+            let from = exported.slots.iter().chain(exported.flow.iter().flat_map(|f| f.bands.iter().flat_map(|b| b.fragment.slots.iter()).chain(f.overlays.iter().flat_map(|o| o.slots.iter())).chain(f.blocks.iter().filter_map(|b| match b { ir::Block::Static { fragment } => Some(fragment.slots.iter()), _ => None }).flatten()))).find(|s| &s.name == name);
+            let Some(from) = from else { continue };
             let entry = exported.fonts[from.font].clone();
-            let font = match fuzzed.fonts.iter().position(|f| f == &entry) {
-                Some(index) => index,
-                None => { fuzzed.fonts.push(entry); fuzzed.fonts.len() - 1 }
-            };
-            if let Some(to) = fuzzed.slots.iter_mut().find(|s| &s.name == name) {
-                to.font = font; to.size = from.size; to.fill = from.fill;
+            let font = match fuzzed.fonts.iter().position(|f| f == &entry) { Some(index) => index, None => { fuzzed.fonts.push(entry); fuzzed.fonts.len() - 1 } };
+            let (size, fill) = (from.size, from.fill);
+            let mut all: Vec<&mut ir::Slot> = fuzzed.slots.iter_mut().collect();
+            if let Some(flow) = &mut fuzzed.flow {
+                all.extend(flow.bands.iter_mut().flat_map(|b| b.fragment.slots.iter_mut()));
+                all.extend(flow.overlays.iter_mut().flat_map(|o| o.slots.iter_mut()));
+                all.extend(flow.blocks.iter_mut().filter_map(|b| match b { ir::Block::Static { fragment } => Some(fragment.slots.iter_mut()), _ => None }).flatten());
             }
+            for to in all.into_iter().filter(|s| &s.name == name) { to.font = font; to.size = size; to.fill = fill; }
         }
         if i == 0 {
             fs::write(args.out.join("fuzz-0.json"), serde_json::to_string_pretty(&sample)?)?;

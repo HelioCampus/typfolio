@@ -17,7 +17,37 @@
   // The box baseline is pinned (`at: bottom`, shifted up by the descent) so content cannot move the line.
   box(width: width, height: height, clip: true, inset: (bottom: d), baseline: (at: bottom, shift: d))[
     #metadata((name: name, align: repr(align), overflow: overflow, max-length: max-length, descent: d.pt())) <paramdoc-slot>
-    #set text(kerning: false, ligatures: false, bottom-edge: "baseline")
+    #set text(kerning: false, ligatures: false, overhang: false, bottom-edge: "baseline")
     #std.align(align + bottom, value)
   ]
 })
+
+// ---- Flow documents (M3) -------------------------------------------------------------------------------
+// A flow document is a sequence of blocks the runtime stacks and breaks into pages: static blocks between
+// bands, and repeat regions of band instances. Wrap the document in `paged`, which records the flow area.
+
+#let sides(margin) = if type(margin) == dictionary { margin } else { (top: margin, bottom: margin, left: margin, right: margin) }
+
+// Sets the page margins and records them (in points) for the runtime; `footer` is per-page content, wrap it
+// in `overlay`. The record lives in the page foreground so it cannot affect the flow.
+#let paged(margin: 25mm, footer: none, body) = {
+  let m = sides(margin)
+  set page(margin: margin, footer: footer, foreground: context {
+    let pt(side) = m.at(side, default: 0pt).to-absolute().pt()
+    [#metadata((top: pt("top"), bottom: pt("bottom"), left: pt("left"), right: pt("right"))) <paramdoc-pages>]
+  })
+  body
+}
+
+// A band: a block the exporter extracts as a fragment with its own slots. Instances of one name are the rows
+// of a repeat region; `repeat-on-break: true` marks a band repeated at the top of continuation pages.
+#let band(name, body, repeat-on-break: false) = block(width: 100%, clip: true, breakable: false, above: 0pt, below: 0pt)[
+  #metadata((name: name, repeat-on-break: repeat-on-break)) <paramdoc-band>
+  #body
+]
+
+// The sample rows of a repeat region: one band instance per row of the sample data.
+#let repeat(name, rows, make) = for row in rows { band(name, make(row)) }
+
+// Per-page content (a footer): drawn on every page; slots named `page-number` and `page-count` are counters.
+#let overlay(body) = box(width: 100%, clip: true)[#metadata((:)) <paramdoc-overlay> #body]
