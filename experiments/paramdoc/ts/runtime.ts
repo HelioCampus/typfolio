@@ -7,7 +7,7 @@
 // because CompressionStream costs milliseconds per call in browsers. Erasable TypeScript only, so Node can run it
 // with `--experimental-strip-types` and a bundler can ship it to a browser unchanged.
 
-export const IR_VERSION = 7;
+export const IR_VERSION = 8;
 
 // ---------------------------------------------------------------------------------------------------------
 // IR (mirrors ../ir/src/lib.rs; serde writes `None` as null unless skipped)
@@ -31,14 +31,20 @@ export interface Slot {
   name: string; page: number; x: number; y: number; width: number; height: number; baseline: number; descent: number;
   pen_x: number; font: number; size: number; fill: Color; align: string; overflow: string; max_length?: number | null; lines?: number; pitch?: number; auto_lines?: number | null;
   sample: string; node?: number;
+  /** Set for a link slot: where each line's clickable rectangle sits around its baseline (points above and below). */
+  link?: SlotLink | null;
 }
+export interface SlotLink { above: number; below: number }
+/** A clickable link in the static content: Typst's rectangles for one link element (one per line), the URL, Typst's
+ *  description of the destination and the Link structure node the link's text belongs to. */
+export interface Link { page: number; rects: [number, number, number, number][]; url: string; alt?: string | null; node?: number }
 /** A bar hole: one filled rectangle, `value / max` of the hole's width (clamped to 0..1), as tall as the hole, rounded by `radius`. */
 export interface Bar { name: string; page: number; x: number; y: number; width: number; height: number; max: number; fill: Color; radius: number; node?: number; sample: number }
 /** An image hole: a fixed box the data fills with a PNG or JPEG, placed as Typst's `image` with `fit` places it. */
 export interface ImageSlot { name: string; page: number; x: number; y: number; width: number; height: number; fit: string; alt?: string | null; node?: number; sample: string }
 /** A raster image the static content draws, shipped next to the document like a font. */
 export interface ImageFile { sha256: string; file: string; format: string; width: number; height: number }
-export interface Fragment { x: number; y: number; width: number; height: number; items: Item[]; slots: Slot[]; bars?: Bar[]; images?: ImageSlot[]; nodes: Node[] }
+export interface Fragment { x: number; y: number; width: number; height: number; items: Item[]; slots: Slot[]; bars?: Bar[]; images?: ImageSlot[]; links?: Link[]; nodes: Node[] }
 /** How a band's variant is picked for an instance: by row parity, by a `true` in the data, or by the lines a wrapping slot needs. */
 export type Select = { kind: 'parity' } | { kind: 'flag'; path: string } | { kind: 'lines'; slot: string };
 /** Variant k of a band is `fragments[k - 1]`; a plain band has one. */
@@ -65,7 +71,7 @@ export interface FontRef {
 }
 export interface Document {
   version: number; title?: string | null; lang?: string | null; fonts: FontRef[]; image_files?: ImageFile[];
-  pages: Page[]; slots: Slot[]; bars?: Bar[]; images?: ImageSlot[]; flow?: Flow | null;
+  pages: Page[]; slots: Slot[]; bars?: Bar[]; images?: ImageSlot[]; links?: Link[]; flow?: Flow | null;
 }
 
 // ---------------------------------------------------------------------------------------------------------
@@ -173,21 +179,38 @@ export class Font {
 export interface ReferenceGlyph { id: number; x: number; y?: number }
 /** For a text slot, its glyphs; for a bar (`<name>#bar`), the absolute path drawn (`ops`) and its box (`rect`);
  *  for an image slot (`<name>#image`), the rectangle the image was placed in (`rect`). */
-export interface ReferenceSlot { name: string; baseline: number; size: number; glyphs: ReferenceGlyph[]; ops?: PathOp[]; rect?: [number, number, number, number] }
+export interface ReferenceSlot { name: string; baseline: number; size: number; glyphs: ReferenceGlyph[]; ops?: PathOp[]; rect?: [number, number, number, number]; rects?: [number, number, number, number][] }
 /** A filled hole: the items to draw, clipped to `rect` (the hole's box), and what was drawn, for the reference check.
  *  An image slot carries the image's bytes under the key its item refers to, and its alternative text. */
-interface Filled { rect: [number, number, number, number]; items: Item[]; trace: ReferenceSlot; node?: number; image?: { key: string; bytes: Uint8Array }; alt?: string }
+interface Filled { rect: [number, number, number, number]; items: Item[]; trace: ReferenceSlot; node?: number; image?: { key: string; bytes: Uint8Array }; alt?: string; link?: LinkFill }
+/** A link slot's clickable area: one rectangle per drawn line, the destination and its description. */
+interface LinkFill { rects: [number, number, number, number][]; url: string; alt?: string }
+/** A destination the data gives a slot: the `href` (and `alt`) of a `{ text, href, alt? }` value. */
+type Href = { url: string; alt?: string } | undefined;
+
+/** The clickable rectangles of a link slot: each drawn line's box (x, baseline, width) extended above and below the
+ *  baseline as Typst extends a link's text frame. A link slot needs an `href`, a plain slot refuses one, so the runtime
+ *  never renders a value Typst would have styled differently (`show link` rules). */
+function linkFill(slot: Slot, href: Href, lines: [number, number, number][], traceName: string): LinkFill | undefined {
+  const g = slot.link;
+  if (!href && !g) return undefined;
+  if (!href) throw new Error(`slot \`${traceName}\` is a link slot (its sample value had an \`href\`) but the data gives none`);
+  if (!g) throw new Error(`slot \`${traceName}\`: the data gives an \`href\` but the slot was exported without a link; give its sample value an \`href\` too`);
+  return { rects: lines.map(([x, y, w]) => [x, y - g.above, w, g.above + g.below]), url: href.url, alt: href.alt };
+}
 
 function textOf(value: unknown): string {
   if (typeof value === 'string') return value;
   if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+  // A link slot's value: `{ text, href }`.
+  if (value && typeof value === 'object' && 'text' in value) return textOf((value as { text: unknown }).text);
   throw new Error(`cannot render ${JSON.stringify(value)} as text`);
 }
 
-function fillSlot(slot: Slot, text: string, font: Font, traceName: string): Filled {
+function fillSlot(slot: Slot, text: string, href: Href, font: Font, traceName: string): Filled {
   const length = [...text].length;
   if (slot.max_length != null && length > slot.max_length) throw new Error(`slot \`${traceName}\`: ${JSON.stringify(text)} has ${length} characters, max-length is ${slot.max_length}`);
-  if ((slot.lines ?? 1) > 1) return fillLines(slot, text, font, traceName);
+  if ((slot.lines ?? 1) > 1) return fillLines(slot, text, href, font, traceName);
   const shape = (s: string, size: number): [Glyph[], number] => {
     const glyphs: Glyph[] = [];
     let width = 0;
@@ -240,13 +263,15 @@ function fillSlot(slot: Slot, text: string, font: Font, traceName: string): Fill
     rect: [slot.x, slot.y, slot.width, slot.height],
     items: [{ kind: 'text', x, y: slot.baseline, font: slot.font, size, fill: slot.fill, text: shown, glyphs }],
     trace: { name: traceName, baseline: slot.baseline, size, glyphs: traceGlyphs },
+    link: linkFill(slot, href, [[x, slot.baseline, width]], traceName),
   };
 }
 
 // ---------------------------------------------------------------------------------------------------------
 // Wrapping slots: Typst's simple line breaker (typst-layout 0.15, inline/linebreak.rs) over UAX #14 break
 // opportunities, for the character classes a Latin repertoire contains. The dialect switches hyphenation and
-// justification off inside wrapping slots, so greedy first fit over advance widths reproduces Typst's lines.
+// justification off inside wrapping slots, so greedy first fit over advance widths reproduces Typst's lines; web
+// addresses break where Typst's own rules for them say.
 
 type LB = 'AL' | 'NU' | 'SP' | 'BA' | 'BB' | 'B2' | 'HY' | 'CL' | 'CP' | 'OP' | 'QU' | 'EX' | 'IS' | 'SY' | 'PR' | 'PO' | 'IN' | 'GL' | 'ZW' | 'WJ' | 'BK' | 'CM' | 'NS';
 
@@ -318,10 +343,64 @@ function breakpoints(chars: string[]): { end: number; mandatory: boolean }[] {
     if (b === 'CP' && (a === 'AL' || a === 'NU')) return false;
     return true;                                                                                     // LB31
   };
+  // Typst walks the segmenter's opportunities with `last`, the previous one, and at each step first looks for a
+  // web address at `last` (UAX #14 breaks one badly): after `://` or before `www.`, the address's own
+  // opportunities (`linebreakLink`) replace the segmenter's inside it. The trigger is positional: a `://` with
+  // no opportunity right after it starts no address.
   const out: { end: number; mandatory: boolean }[] = [];
-  for (let i = 1; i < n; i++) if (allow(i)) out.push({ end: i, mandatory: raw[i - 1] === 'BK' });
-  out.push({ end: n, mandatory: true });
+  let last = 0, next = 1;
+  for (;;) {
+    if ((last >= 3 && chars[last - 3] === ':' && chars[last - 2] === '/' && chars[last - 1] === '/') || (chars[last] === 'w' && chars[last + 1] === 'w' && chars[last + 2] === 'w' && chars[last + 3] === '.')) {
+      const len = linkPrefix(chars, last);
+      linebreakLink(chars.slice(last, last + len), k => out.push({ end: last + k, mandatory: false }));
+      last += len;
+      next = Math.max(next, last);
+    }
+    while (next < n && !allow(next)) next++; // the next UAX #14 opportunity; the end of the text is one
+    if (next > n) break;
+    const point = next++;
+    out.push({ end: point, mandatory: point === n || raw[point - 1] === 'BK' });
+    last = point;
+  }
   return out;
+}
+
+/** How much of the text from `from` is a web address, as typst-syntax's `link_prefix` eats it: ASCII letters, digits
+ *  and URL punctuation, brackets while they balance, minus trailing punctuation that is more likely prose. */
+function linkPrefix(chars: string[], from: number): number {
+  const brackets: string[] = [];
+  let len = 0;
+  for (let i = from; i < chars.length; i++) {
+    const c = chars[i]!;
+    let eat: boolean;
+    if (/^[0-9a-zA-Z!#$%&*+,\-./:;=?@_~']$/.test(c)) eat = true;
+    else if (c === '[' || c === '(') { brackets.push(c); eat = true; }
+    else if (c === ']') eat = brackets.pop() === '[';
+    else if (c === ')') eat = brackets.pop() === '(';
+    else eat = false;
+    if (!eat) break;
+    len++;
+  }
+  while (len > 0 && /^[!,.:;?']$/.test(chars[from + len - 1]!)) len--;
+  return len;
+}
+
+/** Typst's break opportunities inside a web address (`linebreak_link`): where the character class changes between
+ *  letters, digits and the rest, or between two punctuation marks, never right after `(` or `[`; a run of 16 or more
+ *  characters since the last opportunity (a hash) may break after every character. The address is ASCII
+ *  (`linkPrefix` eats nothing else), so Typst's byte offsets are character offsets. */
+function linebreakLink(link: string[], f: (end: number) => void): void {
+  type Class = 'alphabetic' | 'digit' | 'open' | 'other';
+  const classOf = (c: string): Class => (/^[a-zA-Z]$/.test(c) ? 'alphabetic' : /^[0-9]$/.test(c) ? 'digit' : c === '(' || c === '[' ? 'open' : 'other');
+  let offset = 0, prev: Class = 'other';
+  link.forEach((c, end) => {
+    const cls = classOf(c);
+    if (end > 0 && prev !== 'open' && (cls === 'other' ? prev === 'other' : cls !== prev)) {
+      const piece = end - offset;
+      if (piece < 16) { offset = end; f(offset); } else for (let k = 0; k < piece; k++) { offset++; f(offset); }
+    }
+    prev = cls;
+  });
 }
 
 /** A line of a wrapping slot: `layoutEnd` excludes the trailing whitespace that does not count for the width;
@@ -353,11 +432,10 @@ function breakLines(chars: string[], widthOf: (from: number, to: number) => numb
   return lines;
 }
 
-function fillLines(slot: Slot, text: string, font: Font, traceName: string): Filled {
+function fillLines(slot: Slot, text: string, href: Href, font: Font, traceName: string): Filled {
   const lines = slot.lines!, pitch = slot.pitch ?? 0, size = slot.size;
   if (!(pitch > 0)) throw new Error(`slot \`${traceName}\`: a wrapping slot without a line pitch; export the document again`);
   if (slot.overflow === 'shrink') throw new Error(`slot \`${traceName}\`: \`shrink\` is not an overflow policy for a wrapping slot`);
-  if (text.includes('://') || text.includes('www.')) throw new Error(`slot \`${traceName}\`: ${JSON.stringify(text)} contains a web address, which Typst breaks by rules this runtime does not have yet`);
   const chars = [...text];
   const glyphOf = (c: string): number => {
     const id = font.glyph(c);
@@ -420,6 +498,7 @@ function fillLines(slot: Slot, text: string, font: Font, traceName: string): Fil
 
   const items: (Item & { kind: 'text' })[] = [];
   const traceGlyphs: ReferenceGlyph[] = [];
+  const drawn: [number, number, number][] = [];
   const ys = baselines(runs);
   runs.forEach((line, k) => {
     const y = ys[k]!;
@@ -432,10 +511,10 @@ function fillLines(slot: Slot, text: string, font: Font, traceName: string): Fil
     }
     let pen = x;
     const glyphs: Glyph[] = line.ids.map((id, i) => { traceGlyphs.push({ id, x: pen, y }); pen += line.advances[i]!; return { id, x_advance: line.advances[i]!, x_offset: 0, y_offset: 0 }; });
-    if (glyphs.length) items.push({ kind: 'text', x, y, font: slot.font, size, fill: slot.fill, text: line.text, glyphs });
+    if (glyphs.length) { items.push({ kind: 'text', x, y, font: slot.font, size, fill: slot.fill, text: line.text, glyphs }); drawn.push([x, y, line.width]); }
   });
   // The trace reports the first line's baseline as Typst's frame has it: at the box top when that line is whitespace.
-  return { rect: [slot.x, slot.y, slot.width, slot.height], items, trace: { name: traceName, baseline: ys[0] ?? slot.baseline, size, glyphs: traceGlyphs } };
+  return { rect: [slot.x, slot.y, slot.width, slot.height], items, trace: { name: traceName, baseline: ys[0] ?? slot.baseline, size, glyphs: traceGlyphs }, link: linkFill(slot, href, drawn, traceName) };
 }
 
 // ---------------------------------------------------------------------------------------------------------
@@ -663,7 +742,7 @@ class Images {
 // ---------------------------------------------------------------------------------------------------------
 // Structure
 
-type Kid = { node: number } | { page: number; mcid: number };
+type Kid = { node: number } | { page: number; mcid: number } | { page: number; annot: number };
 interface GNode { role: string; parent: number | null; alt?: string; scope?: string; kids: Kid[] }
 
 class Structure {
@@ -696,7 +775,7 @@ class Structure {
   alive(): boolean[] {
     const alive = new Array<boolean>(this.nodes.length).fill(false);
     for (let i = this.nodes.length - 1; i >= 0; i--) {
-      alive[i] = this.nodes[i]!.kids.some(k => 'mcid' in k || alive[k.node]!);
+      alive[i] = this.nodes[i]!.kids.some(k => 'mcid' in k || 'annot' in k || alive[k.node]!);
     }
     alive[0] = true;
     return alive;
@@ -714,7 +793,17 @@ function remap(items: Item[], map: (number | undefined)[]): Item[] {
 // ---------------------------------------------------------------------------------------------------------
 // Composition
 
-interface Composed { width: number; height: number; items: Item[]; fills: Filled[] }
+interface Composed { width: number; height: number; items: Item[]; fills: Filled[]; annots: Annot[] }
+/** A link annotation: rectangles in page coordinates (y down), the URL, the /Contents description and its Link node. */
+interface Annot { rects: [number, number, number, number][]; url: string; contents: string; node?: number }
+
+/** Adds a filled slot's link, if any, to the page; the Link node takes the data's description. */
+function addSlotLink(filled: Filled, page: Composed, structure: Structure): void {
+  if (!filled.link) return;
+  const contents = filled.link.alt ?? filled.link.url;
+  if (filled.node !== undefined) structure.nodes[filled.node]!.alt = contents;
+  page.annots.push({ rects: filled.link.rects, url: filled.link.url, contents, node: filled.node });
+}
 type Attach = { kind: 'document' } | { kind: 'artifact' } | { kind: 'table'; table: number };
 
 class Scope {
@@ -739,6 +828,16 @@ class Scope {
     return value;
   }
   image(name: string): { bytes: Uint8Array; alt?: string } { return imageValue(this.value(name), name); }
+  /** The `href` (and `alt`) of a `{ text, href, alt? }` value; undefined for any other value. */
+  href(name: string): Href {
+    const record = this.data as Record<string, unknown> | null;
+    const value = record && typeof record === 'object' ? record[name] : undefined;
+    if (!value || typeof value !== 'object' || !('href' in value)) return undefined;
+    const { href, alt } = value as { href: unknown; alt?: unknown };
+    if (href == null) return undefined;
+    if (typeof href !== 'string' || !href) throw new Error(`slot \`${name}\`: \`href\` ${JSON.stringify(href)} is not a non-empty string`);
+    return { url: href, alt: typeof alt === 'string' ? alt : undefined };
+  }
 }
 
 const clipOps = (w: number, h: number): PathOp[] => [{ op: 'move', to: [0, 0] }, { op: 'line', to: [w, 0] }, { op: 'line', to: [w, h] }, { op: 'line', to: [0, h] }, { op: 'close' }];
@@ -750,9 +849,15 @@ function place(fragment: Fragment, top: number, scope: Scope, fonts: Font[], pre
   page.items.push({ kind: 'group', x: fragment.x, y: top, transform: [1, 0, 0, 1, 0, 0], clip: clip ? clipOps(fragment.width, fragment.height) : null, items: remap(fragment.items, map) });
   for (const slot of fragment.slots) {
     const absolute: Slot = { ...slot, x: slot.x + fragment.x, pen_x: slot.pen_x + fragment.x, y: slot.y + top, baseline: slot.baseline + top };
-    const filled = fillSlot(absolute, scope.text(slot.name), fonts[slot.font]!, `${prefix}${slot.name}`);
+    const filled = fillSlot(absolute, scope.text(slot.name), scope.href(slot.name), fonts[slot.font]!, `${prefix}${slot.name}`);
     filled.node = slot.node == null ? undefined : map[slot.node];
+    addSlotLink(filled, page, structure);
     page.fills.push(filled);
+  }
+  for (const link of fragment.links ?? []) {
+    const node = link.node == null ? undefined : map[link.node];
+    if (node === undefined) throw new Error(`a link to ${link.url} in ${prefix} would be placed as an artifact (a repeated table header or an overlay); PDF/UA forbids links there`);
+    page.annots.push({ rects: link.rects.map(([x, y, w, h]) => [x + fragment.x, y + top, w, h]), url: link.url, contents: link.alt ?? link.url, node });
   }
   for (const bar of fragment.bars ?? []) {
     const filled = fillBar({ ...bar, x: bar.x + fragment.x, y: bar.y + top }, scope.number(bar.name), `${prefix}${bar.name}`);
@@ -772,11 +877,15 @@ function composeFixed(doc: Document, data: unknown, fonts: Font[], structure: St
   const scope = new Scope(data);
   return doc.pages.map((page, index) => {
     const map = structure.instantiate(page.nodes ?? [], 0, false);
-    const composed: Composed = { width: page.width, height: page.height, items: remap(page.items, map), fills: [] };
+    const composed: Composed = { width: page.width, height: page.height, items: remap(page.items, map), fills: [], annots: [] };
     for (const slot of doc.slots.filter(s => s.page === index)) {
-      const filled = fillSlot(slot, scope.text(slot.name), fonts[slot.font]!, slot.name);
+      const filled = fillSlot(slot, scope.text(slot.name), scope.href(slot.name), fonts[slot.font]!, slot.name);
       filled.node = slot.node == null ? undefined : map[slot.node];
+      addSlotLink(filled, composed, structure);
       composed.fills.push(filled);
+    }
+    for (const link of (doc.links ?? []).filter(l => l.page === index)) {
+      composed.annots.push({ rects: link.rects, url: link.url, contents: link.alt ?? link.url, node: link.node == null ? undefined : map[link.node] });
     }
     for (const bar of (doc.bars ?? []).filter(b => b.page === index)) {
       const filled = fillBar(bar, scope.number(bar.name), bar.name);
@@ -799,7 +908,6 @@ function composeFixed(doc: Document, data: unknown, fonts: Font[], structure: St
 function neededLines(slot: Slot, text: string, font: Font, traceName: string): number {
   const pitch = slot.pitch ?? 0, size = slot.size;
   if (!(pitch > 0)) throw new Error(`slot \`${traceName}\`: a wrapping slot without a line pitch; export the document again`);
-  if (text.includes('://') || text.includes('www.')) throw new Error(`slot \`${traceName}\`: ${JSON.stringify(text)} contains a web address, which Typst breaks by rules this runtime does not have yet`);
   const chars = [...text];
   const ids = chars.map(c => {
     if (isMandatoryBreak(c)) return 0;
@@ -836,7 +944,7 @@ function composeFlow(flow: Flow, data: unknown, fonts: Font[], structure: Struct
   const EPS = 1e-6;
   const area = flow.area, bottom = area.y + area.height;
   const band = (name: string): Band => { const b = flow.bands.find(b => b.name === name); if (!b) throw new Error(`unknown band \`${name}\``); return b; };
-  const newPage = (): Composed => ({ width: flow.page_width, height: flow.page_height, items: [], fills: [] });
+  const newPage = (): Composed => ({ width: flow.page_width, height: flow.page_height, items: [], fills: [], annots: [] });
   const scope = new Scope(data);
   const pages: Composed[] = [newPage()];
   let cursor = area.y;
@@ -1134,6 +1242,23 @@ async function writePdf(doc: Document, fonts: Font[], fontStreams: Uint8Array[],
   }
   const xobjects = imageRefs.length ? ` /XObject << ${imageRefs.map(([name, id]) => `/${name} ${id} 0 R`).join(' ')} >>` : '';
 
+  // Link annotations: one object per link (several rectangles become quad points, as typst-pdf writes them for PDF/UA),
+  // listed in the page's /Annots, keyed into the parent tree after the pages and referenced from their Link structure
+  // element through an OBJR.
+  const annotRefs = pages.map(page => page.annots.map(() => pdf.alloc()));
+  const annotParents: [number, number][] = [];
+  let nextKey = pages.length;
+  pages.forEach((page, index) => page.annots.forEach((a, i) => {
+    const h = page.height;
+    const boxes = a.rects.map(([x, y, w, hh]) => [x, h - y - hh, x + w, h - y] as const); // left, bottom, right, top
+    const l = Math.min(...boxes.map(b => b[0])), b = Math.min(...boxes.map(b => b[1])), r = Math.max(...boxes.map(b => b[2])), t = Math.max(...boxes.map(b => b[3]));
+    let body = `<< /Type /Annot /Subtype /Link /Rect [${[l, b, r, t].map(num).join(' ')}] /P ${pageIds[index]} 0 R`;
+    if (boxes.length > 1) body += ` /QuadPoints [${boxes.map(([l, b, r, t]) => [l, t, r, t, l, b, r, b].map(num).join(' ')).join(' ')}]`;
+    body += ` /Border [0 0 0] /F 4 /Contents ${textString(a.contents)} /A << /Type /Action /S /URI /URI ${pdfString(a.url)} >>`;
+    if (a.node !== undefined) { body += ` /StructParent ${nextKey}`; annotParents.push([nextKey, a.node]); nextKey++; }
+    pdf.set(annotRefs[index]![i]!, body + ' >>');
+  }));
+
   // Pages with marked content; each page's parent-tree array is written after the structure elements exist.
   const pageParents: number[][] = [];
   for (let index = 0; index < pages.length; index++) {
@@ -1149,20 +1274,23 @@ async function writePdf(doc: Document, fonts: Font[], fontStreams: Uint8Array[],
     pageParents.push(builder.parents);
     const contentId = pdf.alloc();
     pdf.setStream(contentId, '', builder.bytes());
-    pdf.set(pageIds[index]!, `<< /Type /Page /Parent ${pagesId} 0 R /MediaBox [0 0 ${num(page.width)} ${num(page.height)}] /Contents ${contentId} 0 R /StructParents ${index} /Resources << /Font << ${fontRefs.map((r, i) => `/F${i} ${r} 0 R`).join(' ')} >>${xobjects} >> >>`);
+    const annots = annotRefs[index]!.length ? ` /Annots [${annotRefs[index]!.map(r => `${r} 0 R`).join(' ')}] /Tabs /S` : '';
+    pdf.set(pageIds[index]!, `<< /Type /Page /Parent ${pagesId} 0 R /MediaBox [0 0 ${num(page.width)} ${num(page.height)}] /Contents ${contentId} 0 R /StructParents ${index}${annots} /Resources << /Font << ${fontRefs.map((r, i) => `/F${i} ${r} 0 R`).join(' ')} >>${xobjects} >> >>`);
   }
 
-  // Structure tree: only nodes with content below them.
+  // Structure tree: only nodes with content below them. Annotations are kids of their Link node.
+  pages.forEach((page, index) => page.annots.forEach((a, i) => { if (a.node !== undefined) structure.nodes[a.node]!.kids.push({ page: index, annot: i }); }));
   const alive = structure.alive();
   const nodeRefs = alive.map(a => (a ? pdf.alloc() : undefined));
   const parentArrays = pages.map(() => pdf.alloc());
-  pdf.set(structRoot, `<< /Type /StructTreeRoot /K [${nodeRefs[0]} 0 R] /ParentTree << /Nums [${parentArrays.map((r, i) => `${i} ${r} 0 R`).join(' ')}] >> /ParentTreeNextKey ${pages.length} >>`);
+  const nums = [...parentArrays.map((r, i) => `${i} ${r} 0 R`), ...annotParents.map(([k, n]) => `${k} ${nodeRefs[n]} 0 R`)];
+  pdf.set(structRoot, `<< /Type /StructTreeRoot /K [${nodeRefs[0]} 0 R] /ParentTree << /Nums [${nums.join(' ')}] >> /ParentTreeNextKey ${nextKey} >>`);
   pageParents.forEach((parents, i) => pdf.set(parentArrays[i]!, `[${parents.map(g => `${nodeRefs[g]} 0 R`).join(' ')}]`));
   structure.nodes.forEach((node, id) => {
     const ref = nodeRefs[id];
     if (!ref) return;
     const parent = node.parent == null ? structRoot : nodeRefs[node.parent]!;
-    const kids = node.kids.map(k => 'mcid' in k ? `<< /Type /MCR /Pg ${pageIds[k.page]} 0 R /MCID ${k.mcid} >>` : nodeRefs[k.node] ? `${nodeRefs[k.node]} 0 R` : '').filter(Boolean);
+    const kids = node.kids.map(k => 'mcid' in k ? `<< /Type /MCR /Pg ${pageIds[k.page]} 0 R /MCID ${k.mcid} >>` : 'annot' in k ? `<< /Type /OBJR /Obj ${annotRefs[k.page]![k.annot]} 0 R /Pg ${pageIds[k.page]} 0 R >>` : nodeRefs[k.node] ? `${nodeRefs[k.node]} 0 R` : '').filter(Boolean);
     let body = `<< /Type /StructElem /S /${node.role} /P ${parent} 0 R /K [${kids.join(' ')}]`;
     if (node.alt) body += ` /Alt ${textString(node.alt)}`;
     if (node.role === 'TH') body += ` /A << /O /Table /Scope /${node.scope === 'row' ? 'Row' : node.scope === 'both' ? 'Both' : 'Column'} >>`;
@@ -1216,7 +1344,8 @@ export class Runtime {
     const structure = new Structure();
     const pages = this.document.flow ? composeFlow(this.document.flow, data, this.fonts, structure) : composeFixed(this.document, data, this.fonts, structure);
     const pdf = await writePdf(this.document, this.fonts, this.fontStreams, this.images, pages, structure);
-    return { pdf, trace: pages.flatMap(p => p.fills.map(f => f.trace)), pages: pages.length };
+    const trace = pages.flatMap(p => p.fills.flatMap(f => f.link ? [f.trace, { name: `${f.trace.name}#link`, baseline: 0, size: 0, glyphs: [], rects: f.link.rects }] : [f.trace]));
+    return { pdf, trace, pages: pages.length };
   }
 }
 
@@ -1232,6 +1361,10 @@ export function compare(trace: ReferenceSlot[], reference: ReferenceSlot[]): str
     if (expected.rect) {
       if (!slot.rect) problems.push(`${slot.name}: the reference has a box, the runtime drew none`);
       else if (!slot.rect.every((v, i) => Math.abs(v - expected.rect![i]!) <= 1e-3)) problems.push(`${slot.name}: box [${slot.rect.map(num).join(', ')}] vs [${expected.rect.map(num).join(', ')}]`);
+    }
+    if (expected.rects) {
+      if (!slot.rects) problems.push(`${slot.name}: the reference has link rectangles, the runtime drew none`);
+      else if (slot.rects.length !== expected.rects.length || !slot.rects.every((r, i) => r.every((v, j) => Math.abs(v - expected.rects![i]![j]!) <= 1e-3))) problems.push(`${slot.name}: link rectangles ${JSON.stringify(slot.rects.map(r => r.map(num)))} vs ${JSON.stringify(expected.rects.map(r => r.map(num)))}`);
     }
     if (expected.ops && !(slot.ops && sameOps(slot.ops, expected.ops, 1e-3))) problems.push(`${slot.name}: shape ${JSON.stringify(slot.ops)} vs ${JSON.stringify(expected.ops)}`);
     const ours = slot.glyphs.map(g => g.id).join(','), theirs = expected.glyphs.map(g => g.id).join(',');

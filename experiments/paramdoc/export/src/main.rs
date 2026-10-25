@@ -15,7 +15,7 @@ use typst::diag::{FileError, FileResult, SourceDiagnostic, Warned};
 use typst::foundations::{Bytes, Datetime, Duration, Label, Smart, StyleChain, Value};
 use typst::introspection::{Location, MetadataElem, Tag};
 use typst::layout::{Abs, Frame, FrameItem, HideElem, Point, RepeatElem, Size, Transform};
-use typst::model::{Document as _, EnumElem, EnumItem, FigureElem, HeadingElem, ListElem, ListItem, ParElem, TableCell, TableElem};
+use typst::model::{Destination, Document as _, EnumElem, EnumItem, FigureElem, HeadingElem, LinkMarker, ListElem, ListItem, ParElem, TableCell, TableElem};
 use typst::pdf::{ArtifactElem, PdfMarkerTag, PdfMarkerTagKind, TableCellKind, TableHeaderScope};
 use typst::syntax::{FileId, RootedPath, Source, VirtualPath, VirtualRoot};
 use typst::text::{Font, FontBook, TextItem};
@@ -349,6 +349,7 @@ fn localize(items: &mut [ir::Item], holes: &mut HoleSet, nodes: &[ir::Node]) -> 
     for slot in holes.slots.iter() { if let Some(n) = slot.node { used.insert(n); } }
     for bar in holes.bars.iter() { if let Some(n) = bar.node { used.insert(n); } }
     for image in holes.images.iter() { if let Some(n) = image.node { used.insert(n); } }
+    for link in holes.links.iter() { if let Some(n) = link.node { used.insert(n); } }
     let mut all = BTreeSet::new();
     for &n in &used {
         let mut current = Some(n);
@@ -360,15 +361,20 @@ fn localize(items: &mut [ir::Item], holes: &mut HoleSet, nodes: &[ir::Node]) -> 
     for slot in holes.slots.iter_mut() { slot.node = slot.node.and_then(|n| map.get(&n).copied()); }
     for bar in holes.bars.iter_mut() { bar.node = bar.node.and_then(|n| map.get(&n).copied()); }
     for image in holes.images.iter_mut() { image.node = image.node.and_then(|n| map.get(&n).copied()); }
+    for link in holes.links.iter_mut() { link.node = link.node.and_then(|n| map.get(&n).copied()); }
     order.iter().map(|&n| ir::Node { role: nodes[n].role.clone(), parent: nodes[n].parent.map(|p| map[&p]), alt: nodes[n].alt.clone(), scope: nodes[n].scope.clone() }).collect()
 }
 
 // ---------------------------------------------------------------------------------------------------------
 // Tags found in the frames
 
-struct SlotMeta { name: String, align: String, overflow: String, max_length: Option<u32>, descent: f64, charset: Option<String>, lines: u32, line_height: f64, pitch: f64, auto_lines: Option<u32> }
+struct SlotMeta { name: String, align: String, overflow: String, max_length: Option<u32>, descent: f64, charset: Option<String>, lines: u32, line_height: f64, pitch: f64, auto_lines: Option<u32>, link: bool }
 struct TextStyle { font: usize, size: f64, fill: ir::Color, pen_x: f64 }
-struct SlotRecord { meta: SlotMeta, page: usize, rect: Rect, style: Option<TextStyle>, sample: String, baselines: Vec<f64>, glyphs: Vec<(u16, f64, f64)>, node: Option<usize> }
+/// `runs` are the sample's text items (x, baseline y, width); `links` Typst's link rectangles in the box and `url`
+/// their destination, for a link slot.
+struct SlotRecord { meta: SlotMeta, page: usize, rect: Rect, style: Option<TextStyle>, sample: String, baselines: Vec<f64>, glyphs: Vec<(u16, f64, f64)>, node: Option<usize>, runs: Vec<(f64, f64, f64)>, links: Vec<Rect>, url: Option<(String, Option<String>)> }
+/// A static link: the rectangles of one link element on one page, its destination and its Link node.
+struct LinkRecord { page: usize, rects: Vec<Rect>, url: String, alt: Option<String>, node: usize }
 struct BarMeta { name: String, value: f64, max: f64, radius: f64 }
 /// `shapes` are the shapes Typst drew inside the bar's box, in absolute coordinates: the bar itself.
 struct BarRecord { meta: BarMeta, page: usize, rect: Rect, shapes: Vec<ir::Item>, node: Option<usize> }
@@ -376,7 +382,7 @@ struct ImageMeta { name: String, fit: String, alt: Option<String> }
 /// `placed` is the image Typst put inside the box: its absolute rectangle, pixel size and format.
 struct ImageRecord { meta: ImageMeta, page: usize, rect: Rect, placed: Option<(Rect, u32, u32, &'static str)>, node: Option<usize> }
 /// The hole records of a compile, borrowed together while the frames are walked.
-struct Records<'r> { slots: &'r mut Vec<SlotRecord>, bars: &'r mut Vec<BarRecord>, images: &'r mut Vec<ImageRecord> }
+struct Records<'r> { slots: &'r mut Vec<SlotRecord>, bars: &'r mut Vec<BarRecord>, images: &'r mut Vec<ImageRecord>, links: &'r mut Vec<LinkRecord> }
 /// What the frame being walked is inside of: a hole's clipped box, or none.
 #[derive(Clone, Copy, PartialEq)]
 enum Inside { Nothing, Slot(usize), Bar(usize), Image(usize) }
@@ -385,7 +391,7 @@ struct OverlayTag { page: usize, rect: Rect }
 struct Margins { top: f64, bottom: f64, left: f64, right: f64 }
 
 #[derive(Default)]
-struct Tags { slots: Vec<SlotRecord>, bars: Vec<BarRecord>, images: Vec<ImageRecord>, bands: Vec<BandTag>, overlays: Vec<OverlayTag>, pages: Option<Margins> }
+struct Tags { slots: Vec<SlotRecord>, bars: Vec<BarRecord>, images: Vec<ImageRecord>, links: Vec<LinkRecord>, bands: Vec<BandTag>, overlays: Vec<OverlayTag>, pages: Option<Margins> }
 
 /// What Typst itself laid out inside a slot for some data: the runtime compares its own output with this.
 #[derive(serde::Serialize)]
@@ -398,6 +404,7 @@ pub struct ReferenceSlot {
     pub name: String, pub baseline: f64, pub size: f64, pub glyphs: Vec<ReferenceGlyph>, pub font: String,
     #[serde(skip_serializing_if = "Option::is_none")] pub ops: Option<Vec<ir::PathOp>>,
     #[serde(skip_serializing_if = "Option::is_none")] pub rect: Option<[f64; 4]>,
+    #[serde(skip_serializing_if = "Option::is_none")] pub rects: Option<Vec<[f64; 4]>>,
 }
 
 /// A top-level piece of the sample page after flattening: a leaf item, or a clipped/transformed group.
@@ -507,6 +514,9 @@ impl<'a> Exporter<'a> {
                             Some(figure) => { if self.nodes[figure].alt.is_none() { self.nodes[figure].alt = alt; } node = Some(figure); }
                             None => node = Some(self.push_node("Figure", parent, alt, None)),
                         }
+                    } else if let Some(marker) = content.to_packed::<LinkMarker>() {
+                        // Everything linked to one destination; its alternative text is Typst's description of it.
+                        node = Some(self.push_node("Link", parent, marker.alt.as_ref().map(|a| a.to_string()), None));
                     } else if content.is::<ListElem>() || content.is::<EnumElem>() {
                         node = Some(self.push_node("L", parent, None, None));
                     } else if content.is::<ListItem>() || content.is::<EnumItem>() {
@@ -578,7 +588,7 @@ impl<'a> Exporter<'a> {
         let name = string("name")?;
         if lines > 1 && !(line_height > 0.0 && pitch > 0.0) { bail!("slot `{name}`: a wrapping slot needs `line-height` and `pitch` in its metadata"); }
         let auto_lines = match dict.get("auto-lines") { Ok(Value::Int(n)) if *n >= 1 => Some(*n as u32), Err(_) => None, other => bail!("slot `{name}`: `auto-lines` is not a positive integer: {other:?}") };
-        Ok(SlotMeta { name, align: string("align")?, overflow: string("overflow")?, max_length, descent: dict_number(dict, "descent")?, charset, lines, line_height, pitch, auto_lines })
+        Ok(SlotMeta { name, align: string("align")?, overflow: string("overflow")?, max_length, descent: dict_number(dict, "descent")?, charset, lines, line_height, pitch, auto_lines, link: matches!(dict.get("link"), Ok(Value::Bool(true))) })
     }
 
     fn bar_meta(&self, value: &Value) -> Result<BarMeta> {
@@ -614,6 +624,36 @@ impl<'a> Exporter<'a> {
     }
 
     /// Pass 1: every dialect tag and the clipped box it sits in.
+    /// The destination of a link as the runtime can write it: a URL. Links to places in the document are refused.
+    fn link_url(dest: &Destination, what: &str) -> Result<String> {
+        match dest {
+            Destination::Url(url) => Ok(url.as_str().to_string()),
+            Destination::Position(_) | Destination::Location(_) => bail!("{what} links to a place in the document (a label, location or page); only web addresses (URLs) are supported"),
+        }
+    }
+
+    /// The page rectangle of a link item: the bounding box of its corners under the accumulated transform, as
+    /// typst-pdf computes it.
+    fn link_rect(acc: Transform, pos: Point, size: Size) -> Rect {
+        let corners = [pos, pos + Point::with_x(size.x), pos + Point::with_y(size.y), pos + size.to_point()];
+        let (mut x0, mut y0, mut x1, mut y1) = (f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY);
+        for c in corners { let p = apply(acc, c); x0 = x0.min(pt(p.x)); y0 = y0.min(pt(p.y)); x1 = x1.max(pt(p.x)); y1 = y1.max(pt(p.y)); }
+        Rect { x: x0, y: y0, w: x1 - x0, h: y1 - y0 }
+    }
+
+    /// Records a static link: its rectangle joins those of the same link element (one per line it spans). The
+    /// link must sit in a Link node, so not in an artifact (PDF/UA forbids links there).
+    fn record_link(&self, records: &mut Records, page: usize, rect: Rect, dest: &Destination) -> Result<()> {
+        let url = Self::link_url(dest, "the template")?;
+        let Some(node) = self.content_node() else { bail!("a link to {url} sits inside an artifact (a repeated table header, hidden content or `pdf.artifact`), which PDF/UA forbids") };
+        let Some(link) = self.nearest(Some(node), "Link") else { bail!("a link to {url} outside a link element") };
+        match records.links.iter_mut().find(|l| l.page == page && l.node == link) {
+            Some(record) => record.rects.push(rect),
+            None => records.links.push(LinkRecord { page, rects: vec![rect], url, alt: self.nodes[link].alt.clone(), node: link }),
+        }
+        Ok(())
+    }
+
     fn collect_tags(&self, page: usize, frame: &Frame, acc: Transform, clipped: Option<Rect>, tags: &mut Tags) -> Result<()> {
         for (pos, item) in frame.items() {
             match item {
@@ -628,7 +668,7 @@ impl<'a> Exporter<'a> {
                     if label == self.labels.slot {
                         let meta = self.slot_meta(value()?)?;
                         let rect = clipped.ok_or_else(|| anyhow!("slot `{}` is not inside a clipped box", meta.name))?;
-                        tags.slots.push(SlotRecord { meta, page, rect, style: None, sample: String::new(), baselines: Vec::new(), glyphs: Vec::new(), node: None });
+                        tags.slots.push(SlotRecord { meta, page, rect, style: None, sample: String::new(), baselines: Vec::new(), glyphs: Vec::new(), node: None, runs: Vec::new(), links: Vec::new(), url: None });
                     } else if label == self.labels.band {
                         let Value::Dict(dict) = value()? else { bail!("band metadata is not a dictionary") };
                         let name = match dict.get("name") { Ok(Value::Str(s)) => s.as_str().to_string(), other => bail!("band `name` is not a string: {other:?}") };
@@ -697,6 +737,9 @@ impl<'a> Exporter<'a> {
                         inside = Self::inside_of(records, page, &self.rect_of(t, group.frame.size())?);
                     }
                     let inner = self.export_frame(page, &group.frame, t, records, inside)?;
+                    // An unclipped frame left with nothing (a paragraph whose text and link a hole consumed) draws
+                    // nothing and is not part of the layout; whether Typst nested it depends on the text.
+                    if inner.is_empty() && group.clip.is_none() { continue; }
                     items.push(ir::Item::Group { x: pt(pos.x), y: pt(pos.y), transform: matrix(group.transform), clip: group.clip.as_ref().map(curve_ops), items: inner });
                 }
                 FrameItem::Text(text) => {
@@ -713,6 +756,7 @@ impl<'a> Exporter<'a> {
                                 slot.glyphs.push((g.id, pen + pt(g.x_offset.at(text.size)), pt(abs.y)));
                                 pen += pt(g.x_advance.at(text.size));
                             }
+                            slot.runs.push((pt(abs.x), pt(abs.y), pen - pt(abs.x)));
                             continue;
                         }
                         Inside::Bar(i) => bail!("bar `{}` contains text", records.bars[i].meta.name),
@@ -731,7 +775,8 @@ impl<'a> Exporter<'a> {
                             continue;
                         }
                         Inside::Image(i) => bail!("image slot `{}` contains a shape", records.images[i].meta.name),
-                        _ => {}
+                        Inside::Slot(i) => bail!("slot `{}` contains a shape (an underline or a box from a show rule?); a slot's content must be text only", records.slots[i].meta.name),
+                        Inside::Nothing => {}
                     }
                     let node = self.nearest(self.content_node(), "Figure");
                     items.push(shape_item(*pos, s, node)?)
@@ -761,7 +806,27 @@ impl<'a> Exporter<'a> {
                     }
                     self.on_tag(tag);
                 }
-                FrameItem::Link(..) => {}
+                FrameItem::Link(dest, size) => {
+                    let rect = Self::link_rect(acc, *pos, *size);
+                    match current {
+                        Inside::Slot(index) => {
+                            // A link slot: the rectangle and destination inform the contract check; the slot's text
+                            // belongs to the Link node from here on.
+                            let what = format!("slot `{}`", records.slots[index].meta.name);
+                            let url = Self::link_url(dest, &what)?;
+                            let node = self.content_node();
+                            let alt = self.nearest(node, "Link").and_then(|n| self.nodes[n].alt.clone());
+                            let slot = &mut records.slots[index];
+                            if slot.url.as_ref().is_some_and(|(known, _)| known != &url) { bail!("{what} links to two destinations"); }
+                            slot.url = Some((url, alt));
+                            slot.links.push(rect);
+                            slot.node = node;
+                        }
+                        Inside::Bar(i) => bail!("bar `{}` contains a link", records.bars[i].meta.name),
+                        Inside::Image(i) => bail!("image slot `{}` contains a link", records.images[i].meta.name),
+                        Inside::Nothing => self.record_link(records, page, rect, dest)?,
+                    }
+                }
             }
         }
         Ok(items)
@@ -807,7 +872,7 @@ impl<'a> Exporter<'a> {
                     out.push(Atom { rect: Rect { x: pt(abs.x), y: pt(abs.y), w: pt(size.x), h: pt(size.y) }, item: self.image_item(abs, image, *size, node)?, kind: AtomKind::Static });
                 }
                 FrameItem::Tag(tag) => self.on_tag(tag),
-                FrameItem::Link(..) => {}
+                FrameItem::Link(dest, size) => { let rect = Self::link_rect(acc, *pos, *size); self.record_link(records, page, rect, dest)?; }
             }
         }
         Ok(())
@@ -815,11 +880,13 @@ impl<'a> Exporter<'a> {
 
     /// Slot records to absolute slots plus their reference layouts. A slot whose sample is empty shows no
     /// style: with `strict` that is an error, otherwise it gets placeholders and is listed in `unstyled`.
-    fn finish_slots(&self, records: Vec<SlotRecord>, strict: bool) -> Result<(Vec<ir::Slot>, Vec<String>, Vec<ReferenceSlot>)> {
+    /// `link_refs` carry the slot index they belong to, for naming in flow documents.
+    fn finish_slots(&self, records: Vec<SlotRecord>, strict: bool) -> Result<(Vec<ir::Slot>, Vec<String>, Vec<ReferenceSlot>, Vec<(usize, ReferenceSlot)>)> {
         let mut unstyled = Vec::new();
         let mut reference = Vec::new();
+        let mut link_refs = Vec::new();
         let mut slots = Vec::new();
-        for s in records {
+        for (index, s) in records.into_iter().enumerate() {
             let style = match s.style {
                 Some(style) => style,
                 None if strict => bail!("slot `{}` has no sample text; give it a non-empty sample value", s.meta.name),
@@ -848,6 +915,34 @@ impl<'a> Exporter<'a> {
                     eprintln!("warning: slot `{}`: the sample wraps to {} lines but the slot holds {}; Typst clips the rest", s.meta.name, s.baselines.len(), s.meta.lines);
                 }
             }
+            // A link slot: Typst put one link rectangle on every text run of the sample, and the runtime will put
+            // one on every line it draws, so each rectangle must be its run's box extended by the same amounts
+            // above and below the baseline (the text's edges plus half the leading, as Typst's `modify_text` does).
+            let link = if s.meta.link {
+                if s.links.is_empty() { bail!("slot `{}`: the sample has an `href` but Typst placed no link in the box", s.meta.name); }
+                let mut geometry: Option<ir::SlotLink> = None;
+                let mut fit = |rect: &Rect, x: f64, y: f64, w: f64| -> Result<()> {
+                    if (rect.x - x).abs() > 1e-6 || (rect.w - w).abs() > 1e-6 { bail!("slot `{}`: the link rectangle at x {:.4} of width {:.4} is not its text run's (x {x:.4}, width {w:.4})", s.meta.name, rect.x, rect.w); }
+                    let (above, below) = (y - rect.y, rect.bottom() - y);
+                    match geometry {
+                        None => geometry = Some(ir::SlotLink { above, below }),
+                        Some(g) if (g.above - above).abs() < 1e-6 && (g.below - below).abs() < 1e-6 => {}
+                        Some(g) => bail!("slot `{}`: link rectangles of different heights around the baseline ({:.4} + {:.4} and {above:.4} + {below:.4})", s.meta.name, g.above, g.below),
+                    }
+                    Ok(())
+                };
+                if s.runs.is_empty() {
+                    // Empty text: Typst still places one link rectangle, of no width, on the (empty) first line.
+                    for rect in &s.links { fit(rect, rect.x, baseline, 0.0)?; }
+                } else {
+                    if s.links.len() != s.runs.len() { bail!("slot `{}`: Typst placed {} link rectangle(s) on {} text run(s); the runtime expects one per line", s.meta.name, s.links.len(), s.runs.len()); }
+                    for (rect, &(x, y, w)) in s.links.iter().zip(&s.runs) { fit(rect, x, y, w)?; }
+                }
+                geometry
+            } else {
+                if !s.links.is_empty() { bail!("slot `{}` contains a link in its content; give the slot a `(text: …, href: …)` value instead", s.meta.name); }
+                None
+            };
             // The reference is what is visible: a wrapping slot's lines below the box are clipped by Typst and
             // dropped by the runtimes.
             let bottom = s.rect.bottom() + 1e-6;
@@ -856,16 +951,20 @@ impl<'a> Exporter<'a> {
                 baseline: if multi { s.baselines.first() } else { s.baselines.last() }.copied().unwrap_or(baseline),
                 glyphs: s.glyphs.iter().filter(|(_, _, y)| !multi || *y <= bottom).map(|(id, x, y)| ReferenceGlyph { id: *id, x: *x, y: *y }).collect(),
                 font: self.ir_fonts.get(style.font).map(|f| f.source_sha256.clone()).unwrap_or_default(),
-                ops: None, rect: None,
+                ops: None, rect: None, rects: None,
             });
+            if let Some(g) = link {
+                let rects = s.links.iter().filter(|r| r.y + g.above <= bottom).map(|r| [r.x, r.y, r.w, r.h]).collect();
+                link_refs.push((index, ReferenceSlot { name: format!("{}#link", s.meta.name), size: 0.0, baseline: 0.0, glyphs: Vec::new(), font: String::new(), ops: None, rect: None, rects: Some(rects) }));
+            }
             slots.push(ir::Slot {
                 name: s.meta.name, page: s.page, x: s.rect.x, y: s.rect.y, width: s.rect.w, height: s.rect.h,
                 baseline, descent: s.meta.descent, pen_x: style.pen_x, font: style.font, size: style.size, fill: style.fill,
                 align: s.meta.align, overflow: s.meta.overflow, max_length: s.meta.max_length, sample: s.sample, node: s.node,
-                charset: s.meta.charset, lines: s.meta.lines, pitch: s.meta.pitch, auto_lines: s.meta.auto_lines,
+                charset: s.meta.charset, lines: s.meta.lines, pitch: s.meta.pitch, auto_lines: s.meta.auto_lines, link,
             });
         }
-        Ok((slots, unstyled, reference))
+        Ok((slots, unstyled, reference, link_refs))
     }
 
     /// Bar records to bars plus references. The one shape Typst drew inside the box must be the bar the
@@ -885,7 +984,7 @@ impl<'a> Exporter<'a> {
                 bail!("bar `{name}`: Typst's shape for value {} of {} is not the bar the runtime would draw (width {:.4} of {:.4}, radius {:.2}):\n  typst   {actual:?}\n  runtime {expected:?}", b.meta.value, b.meta.max, ratio * b.rect.w, b.rect.w, b.meta.radius);
             }
             // Trace names carry the hole kind, because a bar may share its data key with a text slot.
-            reference.push(ReferenceSlot { name: format!("{name}#bar"), baseline: 0.0, size: 0.0, glyphs: Vec::new(), font: String::new(), ops: Some(actual), rect: Some([b.rect.x, b.rect.y, ratio * b.rect.w, b.rect.h]) });
+            reference.push(ReferenceSlot { name: format!("{name}#bar"), baseline: 0.0, size: 0.0, glyphs: Vec::new(), font: String::new(), ops: Some(actual), rect: Some([b.rect.x, b.rect.y, ratio * b.rect.w, b.rect.h]), rects: None });
             bars.push(ir::Bar { name: name.clone(), page: b.page, x: b.rect.x, y: b.rect.y, width: b.rect.w, height: b.rect.h, max: b.meta.max, fill: *fill, radius: b.meta.radius, node: b.node, sample: b.meta.value });
         }
         Ok((bars, reference))
@@ -905,10 +1004,14 @@ impl<'a> Exporter<'a> {
             if expected.iter().zip(&actual).any(|(a, b)| (a - b).abs() > 1e-6) {
                 bail!("image slot `{name}`: Typst placed the {px_w} x {px_h} {format} at {actual:?} in the box, the runtime would place it at {expected:?} (fit {})", r.meta.fit);
             }
-            reference.push(ReferenceSlot { name: format!("{name}#image"), baseline: 0.0, size: 0.0, glyphs: Vec::new(), font: String::new(), ops: None, rect: Some([placed.x, placed.y, placed.w, placed.h]) });
+            reference.push(ReferenceSlot { name: format!("{name}#image"), baseline: 0.0, size: 0.0, glyphs: Vec::new(), font: String::new(), ops: None, rect: Some([placed.x, placed.y, placed.w, placed.h]), rects: None });
             images.push(ir::ImageSlot { name: name.clone(), page: r.page, x: r.rect.x, y: r.rect.y, width: r.rect.w, height: r.rect.h, fit: r.meta.fit, alt: r.meta.alt, node: r.node, sample: format!("{px_w}x{px_h} {format}") });
         }
         Ok((images, reference))
+    }
+
+    fn finish_links(records: Vec<LinkRecord>) -> Vec<ir::Link> {
+        records.into_iter().map(|r| ir::Link { page: r.page, rects: r.rects.iter().map(|r| [r.x, r.y, r.w, r.h]).collect(), url: r.url, alt: r.alt, node: Some(r.node) }).collect()
     }
 
     fn export(self, doc: &PagedDocument, strict: bool) -> Result<Exported> {
@@ -924,21 +1027,25 @@ impl<'a> Exporter<'a> {
     fn export_fixed(mut self, doc: &PagedDocument, mut tags: Tags, title: Option<String>, strict: bool) -> Result<Exported> {
         if !tags.bands.is_empty() { bail!("bands need a `paged` wrapper so the runtime knows the flow area"); }
         let mut pages = Vec::new();
-        let mut records = Records { slots: &mut tags.slots, bars: &mut tags.bars, images: &mut tags.images };
+        let mut records = Records { slots: &mut tags.slots, bars: &mut tags.bars, images: &mut tags.images, links: &mut tags.links };
         for (index, page) in doc.pages().iter().enumerate() {
             self.reset_structure();
             let items = self.export_frame(index, &page.frame, Transform::identity(), &mut records, Inside::Nothing)?;
             pages.push(ir::Page { width: pt(page.frame.width()), height: pt(page.frame.height()), items, nodes: std::mem::take(&mut self.nodes) });
         }
-        let (slots, unstyled, mut reference) = self.finish_slots(tags.slots, strict)?;
+        let (slots, unstyled, mut reference, link_refs) = self.finish_slots(tags.slots, strict)?;
         let (bars, bar_refs) = self.finish_bars(tags.bars)?;
         let (images, image_refs) = self.finish_images(tags.images)?;
+        let links = Self::finish_links(tags.links);
         for image in &images { if let Some(n) = image.node { pages[image.page].nodes[n].alt = image.alt.clone(); } }
+        // A link slot's Link node describes the data's destination, not the sample's.
+        for slot in &slots { if slot.link.is_some() && let Some(n) = slot.node { pages[slot.page].nodes[n].alt = None; } }
         reference.extend(bar_refs);
         reference.extend(image_refs);
+        reference.extend(link_refs.into_iter().map(|(_, r)| r));
         let image_files = image_files_of(&self.images);
         Ok(Exported {
-            doc: ir::Document { version: ir::VERSION, title, lang: self.lang.clone(), fonts: self.ir_fonts, image_files, pages, slots, bars, images, flow: None },
+            doc: ir::Document { version: ir::VERSION, title, lang: self.lang.clone(), fonts: self.ir_fonts, image_files, pages, slots, bars, images, links, flow: None },
             unstyled, reference, declared: HashMap::new(), images: self.images,
         })
     }
@@ -954,25 +1061,27 @@ impl<'a> Exporter<'a> {
         let mut atoms = Vec::new();
         self.reset_structure();
         {
-            let mut records = Records { slots: &mut tags.slots, bars: &mut tags.bars, images: &mut tags.images };
+            let mut records = Records { slots: &mut tags.slots, bars: &mut tags.bars, images: &mut tags.images, links: &mut tags.links };
             self.flatten(0, &page.frame, Transform::identity(), &mut records, &tags.bands, &tags.overlays, &mut atoms)?;
         }
         let mut page_nodes = std::mem::take(&mut self.nodes);
-        let (abs_slots, unstyled, slot_refs) = self.finish_slots(tags.slots, strict)?;
+        let (abs_slots, unstyled, slot_refs, link_refs) = self.finish_slots(tags.slots, strict)?;
         let (abs_bars, bar_refs) = self.finish_bars(tags.bars)?;
         let (abs_images, image_refs) = self.finish_images(tags.images)?;
+        let abs_links = Self::finish_links(tags.links);
         for image in &abs_images { if let Some(n) = image.node { page_nodes[n].alt = image.alt.clone(); } }
+        for slot in &abs_slots { if slot.link.is_some() && let Some(n) = slot.node { page_nodes[n].alt = None; } }
         atoms.sort_by(|a, b| a.rect.y.partial_cmp(&b.rect.y).unwrap_or(std::cmp::Ordering::Equal));
         let (overlay_atoms, flow_atoms): (Vec<Atom>, Vec<Atom>) = atoms.into_iter().partition(|a| matches!(a.kind, AtomKind::Overlay));
 
         // Every hole is taken by the band instance, overlay or static block whose rectangle encloses it.
-        let (mut slots, mut bars, mut images) = (Taken::new(abs_slots), Taken::new(abs_bars), Taken::new(abs_images));
-        let mut take_inside = |rect: &Rect, owner: Owner| -> HoleSet { HoleSet { slots: slots.take(rect, &owner), bars: bars.take(rect, &owner), images: images.take(rect, &owner) } };
+        let (mut slots, mut bars, mut images, mut links) = (Taken::new(abs_slots), Taken::new(abs_bars), Taken::new(abs_images), Taken::new(abs_links));
+        let mut take_inside = |rect: &Rect, owner: Owner| -> HoleSet { HoleSet { slots: slots.take(rect, &owner), bars: bars.take(rect, &owner), images: images.take(rect, &owner), links: links.take(rect, &owner) } };
         let fragment_of = |atom: &Atom, mut holes: HoleSet, y: f64| -> Result<ir::Fragment> {
             let ir::Item::Group { items, .. } = &atom.item else { bail!("a band or overlay atom is not a group") };
             let mut items = items.clone();
             let nodes = localize(&mut items, &mut holes, &page_nodes);
-            Ok(ir::Fragment { x: atom.rect.x, y, width: atom.rect.w, height: atom.rect.h, items, slots: holes.slots, bars: holes.bars, images: holes.images, nodes })
+            Ok(ir::Fragment { x: atom.rect.x, y, width: atom.rect.w, height: atom.rect.h, items, slots: holes.slots, bars: holes.bars, images: holes.images, links: holes.links, nodes })
         };
 
         let mut blocks = Vec::new();
@@ -1062,7 +1171,7 @@ impl<'a> Exporter<'a> {
             let holes = take_inside(&atom.rect, Owner::Overlay);
             overlays.push(fragment_of(atom, holes, atom.rect.y)?);
         }
-        for (what, left) in [("slot", slots.untaken()), ("bar", bars.untaken()), ("image slot", images.untaken())] {
+        for (what, left) in [("slot", slots.untaken()), ("bar", bars.untaken()), ("image slot", images.untaken()), ("link", links.untaken())] {
             if let Some(name) = left { bail!("{what} `{name}` is not inside any block, band or overlay"); }
         }
 
@@ -1075,11 +1184,12 @@ impl<'a> Exporter<'a> {
             };
             ReferenceSlot { name, ..r }
         };
-        let reference = slot_refs.into_iter().zip(&slots.owners).chain(bar_refs.into_iter().zip(&bars.owners)).chain(image_refs.into_iter().zip(&images.owners)).map(|(r, o)| named(r, o)).collect();
+        let reference = slot_refs.into_iter().zip(&slots.owners).chain(bar_refs.into_iter().zip(&bars.owners)).chain(image_refs.into_iter().zip(&images.owners))
+            .chain(link_refs.into_iter().map(|(i, r)| (r, &slots.owners[i]))).map(|(r, o)| named(r, o)).collect();
         let image_files = image_files_of(&self.images);
         Ok(Exported {
             doc: ir::Document {
-                version: ir::VERSION, title, lang: self.lang.clone(), fonts: self.ir_fonts, image_files, pages: Vec::new(), slots: Vec::new(), bars: Vec::new(), images: Vec::new(),
+                version: ir::VERSION, title, lang: self.lang.clone(), fonts: self.ir_fonts, image_files, pages: Vec::new(), slots: Vec::new(), bars: Vec::new(), images: Vec::new(), links: Vec::new(),
                 flow: Some(ir::Flow { page_width, page_height, area, blocks, bands, overlays }),
             },
             unstyled, reference, declared, images: self.images,
@@ -1091,13 +1201,13 @@ impl<'a> Exporter<'a> {
 #[derive(Clone)]
 enum Owner { Band { name: String, instance: Option<usize> }, Overlay, Flow }
 
-/// The three kinds of hole a fragment can have.
+/// The three kinds of hole a fragment can have, plus its static links, which travel with it the same way.
 #[derive(Default)]
-struct HoleSet { slots: Vec<ir::Slot>, bars: Vec<ir::Bar>, images: Vec<ir::ImageSlot> }
+struct HoleSet { slots: Vec<ir::Slot>, bars: Vec<ir::Bar>, images: Vec<ir::ImageSlot>, links: Vec<ir::Link> }
 
-impl HoleSet { fn len(&self) -> usize { self.slots.len() + self.bars.len() + self.images.len() } }
+impl HoleSet { fn len(&self) -> usize { self.slots.len() + self.bars.len() + self.images.len() + self.links.len() } }
 
-fn hole_count(fragment: &ir::Fragment) -> usize { fragment.slots.len() + fragment.bars.len() + fragment.images.len() }
+fn hole_count(fragment: &ir::Fragment) -> usize { fragment.slots.len() + fragment.bars.len() + fragment.images.len() + fragment.links.len() }
 
 /// A hole in absolute page coordinates that can be made relative to the fragment that takes it.
 trait Hole: Clone {
@@ -1122,6 +1232,16 @@ impl Hole for ir::ImageSlot {
     fn rect(&self) -> Rect { Rect { x: self.x, y: self.y, w: self.width, h: self.height } }
     fn relocate(&mut self, dx: f64, dy: f64) { self.page = 0; self.x += dx; self.y += dy; }
     fn name(&self) -> &str { &self.name }
+}
+
+impl Hole for ir::Link {
+    fn rect(&self) -> Rect {
+        let (x0, y0) = (self.rects.iter().map(|r| r[0]).fold(f64::INFINITY, f64::min), self.rects.iter().map(|r| r[1]).fold(f64::INFINITY, f64::min));
+        let (x1, y1) = (self.rects.iter().map(|r| r[0] + r[2]).fold(f64::NEG_INFINITY, f64::max), self.rects.iter().map(|r| r[1] + r[3]).fold(f64::NEG_INFINITY, f64::max));
+        Rect { x: x0, y: y0, w: x1 - x0, h: y1 - y0 }
+    }
+    fn relocate(&mut self, dx: f64, dy: f64) { self.page = 0; for r in &mut self.rects { r[0] += dx; r[1] += dy; } }
+    fn name(&self) -> &str { &self.url }
 }
 
 /// The holes of one kind on the sample page and, per hole, whether and by whom it was taken.
@@ -1155,7 +1275,7 @@ fn static_fragment(atoms: &[&Atom], top: f64, height: f64, width: f64, nodes: &[
     // The fragment spans the page width from x = 0, so hole x positions stay absolute.
     let mut holes = take(&Rect { x: 0.0, y: top, w: 1e9, h: height.max(0.0) });
     let nodes = localize(&mut items, &mut holes, nodes);
-    ir::Block::Static { fragment: ir::Fragment { x: 0.0, y: 0.0, width, height, items, slots: holes.slots, bars: holes.bars, images: holes.images, nodes } }
+    ir::Block::Static { fragment: ir::Fragment { x: 0.0, y: 0.0, width, height, items, slots: holes.slots, bars: holes.bars, images: holes.images, links: holes.links, nodes } }
 }
 
 struct Exported { doc: ir::Document, unstyled: Vec<String>, reference: Vec<ReferenceSlot>, declared: HashMap<String, Declared>, images: BTreeMap<String, ImageBytes> }
@@ -1308,7 +1428,13 @@ fn mutate(value: &mut serde_json::Value, rng: &mut Rng) {
             let max = (s.chars().count().max(8) * 2) as u64;
             let len = rng.below(max + 1) as usize;
             let set: Vec<char> = CHARSET.chars().collect();
-            *s = (0..len).map(|_| set[rng.below(set.len() as u64) as usize]).collect();
+            let mut text: Vec<char> = (0..len).map(|_| set[rng.below(set.len() as u64) as usize]).collect();
+            // One string in four carries a web address somewhere, so wrapping slots meet Typst's link breaking.
+            if rng.below(4) == 0 {
+                let at = rng.below(text.len() as u64 + 1) as usize;
+                text.splice(at..at, random_address(rng).chars());
+            }
+            *s = text.into_iter().collect();
         }
         // Half the numbers stay in a bar's usual range so that bars get every width.
         serde_json::Value::Number(_) => *value = serde_json::Value::from(if rng.below(2) == 0 { rng.below(101) } else { rng.below(1000) }),
@@ -1320,9 +1446,31 @@ fn mutate(value: &mut serde_json::Value, rng: &mut Rng) {
             *items = (0..n).map(|i| template[i % template.len()].clone()).collect();
             items.iter_mut().for_each(|v| mutate(v, rng));
         }
-        serde_json::Value::Object(map) => map.values_mut().for_each(|v| mutate(v, rng)),
+        // An `href` stays a web address, so link slots keep their links.
+        serde_json::Value::Object(map) => map.iter_mut().for_each(|(key, v)| if key == "href" { *v = serde_json::Value::String(random_address(rng)) } else { mutate(v, rng) }),
         serde_json::Value::Null => {}
     }
+}
+
+/// A web address for the fuzzer: a scheme or `www.`, a host, a path of words and digits, sometimes a port, a
+/// query, a long hash (16 or more characters, after each of which Typst allows a break), brackets or trailing
+/// punctuation, so wrapping slots meet every rule of Typst's link breaking.
+fn random_address(rng: &mut Rng) -> String {
+    fn word(rng: &mut Rng, min: u64, max: u64) -> String { (0..min + rng.below(max - min + 1)).map(|_| (b'a' + rng.below(26) as u8) as char).collect() }
+    let mut s = ["https://", "http://", "www.", "https://www."][rng.below(4) as usize].to_string();
+    s += &word(rng, 2, 10);
+    s.push('.');
+    s += ["org", "com", "edu", "co.uk"][rng.below(4) as usize];
+    if rng.below(3) == 0 { s += &format!(":{}", 1000 + rng.below(9000)); }
+    for _ in 0..rng.below(4) {
+        s.push('/');
+        s += &match rng.below(4) { 0 => rng.below(100_000).to_string(), 1 => format!("{}-{}", word(rng, 2, 6), word(rng, 2, 6)), 2 => format!("{}{}", word(rng, 1, 4), rng.below(100)), _ => word(rng, 1, 12) };
+    }
+    if rng.below(3) == 0 { s += &format!("?{}={}&{}={}", word(rng, 1, 4), rng.below(100), word(rng, 1, 4), word(rng, 1, 6)); }
+    if rng.below(3) == 0 { s.push('#'); s.extend((0..16 + rng.below(24)).map(|_| b"0123456789abcdef"[rng.below(16) as usize] as char)); }
+    if rng.below(4) == 0 { s = format!("({s})"); }
+    if rng.below(3) == 0 { s.push(['.', ',', ')', '!'][rng.below(4) as usize]); }
+    s
 }
 
 /// A random PNG of 1 to 64 by 1 to 64 pixels, grey, RGB or RGBA, so that image slots are fuzzed with images of
@@ -1575,13 +1723,18 @@ fn roles(nodes: &[ir::Node]) -> String {
 }
 
 fn describe_slot(slot: &ir::Slot, indent: &str) {
-    let wrap = if slot.lines > 1 { format!(" lines {} pitch {:.2}", slot.lines, slot.pitch) } else { String::new() };
+    let mut wrap = if slot.lines > 1 { format!(" lines {} pitch {:.2}", slot.lines, slot.pitch) } else { String::new() };
+    if let Some(l) = slot.link { wrap += &format!(" link {:.2}+{:.2}", l.above, l.below); }
     println!("{indent}slot {:<14} rect ({:.2}, {:.2}) {:.2} x {:.2}  baseline y {:.2}  font #{} {:.1}pt  align {:<6}{wrap} sample {:?}",
         slot.name, slot.x, slot.y, slot.width, slot.height, slot.baseline, slot.font, slot.size, slot.align, slot.sample);
 }
 
-fn describe_holes(slots: &[ir::Slot], bars: &[ir::Bar], images: &[ir::ImageSlot], indent: &str) {
+fn describe_holes(slots: &[ir::Slot], bars: &[ir::Bar], images: &[ir::ImageSlot], links: &[ir::Link], indent: &str) {
     for slot in slots { describe_slot(slot, indent); }
+    for link in links {
+        let [x, y, w, h] = link.rects[0];
+        println!("{indent}link  {:<14} {} rect(s), first ({x:.2}, {y:.2}) {w:.2} x {h:.2}  alt {:?}", link.url, link.rects.len(), link.alt);
+    }
     for bar in bars {
         println!("{indent}bar  {:<14} rect ({:.2}, {:.2}) {:.2} x {:.2}  max {} radius {:.2}  sample {}", bar.name, bar.x, bar.y, bar.width, bar.height, bar.max, bar.radius, bar.sample);
     }
@@ -1596,7 +1749,7 @@ fn describe(exported: &ir::Document) {
         let (t, s, g) = count(&page.items);
         println!("  page {i}: {:.1} x {:.1} pt, {t} static text runs, {s} shapes, {g} groups, nodes [{}]", page.width, page.height, roles(&page.nodes));
     }
-    describe_holes(&exported.slots, &exported.bars, &exported.images, "  ");
+    describe_holes(&exported.slots, &exported.bars, &exported.images, &exported.links, "  ");
     if let Some(flow) = &exported.flow {
         println!("  flow: page {:.1} x {:.1} pt, area x {:.1} y {:.1} w {:.1} h {:.1}", flow.page_width, flow.page_height, flow.area.x, flow.area.y, flow.area.width, flow.area.height);
         for block in &flow.blocks {
@@ -1604,7 +1757,7 @@ fn describe(exported: &ir::Document) {
                 ir::Block::Static { fragment } => {
                     let (t, s, g) = count(&fragment.items);
                     println!("  static block: height {:.2}, {t} text runs, {s} shapes, {g} groups, {} hole(s), nodes [{}]", fragment.height, hole_count(fragment), roles(&fragment.nodes));
-                    describe_holes(&fragment.slots, &fragment.bars, &fragment.images, "    ");
+                    describe_holes(&fragment.slots, &fragment.bars, &fragment.images, &fragment.links, "    ");
                 }
                 ir::Block::Repeat { band, header, header_gap, gap, sample_rows } => {
                     println!("  repeat `{band}`: header {header:?} (gap after {header_gap:.2}), row gap {gap:.2}, {sample_rows} sample row(s)");
@@ -1617,12 +1770,12 @@ fn describe(exported: &ir::Document) {
                 let (t, s, g) = count(&fragment.items);
                 let which = if band.fragments.len() > 1 { format!(" variant {} of {} ({:?})", v + 1, band.fragments.len(), band.select) } else { String::new() };
                 println!("  band `{}`{}{which}: x {:.2} w {:.2} h {:.2}, {t} text runs, {s} shapes, {g} groups, {} hole(s), nodes [{}]", band.name, if band.repeat_on_break { " (repeat on break)" } else { "" }, fragment.x, fragment.width, fragment.height, hole_count(fragment), roles(&fragment.nodes));
-                describe_holes(&fragment.slots, &fragment.bars, &fragment.images, "    ");
+                describe_holes(&fragment.slots, &fragment.bars, &fragment.images, &fragment.links, "    ");
             }
         }
         for overlay in &flow.overlays {
             println!("  overlay: ({:.2}, {:.2}) {:.2} x {:.2}, {} hole(s)", overlay.x, overlay.y, overlay.width, overlay.height, hole_count(overlay));
-            describe_holes(&overlay.slots, &overlay.bars, &overlay.images, "    ");
+            describe_holes(&overlay.slots, &overlay.bars, &overlay.images, &overlay.links, "    ");
         }
     }
 }

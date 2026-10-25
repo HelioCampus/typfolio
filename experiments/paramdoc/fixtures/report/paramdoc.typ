@@ -27,7 +27,15 @@
   ..text-args,        // text arguments applied inside the slot: size, weight, style, fill
 ) = text(..text-args.named(), context {
   let d = descent.to-absolute()
-  let meta = (name: name, align: repr(align), overflow: overflow, max-length: max-length, charset: charset, descent: d.pt())
+  // A link slot: the value is `(text: …, href: …)`, optionally with `alt`; the text is shown as a `link` to `href`
+  // and the runtime adds the clickable area (one rectangle per line, as Typst's). The sample decides: a slot whose
+  // sample value has an `href` is a link slot and needs one in every input; any other slot refuses one, because a
+  // `show link` rule may style the two differently.
+  let href = if type(value) == dictionary { value.at("href", default: none) } else { none }
+  let shown = if type(value) == dictionary { value.text } else { value }
+  let shown = if type(shown) in (str, content) { shown } else { str(shown) }
+  let body = if href == none { shown } else { link(href, shown) }
+  let meta = (name: name, align: repr(align), overflow: overflow, max-length: max-length, charset: charset, descent: d.pt(), link: href != none)
   let line-height = measure({ set text(bottom-edge: "baseline"); [x] }).height
   let leading = par.leading.to-absolute()
   let pitch = line-height + leading
@@ -35,7 +43,7 @@
   let single(meta) = box(width: width, height: height, clip: true, inset: (bottom: d), baseline: (at: bottom, shift: d))[
     #metadata(meta) <paramdoc-slot>
     #set text(kerning: false, ligatures: false, features: (calt: 0), overhang: false, bottom-edge: "baseline")
-    #std.align(align + bottom, value)
+    #std.align(align + bottom, body)
   ]
   // Several lines: they break as Typst's simple breaker does, without hyphenation or justification, so the
   // runtime can reproduce them from advance widths alone. The box is exactly `n` lines tall under these rules;
@@ -44,7 +52,7 @@
     #metadata(meta + (lines: n, line-height: line-height.pt(), pitch: pitch.pt())) <paramdoc-slot>
     #set par(justify: false, linebreaks: "simple", first-line-indent: 0pt, hanging-indent: 0pt)
     #set text(hyphenate: false, kerning: false, ligatures: false, features: (calt: 0), overhang: false, bottom-edge: "baseline")
-    #std.align(align + top, value)
+    #std.align(align + top, body)
   ]
   if lines == 1 { single(meta) } else if lines != auto { wrapping(lines, meta) } else {
     // `lines: auto`: in the sample compile, as many lines as the text needs (measured, capped by the band's
@@ -58,7 +66,7 @@
         let h = measure(box(width: w, {
           set par(justify: false, linebreaks: "simple", first-line-indent: 0pt, hanging-indent: 0pt)
           set text(hyphenate: false, kerning: false, ligatures: false, features: (calt: 0), overhang: false, bottom-edge: "baseline")
-          value
+          body
         })).height
         calc.clamp(int(calc.round((h - line-height) / pitch)) + 1, 1, band.variants)
       }

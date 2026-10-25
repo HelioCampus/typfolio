@@ -43,22 +43,23 @@ Commits, oldest first:
 | Path | What |
 |---|---|
 | `PLAN.md` | Principle, architecture, milestones, findings, measurements, re-evaluations. Read it first. |
-| `check.sh` | The whole proof below as one script: build, exports with fuzzing, checked-in documents against a fresh export, both runtimes against Typst and each other, pixels, text, structure, veraPDF, and with `DEMO_URL` set the demo page. 42 checks, under a minute. |
+| `GAPS.md` | The one inventory of what paramdoc cannot do yet, for application developers: status (refused at export, refused at fill, silent, missing, rule), workaround, fix and cost. Add every new gap there; the open-items list below is only the order. |
+| `check.sh` | The whole proof below as one script: build, exports with fuzzing, checked-in documents against a fresh export, both runtimes against Typst and each other, pixels, text, structure, veraPDF, and with `DEMO_URL` set the demo page. 116 checks, a few minutes. |
 | `export-documents.sh` | Exports a fixture and copies what a browser runtime needs, `doc.json` and the subset fonts, into `documents/<fixture>/`. |
 | `documents/report/` | The report fixture exported, checked in (152 kB) because the demo page cannot run the exporter at build time. Regenerate after changing the fixture, the dialect or the exporter. |
 | `Cargo.toml`, `Cargo.lock`, `.cargo/config.toml` | Rust workspace; build output goes to `../../.build/paramdoc-target` (gitignored), never in-tree. |
-| `ir/` | The parametric document format (`doc.json`), serde types, version 7, plus `geometry`: the ports of Typst's rounded rectangle and image placement both the exporter and the runtimes use. |
+| `ir/` | The parametric document format (`doc.json`), serde types, version 8 (links and link-slot geometry since 2026-10-26), plus `geometry`: the ports of Typst's rounded rectangle and image placement both the exporter and the runtimes use. |
 | `export/` | `paramdoc-export`: links Typst 0.15.1 as a library (crates.io), compiles a fixture with sample data, walks the frames, exports the document, subsets fonts, dumps Typst's layout as a reference, fuzzes the data and diffs the contract. |
 | `runtime/` | `paramdoc-runtime`: Rust library + CLI (`fill`, `bench`) + C ABI (`paramdoc_open/render/close`, `paramdoc_fill`) for the wasm32 cdylib build. Depends on pdf-writer, flate2, serde_json, sha2 only. |
-| `ts/runtime.ts`, `ts/cli.ts` | The same runtime in dependency-free erasable TypeScript; Node 22 runs it with `--experimental-strip-types`; Vite bundles it with the demo's worker into 33 kB minified, 13 kB gzipped (16 kB before images and bars). |
-| `fixtures/*/` | Templates in the slot dialect, each with `paramdoc.typ` (the dialect helper, identical copies), `main.typ`, `data.json`: `certificate` (fixed page), `policies` (overflow policies), `leak` (deliberately broken, must fail the check), `transcript` (flow: table bands, 42-row `data-long.json`), `report` (the worker-batch benchmark's report in the dialect). |
+| `ts/runtime.ts`, `ts/cli.ts` | The same runtime in dependency-free erasable TypeScript; Node 22 runs it with `--experimental-strip-types`; Vite bundles it with the demo's worker into 36 kB minified, 14 kB gzipped (16 kB before images, bars and links). |
+| `fixtures/*/` | Templates in the slot dialect, each with `paramdoc.typ` (the dialect helper, identical copies), `main.typ`, `data.json`: `certificate` (fixed page), `policies` (overflow policies), `leak` (deliberately broken, must fail the check), `transcript` (flow: table bands, 42-row `data-long.json`), `report` (the worker-batch benchmark's report in the dialect), `wrap` and `wrapfuzz` (wrapping slots, one data case per breaking rule, random texts), `figures` (image slots), `links` (static links and link slots, 40-row `data-long.json`), `linkbad` (an internal link, must fail the check). |
 | `notes/wasm-size-report.md` | Where the 24 MB compiler's bytes go (crate by crate, data blobs, dependency paths). |
 | `notes/bench/` | Scripts: `gen-inputs.mjs` (1000 inputs from the repo's `data.ts`), `bench-wasm.mjs` (Rust wasm in Node), `bench-browser.mjs` (drives the repo's `/performance` page headlessly), `bench-ts.html` + `bench-ts-browser.mjs` (TypeScript runtime in Chromium), `inspect.mjs` (structure via the repo's `inspectPdf`), `ppmdiff.mjs` (pixel diff of two PPMs, used by `check.sh`), `write-all.mjs` (every benchmark input as a PDF, for veraPDF over the set). |
 
 ## How to prove it still works (do this first after any change)
 
 ```sh
-cd experiments/paramdoc && ./check.sh      # 96 checks, a few minutes after the first build; FUZZ=20 ./check.sh is quicker
+cd experiments/paramdoc && ./check.sh      # 116 checks, a few minutes after the first build; FUZZ=20 ./check.sh is quicker
 DEMO_URL=http://127.0.0.1:4190 ./check.sh  # also drives the performance page of a running pretext-hybrid dev server
 ```
 
@@ -66,7 +67,7 @@ It builds, exports every fixture with fuzzing and a Typst reference, runs both r
 against each other, rasterises and compares pixels, compares text extraction, inspects the structure and
 validates every runtime PDF with veraPDF as PDF/UA-1; it also fails when `documents/<fixture>` no longer equals a
 fresh export (the export is byte-deterministic, so this is a plain comparison). Every fixture gets a Typst
-reference for `data.json` and for each other `data-*.json` case (the `wrap` cases, the transcript without
+reference for `data.json` and for each other `data-*.json` case (the `wrap` cases, web addresses included, the transcript without
 honours, the figures with other images), and `fixtures/wrapfuzz` references for 40 random samples (the exporter's `--fuzz-references`); both
 runtimes are checked against every one of them, glyph for glyph and pixel for pixel. Tools it cannot find (poppler,
 veraPDF, the dev-tools build, Playwright) are reported as SKIP; anything else that fails fails the script.
@@ -130,6 +131,12 @@ checked against Typst on every compile); it is tagged as content of the cell it 
 clipped box one `image` fills, placed as Typst's `layout_image` places it (`ir::geometry::fit_image`, also checked
 on every compile) and tagged Figure with the data's alternative text; images arrive in the data as data URLs,
 which the exporter turns into files for Typst. Static raster images are shipped as `images/*` next to the fonts.
+A **link slot** (since 2026-10-26) is a slot whose value is `(text: …, href: …)`: the text is shown as a `link`
+and the runtime adds one link annotation per drawn line, each line's box extended above and below the baseline
+by what Typst's link rectangle adds (the text's edges plus half the leading), measured from the sample and
+checked against every compile. Static links in the template are exported as `Link` records (Typst's rectangles,
+URL, Link node) and written as annotations too; web addresses in wrapping-slot text break where Typst's
+`linebreak_link` breaks them. Only URL destinations; no links in artifacts.
 Everything outside holes must lay out identically for every valid input; the exporter proves it by fuzzing.
 Holes bind to data by name (hole name = data key; rows bind to the array named after the band). The runtime only
 does geometry Typst's source was ported for, or picks among things Typst already produced. Bands must use `table`, not `grid`, to get table
@@ -173,6 +180,9 @@ switch. The row stripes and the score bars are back since 2026-10-25 (two band v
 
 ## Open items, in the order I would do them
 
+`GAPS.md` is the full inventory (G1–G43 as of 2026-10-26) and the place to record a new gap; this section only
+says what to build next and why.
+
 veraPDF, the first item at handover, is done (2026-10-24, veraPDF 1.30.0): every runtime PDF passes PDF/UA-1
 with no change to either runtime. The expected gaps did not apply: `/Tabs` is only required on pages with
 annotations, and the fixtures have no lists and no links. Under the PDF/UA-2 and WTPDF 1.0 accessibility
@@ -189,6 +199,13 @@ rounded rectangles regenerated from the data, and `fixtures/figures` fills PNG a
 with transparency, a photograph, a keyed icon) and draws a static logo, pixel-identical to Typst. Both runtimes,
 glyph positions, shapes and pixels. See the status log in `PLAN.md` and `docs/2026-10-25-*.md` at the repository root.
 
+Web addresses and clickable links are done (2026-10-26): wrapping slots break addresses as Typst does (its
+`link_prefix` and `linebreak_link`, checked on the `wrap` links case and on random texts), and links come out of
+both runtimes as PDF/UA link annotations inside Link elements, static ones from the template and data-driven ones
+through link slots (`slot(name, (text:, href:))`), with rectangles equal to typst-pdf's. See
+`docs/2026-10-26-addresses-and-links.md`. The justification half of that item is next (item 4 below;
+`PLAN.md`'s M11 section has the plan, checked against typst-layout 0.15.1).
+
 1. **A Worker wrapper** for the TypeScript runtime as something reusable: the demo page has one (`paramdoc.worker.ts`
    and the pool in `batch.ts`), written for that page; moving it under `ts/` with a small API would let other pages
    use it. A compact binary form of `doc.json` if its 87 kB raw (6.5 kB gzip) ever matters.
@@ -204,11 +221,12 @@ glyph positions, shapes and pixels. See the status log in `PLAN.md` and `docs/20
    2026-10-25: the JavaScript library `@chenglou/pretext` (already a devDependency of the pretext-hybrid demo)
    does not help; it is a greedy wrapper with no justification API, its Knuth–Plass lives only in demo code with
    a cost unlike Typst's, and it measures through canvas. Port Typst's own arithmetic into both runtimes, keep
-   hyphenation off inside slots, and add `justify: true` fixtures to the oracle. Web addresses (`://`, `www.`)
-   are refused in wrapping slots for a related reason: Typst breaks links by rules of its own (`linebreak_link`).
-5. **Hyperlinks and SVG images**, the rest of the images-and-links item. Typst's link items are dropped at export;
-   they bring annotations, `/Tabs /S` and the Link structure rules, so run `./check.sh` with veraPDF when they
-   land. SVG images are refused by the exporter (the runtimes have no SVG renderer; the shared header of
+   hyphenation off inside slots, and add `justify: true` fixtures to the oracle. `PLAN.md`'s M11 section has the
+   plan with the exact typst-layout 0.15.1 arithmetic: with `linebreaks: "simple"` and `hyphenate: false` pinned,
+   justification is only the space-stretching step; the breaks do not move.
+5. **SVG images**, the rest of the images-and-links item (links are done, 2026-10-26: still refused are internal
+   destinations, links in overlays and repeated headers, and rotated link text gets a bounding box).
+   SVG images are refused by the exporter (the runtimes have no SVG renderer; the shared header of
    `examples/vite-react` uses an SVG logo, so a template from there needs the logo rasterized to PNG, or an SVG
    port of krilla-svg's output). Also unsupported, each with a message: 16-bit, interlaced and sub-8-bit PNGs,
    CMYK and lossless JPEGs, EXIF orientation, `scaling: "smooth"`; and the wasm C ABI has no parameter for the
@@ -268,7 +286,23 @@ glyph positions, shapes and pixels. See the status log in `PLAN.md` and `docs/20
   `/paramdoc-images/<n>.<ext>` files for Typst (`virtualize_images`) and the runtime decodes them. The TypeScript
   runtime also takes a `Uint8Array`. Image slots need a fixed width and height.
 - **Erasable TypeScript only** in `ts/runtime.ts`: no parameter properties, enums or namespaces; Node's
-  `--experimental-strip-types` refuses them.
+  `--experimental-strip-types` refuses them. Type-check with `npx tsc --noEmit --strict --target es2022 --module
+  esnext --moduleResolution bundler --lib es2022,dom --skipLibCheck --noUncheckedIndexedAccess --erasableSyntaxOnly
+  --allowImportingTsExtensions experiments/paramdoc/ts/runtime.ts experiments/paramdoc/ts/cli.ts` from the root.
+- **Typst's web-address breaking is positional**, not a pattern over the text: `breakpoints()` looks for `://`
+  before and `www.` after the previous break opportunity, so `http://127.0.0.1` (no opportunity between `/` and a
+  digit) is not a link to it and breaks by UAX #14. The runtimes port the loop (`link_prefix`, `linebreak_link`);
+  the fuzz puts random addresses into one string in four to keep it honest.
+- **Link slots are strict both ways.** A slot whose sample value has an `href` needs one in every input and a
+  plain slot refuses one, because `show link` rules style the two differently and the exporter only knows the
+  sample's style. The slot's text belongs to the Link node (re-pointed when the link item arrives, after the
+  metadata tag), whose `alt` is reset to the data's at fill time.
+- **Typst's link rectangle is the line's text frame plus half the leading above and below**, one per line;
+  typst-pdf joins a link's rectangles into one annotation with quad points for PDF/UA. The exporter measures the
+  two extents from the sample and checks every compile; the runtimes' rectangles equal typst-pdf's.
+- **Typst inlines frames of at most five items and nests larger ones**, so an item like a link can turn a slot's
+  paragraph frame into a nested (empty, once the hole consumed its text) group depending on the text. The
+  exporter drops empty unclipped groups; without that every such sample was a fake leak.
 - **The fixture images are generated**, by `notes/make-figure-images.mjs` from the repository root (Chromium via
   Playwright for the canvas chart, sharp for the JPEG and the tall PNG, hand-written PNGs for the palette logo and
   the keyed icon). Re-run it rather than editing the data files' base64 by hand.

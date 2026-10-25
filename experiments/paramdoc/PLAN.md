@@ -50,6 +50,10 @@ labelled `metadata`; the exporter finds it through the frame's tags and the encl
 9. **Parametric geometry and image slots.** A bar whose length is a value; a box the data fills with an image.
    Exit: the report's score bars are back and match Typst; an image fixture passes veraPDF's Figure rules. ✅
    (2026-10-25; bars path-identical and figures pixel-identical to Typst, both runtimes.)
+10. **Web addresses and clickable links.** Wrapping slots break addresses as Typst does; links in the template and
+   link slots fed by the data come out as PDF/UA link annotations in Link elements. Exit: a links fixture matches
+   Typst's glyphs and link rectangles, counts its annotations and passes veraPDF, both runtimes. ✅
+   (2026-10-26; rectangles equal typst-pdf's to five decimals. Justified slots are the open half of this item.)
 
 Re-evaluate after each milestone; stop and discuss on critical findings.
 
@@ -146,6 +150,79 @@ checked against Typst on every compile, fuzz samples included. See the status lo
 Exit: the report with bars matches Typst for the sample; an outcomes-like fixture with image slots passes veraPDF;
 fuzz 0 leaks.
 
+### M10: web addresses and clickable links
+
+Result (2026-10-26): done, see the status log and `docs/2026-10-26-addresses-and-links.md`. Justification, the
+other half of the fourth expressiveness item, is M11 below.
+
+### M11: justified wrapping slots (plan, not built)
+
+Written 2026-10-25 in a fork of the working session and checked line by line against typst-layout 0.15.1 on
+2026-10-26; it holds. The one rule that shapes it: the runtime never does anything a Typst compile of the
+constrained template does not show, so justification must stay inside what the dialect pins.
+
+- **The idea.** Typst justifies in two independent steps: choosing the breaks (with `justify: true` it defaults
+  to `linebreaks: "optimized"` and turns hyphenation on; both are defaults, not requirements) and stretching the
+  spaces of each chosen line to the right edge. The dialect already pins `linebreaks: "simple"` and
+  `hyphenate: false`, and the runtimes already port the simple breaker, so the only change is to flip
+  `justify: true` inside the wrapping slot's box and port the stretch step. Breaks do not move:
+  `linebreak_simple` never consults `justify`, it only sets a per-line flag; line counts, `lines: auto`
+  measurement and the overflow policies are unchanged. Web quality (a browser's `text-align: justify`), not book
+  quality; the optimized breaker and hyphenation (G2, G3 in `GAPS.md`) come later behind the same step.
+- **The arithmetic** (`typst-layout-0.15.1/src/inline/`, the version the exporter pins). Which lines are
+  justified (`line.rs:137`): `config.justify && breakpoint != Mandatory`, or the line's text ends with U+2028; so
+  the last line and a line before a hard `\n` are never stretched. Per-glyph adjustability (`shaping.rs:236`)
+  with the default `par.justification-limits` (spacing 2/3..3/2, tracking 0): a space (`' '`, U+00A0, U+3000)
+  may stretch by `advance × 0.5` and shrink by `min(advance / 3, advance × 0.75)`; every other Latin glyph has
+  zero adjustability; only kept glyphs count (trimmed trailing whitespace takes no part; the runtime's `kept`
+  models this). Justifiables (`shaping.rs:1498`): spaces, plus CJ script and CJK punctuation, which the no-shaper
+  limit excludes anyway. The line step (`line.rs:528`), with `remaining = slot width − natural line width`
+  (overhang pinned off, no hanging indent, no `fr` items in slots):
+
+  ```
+  if remaining < 0 and shrinkability > 0:          # already ported: the `run` closure of fill_lines
+      ratio = max(remaining / shrinkability, -1)
+  elif line.justify:
+      ratio = min(remaining / stretchability, 1)   # stretchability = Σ space advance × 0.5
+      remaining = max(remaining - stretchability, 0)
+      if justifiables > 0 and remaining > 0:
+          extra = remaining / justifiables         # second step: an equal share per space
+  ```
+
+  Application (`shaping.rs:369`): each kept space's advance becomes `advance + stretch × ratio + extra`; no other
+  glyph moves, no offsets change; the shrink case is what the runtimes do today for overfull lines.
+  `adjust_glyph_stretch_at_line_end` (`line.rs:362`) is a no-op with zero tracking limits. Two refinements: port
+  the exact shrink condition `remaining < 0 && shrinkability > 0` instead of today's `!fits(width)` (a 1e-4 pt
+  tolerance), so a line a hair too wide is shrunk rather than stretched by a negative ratio; and carry the U+2028
+  case (`is_mandatory_break` already knows the character). After justification `remaining` is 0 whenever the
+  line has a space, so centre and right alignment only matter for lines without one and for the last line, which
+  `x = slot.x + align.position(slot.width − line.width)` already does once `line.width` includes the stretch.
+- **Touch points.** Dialect (eight identical copies; `md5 -q fixtures/*/paramdoc.typ | sort -u | wc -l` prints
+  1): a `justify: false` parameter on `slot`, carried into the metadata, `par(justify: justify, linebreaks:
+  "simple", ...)` in `wrapping(n, meta)` and the same settings in the `lines: auto` measurement block; a
+  single-line slot ignores it. IR: `Slot.justify: bool` with `#[serde(default)]`, bump `VERSION`, re-export
+  `documents/report` if the report uses it. Exporter: `SlotMeta.justify` passed through; references already
+  record every glyph's x, so justified spaces are checked for free. Runtimes, kept identical: the stretch branch
+  in `fill_lines` / `fillLines`, `BrokenLine` carrying whether the line ends at a mandatory break; write Rust
+  first, the TypeScript trace is checked against it. An ellipsized line is the runtime's own and the last visible
+  one: not stretched (a paragraph's last line is ragged in Typst too); say so in the dialect comment. Link slots
+  need nothing: their rectangle is the line's width, stretched or not, which is also what Typst's text frame
+  reports; keep `fixtures/links` in the loop.
+- **Verification.** `fixtures/wrap`: `justify: true` on at least one slot per alignment and the table cell, or a
+  `data-justify.json` case plus a sibling fixture if changing the slots would blur the ragged proof; every data
+  case gets a Typst reference and a pixel diff. `fixtures/wrapfuzz`: a justified slot, so `--fuzz-references`
+  compares random texts; expect single-word lines (nothing stretches), lines ending in `\n`, whitespace-only
+  lines and NBSP (a space for justification, not a break opportunity). veraPDF changes nothing structural but
+  runs. Demo: justify the report's tutor comment if the page's compiler template justifies, re-export
+  `documents/report`.
+- **Out of scope.** Optimized line breaking, hyphenation, CJK justification, `text.tracking`/`spacing` limits
+  other than the defaults, and `justification-limits` set by the template (refuse at export if a slot's limits
+  differ from the defaults, or carry them in the IR).
+
+Exit: justified `wrap` cases and random `wrapfuzz` texts match Typst glyph for glyph and pixel for pixel in both
+runtimes; status-log entry, `HANDOVER.md` item 4 and contract paragraph, `GAPS.md` G1 to the Closed table, a
+`docs/2026-MM-DD-justified-slots.md` note.
+
 ## Running
 
 ```sh
@@ -188,6 +265,28 @@ Defaults: fonts from `../../fixtures/fonts`, output under `../../.build/paramdoc
 
 ## Status log
 
+- **M10 web addresses and clickable links (2026-10-26).** Both runtimes port the link case of Typst's
+  `breakpoints()` (`link_prefix`, `linebreak_link`): the trigger is positional (`://` before or `www.` after the
+  previous opportunity), the address is the ASCII run typst-syntax eats minus trailing prose punctuation, breaks
+  fall where letters, digits and the rest alternate or between two punctuation marks, never after `(`/`[`, and
+  after every character of a run of 16 or more; the refusal of `://`/`www.` in wrapping slots is gone. IR v8:
+  `Link { page, rects, url, alt, node }` on pages and fragments, `Slot.link { above, below }`. Dialect: a slot
+  value `(text:, href:, alt:)` makes a link slot (`link(href, text)`; the sample decides, and the runtime requires
+  or refuses an `href` accordingly, because `show link` rules style text). Exporter: Link nodes from `LinkMarker`
+  tags; static link items recorded per Link node; inside a slot each of Typst's rectangles must be its text run's
+  box extended by the same amounts above and below the baseline (checked on every compile, fuzz included), which
+  become the slot's geometry; refused: internal destinations, links in artifacts, links in slot content, shapes
+  in slots; empty unclipped groups dropped (Typst inlines frames of up to five items, so a link could nest a slot's
+  paragraph frame depending on the text, a fake leak). Runtimes: one annotation per link (URI action, `/Contents`
+  from `alt` or URL, quad points over several lines as typst-pdf writes for PDF/UA), `/Annots` and `/Tabs /S`,
+  OBJR kids in Link elements, parent-tree keys after the pages; link slots get one rectangle per drawn line;
+  `compare` checks `<slot>#link` rectangles. Checked: `wrap`'s links case and 40 random texts (27 with addresses)
+  identical to Typst; `fixtures/links` (a two-line static link, a short one, single-line and wrapping link slots,
+  band rows with a link slot and a static link, 40 rows over two pages) identical in glyphs, link rectangles and
+  pixels, 10 and 84 annotations whose rectangles equal typst-pdf's, veraPDF PDF/UA-1 PASS on all four PDFs,
+  `linkbad` refused; fuzz 0 leaks; `check.sh` 116 checks. Sizes: wasm 688 kB raw / 242 kB gzip, worker bundle
+  36 kB / 14 kB gzip. Open: justified slots (M11 above), internal destinations, links in overlays and
+  repeated headers, rotated link text, SVG images. Notes in `docs/2026-10-26-addresses-and-links.md`.
 - **M9 bars and image slots (2026-10-25).** `bar(name, value, max:, width:, height:, fill:, track:, radius:)` is a
   clipped box whose fill is the static track and whose content is one `rect` of `value / max` of the box width;
   `image-slot(name, value, width:, height:, alt:, fit:)` is a clipped box one `image` fills, the value a data URL

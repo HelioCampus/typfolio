@@ -14,7 +14,7 @@ use std::rc::Rc;
 
 use anyhow::{Context, Result, anyhow, bail};
 use flate2::{Compression, read::ZlibDecoder, write::ZlibEncoder};
-use pdf_writer::types::{CidFontType, FontFlags, LineCapStyle, LineJoinStyle, StructRole, SystemInfo, TableHeaderScope};
+use pdf_writer::types::{ActionType, AnnotationFlags, AnnotationType, CidFontType, FontFlags, LineCapStyle, LineJoinStyle, StructRole, SystemInfo, TabOrder, TableHeaderScope};
 use pdf_writer::writers::StructTreeRoot;
 use pdf_writer::types::UnicodeCmap;
 use pdf_writer::{Content, Filter, Finish, Name, Pdf, Rect, Ref, Str, TextStr};
@@ -88,6 +88,8 @@ pub struct ReferenceSlot {
     pub name: String, pub baseline: f64, pub size: f64, pub glyphs: Vec<ReferenceGlyph>,
     #[serde(default, skip_serializing_if = "Option::is_none")] pub ops: Option<Vec<ir::PathOp>>,
     #[serde(default, skip_serializing_if = "Option::is_none")] pub rect: Option<[f64; 4]>,
+    /// A link slot's clickable rectangles, one per drawn line (`<slot>#link`).
+    #[serde(default, skip_serializing_if = "Option::is_none")] pub rects: Option<Vec<[f64; 4]>>,
 }
 
 fn text_of(value: &serde_json::Value) -> Result<String> {
@@ -95,21 +97,41 @@ fn text_of(value: &serde_json::Value) -> Result<String> {
         serde_json::Value::String(s) => s.clone(),
         serde_json::Value::Number(n) => n.to_string(),
         serde_json::Value::Bool(b) => b.to_string(),
+        // A link slot's value: `{ text, href }`.
+        serde_json::Value::Object(map) if map.contains_key("text") => text_of(&map["text"])?,
         other => bail!("cannot render {other} as text"),
     })
 }
 
 /// A filled hole: the items to draw, clipped to `rect` (the hole's box), and what was drawn, for the reference
 /// check. An image slot carries the image's bytes under the key its item refers to, and its alternative text.
-struct Filled { rect: [f64; 4], items: Vec<ir::Item>, trace: ReferenceSlot, node: Option<usize>, image: Option<(String, Vec<u8>)>, alt: Option<String> }
+struct Filled { rect: [f64; 4], items: Vec<ir::Item>, trace: ReferenceSlot, node: Option<usize>, image: Option<(String, Vec<u8>)>, alt: Option<String>, link: Option<LinkFill> }
+
+/// A link slot's clickable area: one rectangle per drawn line, the destination and its description.
+struct LinkFill { rects: Vec<[f64; 4]>, url: String, alt: Option<String> }
+
+/// A destination the data gives a slot: the `href` of a `{ text, href, alt? }` value.
+type Href = Option<(String, Option<String>)>;
+
+/// The clickable rectangles of a link slot: each drawn line's box (x, baseline, width) extended above and below
+/// the baseline as Typst extends a link's text frame. A link slot needs an `href`, a plain slot refuses one, so
+/// the runtime never renders a value Typst would have styled differently (`show link` rules).
+fn link_fill(slot: &ir::Slot, href: Href, lines: &[(f64, f64, f64)], trace_name: &str) -> Result<Option<LinkFill>> {
+    match (href, slot.link) {
+        (None, None) => Ok(None),
+        (None, Some(_)) => bail!("slot `{trace_name}` is a link slot (its sample value had an `href`) but the data gives none"),
+        (Some(_), None) => bail!("slot `{trace_name}`: the data gives an `href` but the slot was exported without a link; give its sample value an `href` too"),
+        (Some((url, alt)), Some(g)) => Ok(Some(LinkFill { rects: lines.iter().map(|&(x, y, w)| [x, y - g.above, w, g.above + g.below]).collect(), url, alt })),
+    }
+}
 
 /// Lays out one line of slot text: glyphs from the cmap, advances from hmtx, alignment from the slot,
 /// and the slot's overflow policy when the line is wider than the box. `slot` is in absolute coordinates.
-fn fill_slot(slot: &ir::Slot, text: &str, font: &LoadedFont, trace_name: String) -> Result<Filled> {
+fn fill_slot(slot: &ir::Slot, text: &str, href: Href, font: &LoadedFont, trace_name: String) -> Result<Filled> {
     if let Some(max) = slot.max_length && text.chars().count() > max as usize {
         bail!("slot `{trace_name}`: {text:?} has {} characters, max-length is {max}", text.chars().count());
     }
-    if slot.lines > 1 { return fill_lines(slot, text, font, trace_name); }
+    if slot.lines > 1 { return fill_lines(slot, text, href, font, trace_name); }
     let shape = |text: &str, size: f64| -> Result<(Vec<ir::Glyph>, f64)> {
         let mut glyphs = Vec::new();
         let mut width = 0.0;
@@ -155,18 +177,20 @@ fn fill_slot(slot: &ir::Slot, text: &str, font: &LoadedFont, trace_name: String)
     };
     let mut pen = x;
     let trace_glyphs = glyphs.iter().map(|g| { let at = pen; pen += g.x_advance; ReferenceGlyph { id: g.id, x: at, y: slot.baseline } }).collect();
+    let link = link_fill(slot, href, &[(x, slot.baseline, width)], &trace_name)?;
     Ok(Filled {
-        rect: [slot.x, slot.y, slot.width, slot.height], image: None, alt: None,
+        rect: [slot.x, slot.y, slot.width, slot.height], image: None, alt: None, link,
         items: vec![ir::Item::Text { x, y: slot.baseline, font: slot.font, size, fill: slot.fill, text: shown, glyphs, node: None }],
-        trace: ReferenceSlot { name: trace_name, baseline: slot.baseline, size, glyphs: trace_glyphs, ops: None, rect: None },
+        trace: ReferenceSlot { name: trace_name, baseline: slot.baseline, size, glyphs: trace_glyphs, ops: None, rect: None, rects: None },
         node: None,
     })
 }
 
 // ---------------------------------------------------------------------------------------------------------
 // Wrapping slots: Typst's simple line breaker (typst-layout 0.15, inline/linebreak.rs) over UAX #14 break
-// opportunities, for the character classes a Latin repertoire contains. The dialect switches hyphenation and
-// justification off inside wrapping slots, so greedy first fit over advance widths reproduces Typst's lines.
+// opportunities, for the character classes a Latin repertoire contains, plus Typst's own opportunities inside
+// web addresses. The dialect switches hyphenation and justification off inside wrapping slots, so greedy first
+// fit over advance widths reproduces Typst's lines.
 // ts/runtime.ts has the same code and the notes on which rules icu4x applies; keep the two in step.
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -261,9 +285,66 @@ fn breakpoints(chars: &[char]) -> Vec<(usize, bool)> {
         if b == Cp && matches!(a, Al | Nu) { return false; }
         true                                                                                         // LB31
     };
-    let mut out: Vec<(usize, bool)> = (1..n).filter(|&i| allow(i)).map(|i| (i, raw[i - 1] == Bk)).collect();
-    out.push((n, true));
+    // Typst walks the segmenter's opportunities with `last`, the previous one, and at each step first looks for a
+    // web address at `last` (UAX #14 breaks one badly): after `://` or before `www.`, the address's own
+    // opportunities (`linebreak_link`) replace the segmenter's inside it. The trigger is positional: a `://`
+    // with no opportunity right after it starts no address.
+    let mut out: Vec<(usize, bool)> = Vec::new();
+    let (mut last, mut next) = (0usize, 1usize);
+    loop {
+        if (last >= 3 && chars[last - 3..last] == [':', '/', '/']) || chars[last..].starts_with(&['w', 'w', 'w', '.']) {
+            let len = link_prefix(&chars[last..]);
+            linebreak_link(&chars[last..last + len], &mut |k| out.push((last + k, false)));
+            last += len;
+            next = next.max(last);
+        }
+        while next < n && !allow(next) { next += 1; } // the next UAX #14 opportunity; the end of the text is one
+        if next > n { break; }
+        let point = next;
+        next += 1;
+        out.push((point, point == n || raw[point - 1] == Bk));
+        last = point;
+    }
     out
+}
+
+/// How much of `tail` is a web address, as typst-syntax's `link_prefix` eats it: ASCII letters, digits and URL
+/// punctuation, brackets while they balance, minus trailing punctuation that is more likely prose.
+fn link_prefix(tail: &[char]) -> usize {
+    let mut brackets: Vec<char> = Vec::new();
+    let mut len = 0;
+    for &c in tail {
+        let eat = match c {
+            '0'..='9' | 'a'..='z' | 'A'..='Z' | '!' | '#' | '$' | '%' | '&' | '*' | '+' | ',' | '-' | '.' | '/' | ':' | ';' | '=' | '?' | '@' | '_' | '~' | '\'' => true,
+            '[' | '(' => { brackets.push(c); true }
+            ']' => brackets.pop() == Some('['),
+            ')' => brackets.pop() == Some('('),
+            _ => false,
+        };
+        if !eat { break; }
+        len += 1;
+    }
+    while len > 0 && matches!(tail[len - 1], '!' | ',' | '.' | ':' | ';' | '?' | '\'') { len -= 1; }
+    len
+}
+
+/// Typst's break opportunities inside a web address (`linebreak_link`): where the character class changes
+/// between letters, digits and the rest, or between two punctuation marks, never right after `(` or `[`; a run
+/// of 16 or more characters since the last opportunity (a hash) may break after every character. The address
+/// is ASCII (`link_prefix` eats nothing else), so Typst's byte offsets are character offsets.
+fn linebreak_link(link: &[char], f: &mut dyn FnMut(usize)) {
+    #[derive(PartialEq, Clone, Copy)]
+    enum Class { Alphabetic, Digit, Open, Other }
+    let class_of = |c: char| if c.is_alphabetic() { Class::Alphabetic } else if c.is_numeric() { Class::Digit } else if matches!(c, '(' | '[') { Class::Open } else { Class::Other };
+    let (mut offset, mut prev) = (0usize, Class::Other);
+    for (end, &c) in link.iter().enumerate() {
+        let class = class_of(c);
+        if end > 0 && prev != Class::Open && if class == Class::Other { prev == Class::Other } else { class != prev } {
+            let piece = end - offset;
+            if piece < 16 { offset = end; f(offset); } else { for _ in 0..piece { offset += 1; f(offset); } }
+        }
+        prev = class;
+    }
 }
 
 /// A line of a wrapping slot: `layout_end` excludes the trailing whitespace that does not count for the width;
@@ -301,11 +382,10 @@ fn break_lines(chars: &[char], width_of: &dyn Fn(usize, usize) -> f64, fits: &dy
     lines
 }
 
-fn fill_lines(slot: &ir::Slot, text: &str, font: &LoadedFont, trace_name: String) -> Result<Filled> {
+fn fill_lines(slot: &ir::Slot, text: &str, href: Href, font: &LoadedFont, trace_name: String) -> Result<Filled> {
     let (lines, pitch, size) = (slot.lines, slot.pitch, slot.size);
     if !(pitch > 0.0) { bail!("slot `{trace_name}`: a wrapping slot without a line pitch; export the document again"); }
     if slot.overflow == "shrink" { bail!("slot `{trace_name}`: `shrink` is not an overflow policy for a wrapping slot"); }
-    if text.contains("://") || text.contains("www.") { bail!("slot `{trace_name}`: {text:?} contains a web address, which Typst breaks by rules this runtime does not have yet"); }
     let chars: Vec<char> = text.chars().collect();
     let name = trace_name.clone();
     let glyph_of = |c: char| -> Result<u16> {
@@ -376,6 +456,7 @@ fn fill_lines(slot: &ir::Slot, text: &str, font: &LoadedFont, trace_name: String
     let ys = baselines(&runs);
     let mut items = Vec::new();
     let mut trace_glyphs = Vec::new();
+    let mut drawn = Vec::new();
     for (k, line) in runs.iter().enumerate() {
         let y = ys[k];
         let x = match slot.align.as_str() {
@@ -390,11 +471,12 @@ fn fill_lines(slot: &ir::Slot, text: &str, font: &LoadedFont, trace_name: String
             pen += advance;
             ir::Glyph { id, x_advance: advance, x_offset: 0.0, y_offset: 0.0, chars: None }
         }).collect();
-        if !glyphs.is_empty() { items.push(ir::Item::Text { x, y, font: slot.font, size, fill: slot.fill, text: line.text.clone(), glyphs, node: None }); }
+        if !glyphs.is_empty() { items.push(ir::Item::Text { x, y, font: slot.font, size, fill: slot.fill, text: line.text.clone(), glyphs, node: None }); drawn.push((x, y, line.width)); }
     }
     // The trace reports the first line's baseline as Typst's frame has it: at the box top when that line is whitespace.
     let baseline = ys.first().copied().unwrap_or(slot.baseline);
-    Ok(Filled { rect: [slot.x, slot.y, slot.width, slot.height], items, trace: ReferenceSlot { name: trace_name, baseline, size, glyphs: trace_glyphs, ops: None, rect: None }, node: None, image: None, alt: None })
+    let link = link_fill(slot, href, &drawn, &trace_name)?;
+    Ok(Filled { rect: [slot.x, slot.y, slot.width, slot.height], items, trace: ReferenceSlot { name: trace_name, baseline, size, glyphs: trace_glyphs, ops: None, rect: None, rects: None }, node: None, image: None, alt: None, link })
 }
 
 // ---------------------------------------------------------------------------------------------------------
@@ -408,8 +490,8 @@ fn fill_bar(bar: &ir::Bar, value: f64, trace_name: String) -> Filled {
     Filled {
         rect: [bar.x, bar.y, bar.width, bar.height],
         items: vec![ir::Item::Shape { x: bar.x, y: bar.y, geometry, fill: Some(bar.fill), stroke: None, node: None }],
-        trace: ReferenceSlot { name: format!("{trace_name}#bar"), baseline: 0.0, size: 0.0, glyphs: Vec::new(), ops: Some(ops), rect: Some([bar.x, bar.y, width, bar.height]) },
-        node: None, image: None, alt: None,
+        trace: ReferenceSlot { name: format!("{trace_name}#bar"), baseline: 0.0, size: 0.0, glyphs: Vec::new(), ops: Some(ops), rect: Some([bar.x, bar.y, width, bar.height]), rects: None },
+        node: None, image: None, alt: None, link: None,
     }
 }
 
@@ -424,8 +506,8 @@ fn fill_image(slot: &ir::ImageSlot, bytes: Vec<u8>, alt: Option<String>, trace_n
     Ok(Filled {
         rect: [slot.x, slot.y, slot.width, slot.height],
         items: vec![ir::Item::Image { x: slot.x + dx, y: slot.y + dy, width: w, height: h, format: format.to_string(), sha256: key.clone(), node: None }],
-        trace: ReferenceSlot { name: format!("{trace_name}#image"), baseline: 0.0, size: 0.0, glyphs: Vec::new(), ops: None, rect: Some([slot.x + dx, slot.y + dy, w, h]) },
-        node: None, image: Some((key, bytes)), alt,
+        trace: ReferenceSlot { name: format!("{trace_name}#image"), baseline: 0.0, size: 0.0, glyphs: Vec::new(), ops: None, rect: Some([slot.x + dx, slot.y + dy, w, h]), rects: None },
+        node: None, image: Some((key, bytes)), alt, link: None,
     })
 }
 
@@ -633,7 +715,7 @@ fn decode_jpeg(bytes: &[u8]) -> Result<Decoded> {
 /// A structure element of the output document. Node 0 is the Document root.
 struct GNode { role: String, parent: Option<usize>, alt: Option<String>, scope: Option<String>, kids: Vec<Kid> }
 
-enum Kid { Node(usize), Content { page: usize, mcid: i32 } }
+enum Kid { Node(usize), Content { page: usize, mcid: i32 }, Annot { page: usize, index: usize } }
 
 struct Structure { nodes: Vec<GNode> }
 
@@ -674,7 +756,7 @@ impl Structure {
     fn alive(&self) -> Vec<bool> {
         let mut alive = vec![false; self.nodes.len()];
         for i in (0..self.nodes.len()).rev() {
-            alive[i] = self.nodes[i].kids.iter().any(|k| match k { Kid::Content { .. } => true, Kid::Node(n) => alive[*n] });
+            alive[i] = self.nodes[i].kids.iter().any(|k| match k { Kid::Content { .. } | Kid::Annot { .. } => true, Kid::Node(n) => alive[*n] });
         }
         alive[0] = true;
         alive
@@ -693,8 +775,22 @@ fn remap(items: &mut [ir::Item], map: &[Option<usize>]) {
 // ---------------------------------------------------------------------------------------------------------
 // Composition
 
-/// One output page: static items in absolute coordinates (nodes already global) and the slots filled on it.
-struct Composed { width: f64, height: f64, items: Vec<ir::Item>, fills: Vec<Filled> }
+/// One output page: static items in absolute coordinates (nodes already global), the slots filled on it and
+/// its link annotations.
+struct Composed { width: f64, height: f64, items: Vec<ir::Item>, fills: Vec<Filled>, annots: Vec<Annot> }
+
+/// A link annotation: rectangles in page coordinates (y down), the URL, the `/Contents` description and the
+/// Link node it belongs to.
+struct Annot { rects: Vec<[f64; 4]>, url: String, contents: String, node: Option<usize> }
+
+/// Adds a filled slot's link, if any, to the page; the Link node takes the data's description.
+fn add_slot_link(filled: &Filled, page: &mut Composed, structure: &mut Structure) {
+    if let Some(link) = &filled.link {
+        let contents = link.alt.clone().unwrap_or_else(|| link.url.clone());
+        if let Some(n) = filled.node { structure.nodes[n].alt = Some(contents.clone()); }
+        page.annots.push(Annot { rects: link.rects.clone(), url: link.url.clone(), contents, node: filled.node });
+    }
+}
 
 /// Values a slot can be filled from: a data object plus, on overlays, the page counters.
 struct Scope<'a> { data: &'a serde_json::Value, counters: Option<(usize, usize)> }
@@ -710,6 +806,16 @@ impl Scope<'_> {
     }
 
     fn image(&self, name: &str) -> Result<(Vec<u8>, Option<String>)> { image_value(self.value(name)?, name) }
+
+    /// The `href` (and `alt`) of a `{ text, href, alt? }` value; `None` for any other value.
+    fn href(&self, name: &str) -> Result<Href> {
+        let Some(serde_json::Value::Object(map)) = self.data.get(name) else { return Ok(None) };
+        match map.get("href") {
+            None | Some(serde_json::Value::Null) => Ok(None),
+            Some(serde_json::Value::String(url)) if !url.is_empty() => Ok(Some((url.clone(), match map.get("alt") { Some(serde_json::Value::String(a)) => Some(a.clone()), _ => None }))),
+            Some(other) => bail!("slot `{name}`: `href` {other} is not a non-empty string"),
+        }
+    }
 
     fn text(&self, name: &str) -> Result<String> {
         if let Some((number, count)) = self.counters {
@@ -747,9 +853,15 @@ fn place(fragment: &ir::Fragment, top: f64, scope: &Scope, fonts: &[LoadedFont],
         absolute.x += fragment.x; absolute.pen_x += fragment.x;
         absolute.y += top; absolute.baseline += top;
         let text = scope.text(&slot.name)?;
-        let mut filled = fill_slot(&absolute, &text, &fonts[slot.font], format!("{prefix}{}", slot.name))?;
+        let mut filled = fill_slot(&absolute, &text, scope.href(&slot.name)?, &fonts[slot.font], format!("{prefix}{}", slot.name))?;
         filled.node = slot.node.and_then(|n| map.get(n).copied().flatten());
+        add_slot_link(&filled, page, structure);
         page.fills.push(filled);
+    }
+    for link in &fragment.links {
+        let node = link.node.and_then(|n| map.get(n).copied().flatten());
+        if node.is_none() { bail!("a link to {} in {prefix} would be placed as an artifact (a repeated table header or an overlay); PDF/UA forbids links there", link.url); }
+        page.annots.push(Annot { rects: link.rects.iter().map(|r| [r[0] + fragment.x, r[1] + top, r[2], r[3]]).collect(), url: link.url.clone(), contents: link.alt.clone().unwrap_or_else(|| link.url.clone()), node });
     }
     for bar in &fragment.bars {
         let mut absolute = bar.clone();
@@ -777,11 +889,16 @@ fn compose_fixed(doc: &ir::Document, data: &serde_json::Value, fonts: &[LoadedFo
         let map = structure.instantiate(&page.nodes, 0, false);
         let mut items = page.items.clone();
         remap(&mut items, &map);
-        let mut composed = Composed { width: page.width, height: page.height, items, fills: Vec::new() };
+        let mut composed = Composed { width: page.width, height: page.height, items, fills: Vec::new(), annots: Vec::new() };
         for slot in doc.slots.iter().filter(|s| s.page == index) {
-            let mut filled = fill_slot(slot, &scope.text(&slot.name)?, &fonts[slot.font], slot.name.clone())?;
+            let mut filled = fill_slot(slot, &scope.text(&slot.name)?, scope.href(&slot.name)?, &fonts[slot.font], slot.name.clone())?;
             filled.node = slot.node.and_then(|n| map.get(n).copied().flatten());
+            add_slot_link(&filled, &mut composed, structure);
             composed.fills.push(filled);
+        }
+        for link in doc.links.iter().filter(|l| l.page == index) {
+            let node = link.node.and_then(|n| map.get(n).copied().flatten());
+            composed.annots.push(Annot { rects: link.rects.clone(), url: link.url.clone(), contents: link.alt.clone().unwrap_or_else(|| link.url.clone()), node });
         }
         for bar in doc.bars.iter().filter(|b| b.page == index) {
             let mut filled = fill_bar(bar, scope.number(&bar.name)?, bar.name.clone());
@@ -805,7 +922,6 @@ fn compose_fixed(doc: &ir::Document, data: &serde_json::Value, fonts: &[LoadedFo
 fn needed_lines(slot: &ir::Slot, text: &str, font: &LoadedFont, trace_name: &str) -> Result<usize> {
     let (pitch, size) = (slot.pitch, slot.size);
     if !(pitch > 0.0) { bail!("slot `{trace_name}`: a wrapping slot without a line pitch; export the document again"); }
-    if text.contains("://") || text.contains("www.") { bail!("slot `{trace_name}`: {text:?} contains a web address, which Typst breaks by rules this runtime does not have yet"); }
     let chars: Vec<char> = text.chars().collect();
     let ids: Vec<u16> = chars.iter().map(|&c| if is_mandatory_break(c) { Ok(0) } else {
         font.glyph(c).ok_or_else(|| anyhow!("slot `{trace_name}`: {c:?} (U+{:04X}) is not in the slot's repertoire; declare it with `charset:` in the template", c as u32))
@@ -848,7 +964,7 @@ fn compose_flow(flow: &ir::Flow, data: &serde_json::Value, fonts: &[LoadedFont],
     let area = flow.area;
     let bottom = area.y + area.height;
     let band = |name: &str| flow.bands.iter().find(|b| b.name == name).ok_or_else(|| anyhow!("unknown band `{name}`"));
-    let new_page = || Composed { width: flow.page_width, height: flow.page_height, items: Vec::new(), fills: Vec::new() };
+    let new_page = || Composed { width: flow.page_width, height: flow.page_height, items: Vec::new(), fills: Vec::new(), annots: Vec::new() };
     let scope = Scope { data, counters: None };
 
     let mut pages = vec![new_page()];
@@ -1220,6 +1336,28 @@ fn write_pdf(doc: &ir::Document, fonts: &[LoadedFont], images: &Images, pages: &
         image_names.insert(key, name);
     }
 
+    // Link annotations: one object per link (several rectangles become quad points, as typst-pdf writes them for
+    // PDF/UA), listed in the page's /Annots, keyed into the parent tree after the pages and referenced from
+    // their Link structure element through an OBJR.
+    let annot_refs: Vec<Vec<Ref>> = pages.iter().map(|p| p.annots.iter().map(|_| alloc()).collect()).collect();
+    let mut annot_parents: Vec<(i32, usize)> = Vec::new();
+    let mut next_key = pages.len() as i32;
+    for (index, page) in pages.iter().enumerate() {
+        for (i, a) in page.annots.iter().enumerate() {
+            let h = page.height;
+            let boxes: Vec<[f64; 4]> = a.rects.iter().map(|r| [r[0], h - r[1] - r[3], r[0] + r[2], h - r[1]]).collect(); // left, bottom, right, top
+            let (l, b) = (boxes.iter().map(|r| r[0]).fold(f64::INFINITY, f64::min), boxes.iter().map(|r| r[1]).fold(f64::INFINITY, f64::min));
+            let (r, t) = (boxes.iter().map(|r| r[2]).fold(f64::NEG_INFINITY, f64::max), boxes.iter().map(|r| r[3]).fold(f64::NEG_INFINITY, f64::max));
+            let mut annot = pdf.annotation(annot_refs[index][i]);
+            annot.subtype(AnnotationType::Link).rect(Rect::new(l as f32, b as f32, r as f32, t as f32)).page(page_ids[index]);
+            if boxes.len() > 1 { annot.quad_points(boxes.iter().flat_map(|&[l, b, r, t]| [l, t, r, t, l, b, r, b]).map(|v| v as f32)); }
+            annot.border(0.0, 0.0, 0.0, None).flags(AnnotationFlags::PRINT).contents(TextStr(&a.contents));
+            annot.action().action_type(ActionType::Uri).uri(Str(a.url.as_bytes()));
+            if let Some(n) = a.node { annot.struct_parent(next_key); annot_parents.push((next_key, n)); next_key += 1; }
+            annot.finish();
+        }
+    }
+
     let mut writer = Writer { fonts, image_names: &image_names, structure, page: 0, parents: Vec::new(), open: None };
     let mut page_parents: Vec<Vec<usize>> = Vec::new();
     for (index, page) in pages.iter().enumerate() {
@@ -1250,6 +1388,7 @@ fn write_pdf(doc: &ir::Document, fonts: &[LoadedFont], images: &Images, pages: &
         pdf.stream(content_id, &deflate(&bytes)).filter(Filter::FlateDecode);
         let mut page_obj = pdf.page(page_ids[index]);
         page_obj.parent(pages_id).media_box(Rect::new(0.0, 0.0, page.width as f32, page.height as f32)).contents(content_id).struct_parents(index as i32);
+        if !annot_refs[index].is_empty() { page_obj.annotations(annot_refs[index].iter().copied()).tab_order(TabOrder::StructureOrder); }
         let mut resources = page_obj.resources();
         let mut font_dict = resources.fonts();
         for (i, font_ref) in font_refs.iter().enumerate() { font_dict.pair(Name(format!("F{i}").as_bytes()), *font_ref); }
@@ -1263,7 +1402,10 @@ fn write_pdf(doc: &ir::Document, fonts: &[LoadedFont], images: &Images, pages: &
         page_obj.finish();
     }
 
-    // The structure tree: only nodes with content below them are written.
+    // The structure tree: only nodes with content below them are written. Annotations are kids of their Link node.
+    for (index, page) in pages.iter().enumerate() {
+        for (i, a) in page.annots.iter().enumerate() { if let Some(n) = a.node { writer.structure.nodes[n].kids.push(Kid::Annot { page: index, index: i }); } }
+    }
     let structure = &*writer.structure;
     let alive = structure.alive();
     let node_refs: Vec<Option<Ref>> = alive.iter().map(|&a| if a { Some(alloc()) } else { None }).collect();
@@ -1274,9 +1416,10 @@ fn write_pdf(doc: &ir::Document, fonts: &[LoadedFont], images: &Images, pages: &
         let mut tree = root.parent_tree();
         let mut nums = tree.nums();
         for (index, array) in parent_arrays.iter().enumerate() { nums.insert(index as i32, *array); }
+        for (key, n) in &annot_parents { nums.insert(*key, node_refs[*n].expect("annotation nodes are alive")); }
         nums.finish();
         tree.finish();
-        root.pair(Name(b"ParentTreeNextKey"), pages.len() as i32);
+        root.pair(Name(b"ParentTreeNextKey"), next_key);
         root.finish();
     }
     for (index, parents) in page_parents.iter().enumerate() {
@@ -1297,6 +1440,7 @@ fn write_pdf(doc: &ir::Document, fonts: &[LoadedFont], images: &Images, pages: &
             match kid {
                 Kid::Node(n) => { if let Some(r) = node_refs[*n] { children.struct_element(r); } }
                 Kid::Content { page, mcid } => { children.marked_content_ref().page(page_ids[*page]).marked_content_id(*mcid); }
+                Kid::Annot { page, index } => { children.object_ref().page(page_ids[*page]).object(annot_refs[*page][*index]); }
             }
         }
         children.finish();
@@ -1340,7 +1484,11 @@ impl<'a> Runtime<'a> {
             None => compose_fixed(&self.doc, &data, &self.fonts, &mut structure)?,
         };
         let pdf = write_pdf(&self.doc, &self.fonts, &self.images, &pages, &mut structure)?;
-        let trace = pages.iter().flat_map(|p| p.fills.iter().map(|f| f.trace.clone())).collect();
+        let trace = pages.iter().flat_map(|p| p.fills.iter().flat_map(|f| {
+            let mut out = vec![f.trace.clone()];
+            if let Some(link) = &f.link { out.push(ReferenceSlot { name: format!("{}#link", f.trace.name), baseline: 0.0, size: 0.0, glyphs: Vec::new(), ops: None, rect: None, rects: Some(link.rects.clone()) }); }
+            out
+        })).collect();
         Ok(Output { pdf, trace, pages: pages.len() })
     }
 }
@@ -1366,6 +1514,13 @@ pub fn compare(trace: &[ReferenceSlot], reference: &[ReferenceSlot]) -> Vec<Stri
                 Some(ours) if ours.iter().zip(rect).all(|(a, b)| (a - b).abs() <= 1e-3) => {}
                 Some(ours) => problems.push(format!("{}: box {ours:?} vs Typst {rect:?}", slot.name)),
                 None => problems.push(format!("{}: Typst has a box, the runtime drew none", slot.name)),
+            }
+        }
+        if let Some(rects) = &expected.rects {
+            match &slot.rects {
+                Some(ours) if ours.len() == rects.len() && ours.iter().zip(rects).all(|(a, b)| a.iter().zip(b).all(|(p, q)| (p - q).abs() <= 1e-3)) => {}
+                Some(ours) => problems.push(format!("{}: link rectangles {ours:?} vs Typst {rects:?}", slot.name)),
+                None => problems.push(format!("{}: Typst has link rectangles, the runtime drew none", slot.name)),
             }
         }
         if let Some(ops) = &expected.ops && !slot.ops.as_deref().is_some_and(|ours| ir::geometry::same_ops(ours, ops, 1e-3)) {

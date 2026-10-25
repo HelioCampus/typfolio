@@ -6,7 +6,7 @@
 
 use serde::{Deserialize, Serialize};
 
-pub const VERSION: u32 = 7;
+pub const VERSION: u32 = 8;
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct Document {
@@ -28,6 +28,9 @@ pub struct Document {
     pub bars: Vec<Bar>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub images: Vec<ImageSlot>,
+    /// Clickable links in the static content of the fixed pages, likewise.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub links: Vec<Link>,
     /// A flow document: blocks the runtime stacks and breaks into pages.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub flow: Option<Flow>,
@@ -81,6 +84,8 @@ pub struct Fragment {
     pub bars: Vec<Bar>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub images: Vec<ImageSlot>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub links: Vec<Link>,
     #[serde(default)]
     pub nodes: Vec<Node>,
 }
@@ -277,6 +282,34 @@ pub struct Slot {
     /// Set when the slot was declared `lines: auto`: the band's variant count, the most lines it can get.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub auto_lines: Option<u32>,
+    /// Set for a link slot, one whose sample value had an `href`: where the clickable rectangle of each line sits
+    /// around the line's baseline, as Typst's link rectangle does (the text's edges plus half the leading on
+    /// each side). The runtime draws one rectangle per line, over the line's width, and the data must give an
+    /// `href`; a slot exported without this refuses one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub link: Option<SlotLink>,
+}
+
+/// Points above and below a line's baseline that its link rectangle covers.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq)]
+pub struct SlotLink {
+    pub above: f64,
+    pub below: f64,
+}
+
+/// A clickable link in the static content: Typst's link rectangles for one link element, one per line it
+/// spans, as `[x, y, width, height]` in the coordinates of its page or fragment, and the destination (a URL).
+/// `node` is the Link structure element the link's text belongs to; the runtime attaches the annotation to it.
+/// `alt` is Typst's alternative description of the destination.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct Link {
+    pub page: usize,
+    pub rects: Vec<[f64; 4]>,
+    pub url: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub alt: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub node: Option<usize>,
 }
 
 fn one() -> u32 { 1 }

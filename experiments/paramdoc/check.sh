@@ -11,13 +11,13 @@
 # Every fixture is exported with a Typst reference for `data.json` and for each of its other `data-*.json` cases
 # (except `*-long*`, which paginate beyond the sample page, and the `wrap` overflow and error cases, which the
 # runtimes handle by policy); both runtimes are then checked against every reference, by glyph positions, bar
-# shapes, image placement and pixels. `wrapfuzz` gets Typst references for random samples as well.
+# shapes, image placement, link rectangles and pixels. `wrapfuzz` gets Typst references for random samples as well.
 set -u
 cd "$(dirname "$0")"
 FUZZ="${FUZZ:-100}"
 SAMPLES=$(( FUZZ < 40 ? FUZZ : 40 ))
 B=../../.build/paramdoc
-FIXTURES="certificate policies transcript report wrap figures"
+FIXTURES="certificate policies transcript report wrap figures links"
 PASS=0; FAIL=0; SKIP=0
 ok()   { PASS=$((PASS + 1)); printf '  ok    %s\n' "$1"; }
 fail() { FAIL=$((FAIL + 1)); printf '  FAIL  %s\n' "$1"; }
@@ -40,6 +40,7 @@ for f in $FIXTURES; do
   run "export $f: 0 leaks, a Typst reference per data case" cargo run -q -p paramdoc-export -- "fixtures/$f" --fuzz "$FUZZ" $(refs "$f")
 done
 if cargo run -q -p paramdoc-export -- fixtures/leak --fuzz 20 > "$B/.last.log" 2>&1; then fail "export leak: the auto-width slot was not detected"; else ok "export leak: detected (exit 1)"; fi
+if cargo run -q -p paramdoc-export -- fixtures/linkbad --fuzz 1 > "$B/.last.log" 2>&1; then fail "export linkbad: a link to a place in the document was accepted"; else ok "export linkbad: refused ($(grep -o 'links to a place in the document' "$B/.last.log" | head -1))"; fi
 run "export wrapfuzz: 0 leaks, Typst references for $SAMPLES random samples" cargo run -q -p paramdoc-export -- fixtures/wrapfuzz --fuzz "$FUZZ" --fuzz-references "$SAMPLES" --reference fixtures/wrapfuzz/data.json
 for dir in documents/*/; do
   f=$(basename "$dir")
@@ -60,6 +61,8 @@ done
 run "rust transcript, 42 rows with one-to-three-line titles, paginated" cargo run -q -p paramdoc-runtime -- "$B/transcript" --data fixtures/transcript/data-long.json --out "$B/transcript/long.pdf"
 run "ts   transcript, 42 rows == rust" "${NODE[@]}" ts/cli.ts "$B/transcript" --data fixtures/transcript/data-long.json --out "$B/transcript/long-ts.pdf" --expect-rust "$B/transcript/long.trace.json"
 run "rust policies, long values" cargo run -q -p paramdoc-runtime -- "$B/policies" --data fixtures/policies/data-long.json --out "$B/policies/long.pdf"
+run "rust links, 40 rows with a link slot and a static link each, paginated" cargo run -q -p paramdoc-runtime -- "$B/links" --data fixtures/links/data-long.json --out "$B/links/long.pdf"
+run "ts   links, 40 rows == rust" "${NODE[@]}" ts/cli.ts "$B/links" --data fixtures/links/data-long.json --out "$B/links/long-ts.pdf" --expect-rust "$B/links/long.trace.json"
 run "rust wrap/overflow: ellipsis and clip policies" cargo run -q -p paramdoc-runtime -- "$B/wrap" --data fixtures/wrap/data-overflow.json --out "$B/wrap/overflow.pdf"
 run "ts   wrap/overflow == rust" "${NODE[@]}" ts/cli.ts "$B/wrap" --data fixtures/wrap/data-overflow.json --out "$B/wrap/overflow-ts.pdf" --expect-rust "$B/wrap/overflow.trace.json"
 if cargo run -q -p paramdoc-runtime -- "$B/wrap" --data fixtures/wrap/data-error.json --out "$B/wrap/error.pdf" > "$B/.last.log" 2>&1; then fail "rust wrap/error: an overflowing \`error\` slot was accepted"; else ok "rust wrap/error: refused ($(grep -o 'needs [0-9]* lines but the slot holds [0-9]*' "$B/.last.log" | head -1))"; fi
@@ -93,11 +96,15 @@ if have pdftotext; then
   for f in $FIXTURES; do
     if diff <(pdftotext -layout "$B/$f/runtime.pdf" -) <(pdftotext -layout "$B/$f/runtime-ts.pdf" -) > "$B/.last.log"; then ok "$f"; else fail "$f"; cat "$B/.last.log"; fi
   done
-  for p in transcript/long wrap/overflow; do
+  for p in transcript/long wrap/overflow links/long; do
     if diff <(pdftotext -layout "$B/$p.pdf" -) <(pdftotext -layout "$B/$p-ts.pdf" -) > "$B/.last.log"; then ok "$p"; else fail "$p"; cat "$B/.last.log"; fi
   done
   if [ "$(pdftotext -layout "$B/wrap/overflow.pdf" - | grep -c '…')" = 2 ]; then ok "wrap/overflow: two ellipsis lines, as the policies say"; else fail "wrap/overflow: expected two ellipsis lines"; fi
   if [ "$(pdftotext -layout "$B/transcript/long.pdf" - | grep -c 'honours')" = 0 ] && [ "$(pdftotext -layout "$B/transcript/runtime.pdf" - | grep -c 'honours')" = 1 ]; then ok "transcript: the honours block appears only when the data says so"; else fail "transcript: the honours block is not picked by the data"; fi
+  for v in runtime runtime-ts; do
+    n=$(grep -a -c '/Subtype /Link' "$B/links/$v.pdf"); if [ "$n" = 10 ]; then ok "links/$v: 10 link annotations (2 static, 2 link slots, 3 rows with one of each)"; else fail "links/$v: expected 10 link annotations, found $n"; fi
+    n=$(grep -a -c '/Subtype /Link' "$B/links/long${v#runtime}.pdf"); if [ "$n" = 84 ]; then ok "links/long${v#runtime}: 84 link annotations over the pages"; else fail "links/long${v#runtime}: expected 84 link annotations, found $n"; fi
+  done
   for v in runtime runtime-ts; do
     if [ "$(pdfimages -list "$B/figures/$v.pdf" 2>/dev/null | awk '$3 == "image"' | wc -l | tr -d ' ')" = 4 ] && [ "$(pdfimages -list "$B/figures/$v.pdf" | awk '$3 == "smask"' | wc -l | tr -d ' ')" = 2 ]; then ok "figures/$v: four images, two with a soft mask (the RGBA chart and the keyed icon)"; else fail "figures/$v: expected 4 images and 2 soft masks: $(pdfimages -list "$B/figures/$v.pdf" | tail -n +3 | awk '{print $3, $4, $5}' | tr '\n' ';')"; fi
   done
@@ -105,7 +112,7 @@ else skip "pdftotext not on PATH (poppler)"; fi
 
 echo "6. Structure (inspectPdf from @typfolio/dev-tools)"
 if [ -f ../../packages/dev-tools/dist/pdf.js ]; then
-  run "inspect" node notes/bench/inspect.mjs "$B/transcript/long.pdf" "$B/report/runtime.pdf" "$B/report/runtime-ts.pdf" "$B/figures/runtime.pdf"
+  run "inspect" node notes/bench/inspect.mjs "$B/transcript/long.pdf" "$B/report/runtime.pdf" "$B/report/runtime-ts.pdf" "$B/figures/runtime.pdf" "$B/links/runtime.pdf"
   grep -E '^\S|pages|roles' "$B/.last.log" | sed 's/^/        /'
 else skip "packages/dev-tools/dist is not built (npm run build at the repository root)"; fi
 
@@ -113,7 +120,7 @@ echo "7. PDF/UA-1 conformance (veraPDF)"
 if have verapdf; then
   list=""
   for f in $FIXTURES; do list="$list $f/runtime $f/runtime-ts"; done
-  for p in $list policies/long transcript/long transcript/long-ts transcript/nohonours wrap/overflow wrap/overflow-ts wrapfuzz/fuzz-0 wrapfuzz/fuzz-0-ts figures/tall figures/tall-ts; do
+  for p in $list policies/long transcript/long transcript/long-ts transcript/nohonours wrap/overflow wrap/overflow-ts wrapfuzz/fuzz-0 wrapfuzz/fuzz-0-ts figures/tall figures/tall-ts links/long links/long-ts; do
     if verapdf --flavour ua1 --format text "$B/$p.pdf" > "$B/.last.log" 2>&1 && head -1 "$B/.last.log" | grep -q '^PASS'; then ok "$p"; else fail "$p"; grep -v '^PASS' "$B/.last.log" | head -20 | sed 's/^/        /'; fi
   done
 else skip "verapdf not on PATH (brew install verapdf)"; fi
