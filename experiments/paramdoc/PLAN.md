@@ -45,7 +45,8 @@ labelled `metadata`; the exporter finds it through the frame's tags and the encl
    as a three-line slot and a `wrap` fixture match Typst glyph for glyph on every data file, pixels included. ✅
    (2026-10-25; also 300 random texts, both runtimes.)
 8. **Variants.** Bands and blocks laid out once per variant at export time, picked by the runtime: variable-height
-   rows, optional blocks, row stripes. Exit: a transcript with one-to-three-line titles paginates and matches Typst per variant.
+   rows, optional blocks, row stripes. Exit: a transcript with one-to-three-line titles paginates and matches Typst per variant. ✅
+   (2026-10-25; the report stripes and the transcript's optional block too.)
 9. **Parametric geometry and image slots.** A bar whose length is a value; a box the data fills with an image.
    Exit: the report's score bars are back and match Typst; an image fixture passes veraPDF's Figure rules.
 
@@ -112,6 +113,9 @@ pixel for pixel; fuzz 0 leaks; the two runtimes agree; veraPDF PDF/UA-1 still pa
 
 ### M8: variants
 
+Result (2026-10-25): built as designed, with `make(row, v)` handing the variant to the row closure and a Typst
+`state` telling a `lines: auto` slot its band; see the status log and `docs/2026-10-25-variants.md`.
+
 A band or static block declared with variants is laid out once per variant at export time; the runtime only
 picks. The exporter compiles the fixture once per variant value with `sys.inputs` carrying
 `paramdoc-variant=<block>=<k>`; the dialect's `variant(block, default: 1)` reads it, so a template writes
@@ -177,6 +181,26 @@ Defaults: fonts from `../../fixtures/fonts`, output under `../../.build/paramdoc
 
 ## Status log
 
+- **M8 variants (2026-10-25).** A band declares `variants: n` and a selector; the exporter compiles the fixture
+  once more per variant with `sys.inputs.paramdoc-variant = "<band>=<k>"` (every instance forced to k), checks the
+  forced document equals the sample outside the bands, re-points the forced fragment's fonts at the sample's
+  table, checks each sample instance is one of the variants, and stores the n fragments on the band (IR v6:
+  `Band.fragments`, `Band.select`, a `choice` block, `Slot.auto_lines`). `repeat(..., variants:, select:)` calls
+  `make(row, v)`; `choice(name, natural, make, select:)` is a single block; `variant(name, natural)` is the data's
+  value in the sample compile and the forced one otherwise, so the sample stays the oracle. `slot(lines: auto)`
+  takes the lines its text needs (measured in Typst through `layout` and `measure`, capped by the band's variant
+  count), reading its band from `state("paramdoc-band")`. Runtimes pick by parity, by `== true` in the data, or
+  by the line count computed as the dialect computes it. Report rows stripe again (two variants by parity);
+  transcript rows are one to three lines tall by their title and the transcript ends with an optional honours
+  block (`choice`, by flag). Checked: report, transcript and transcript-without-honours match Typst glyph for
+  glyph and pixel for pixel in both runtimes (report: its known 1 pixel); the long transcript (42 rows, nine long
+  titles) paginates on 2 pages with identical Rust and TypeScript traces and no honours line; fuzz 0 leaks with
+  every variant laid out per sample; veraPDF PDF/UA-1 passes; `check.sh`, rewritten around per-case references,
+  runs 81 checks. Open: one selector per band (no stripes × heights), no nested repeats, no `index` selector; a
+  `lines: auto` text whose first line is only whitespace sits near a rounding tie between Typst's and the
+  runtime's line count (not seen in the fuzz). Justification: `@chenglou/pretext` looked at and ruled out (greedy
+  only, no justification API, its Knuth–Plass is demo code with a cost unlike Typst's); the way is a port of
+  Typst's `linebreak_optimized` and `commit` arithmetic.
 - **M7 wrapping text (2026-10-25).** The dialect's `slot` takes `lines: n`; the box is exactly `n` lines tall
   (`n · line-height + (n − 1) · leading + descent`, measured in Typst), the paragraph is top-aligned with
   `justify: false, linebreaks: "simple", hyphenate: false`, and the metadata carries `lines`, `line-height` and

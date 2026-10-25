@@ -7,7 +7,7 @@
 // because CompressionStream costs milliseconds per call in browsers. Erasable TypeScript only, so Node can run it
 // with `--experimental-strip-types` and a bundler can ship it to a browser unchanged.
 
-export const IR_VERSION = 5;
+export const IR_VERSION = 6;
 
 // ---------------------------------------------------------------------------------------------------------
 // IR (mirrors ../ir/src/lib.rs; serde writes `None` as null unless skipped)
@@ -28,14 +28,18 @@ export type Item =
 export interface Node { role: string; parent: number | null; alt?: string; scope?: string }
 export interface Slot {
   name: string; page: number; x: number; y: number; width: number; height: number; baseline: number; descent: number;
-  pen_x: number; font: number; size: number; fill: Color; align: string; overflow: string; max_length?: number | null; lines?: number; pitch?: number;
+  pen_x: number; font: number; size: number; fill: Color; align: string; overflow: string; max_length?: number | null; lines?: number; pitch?: number; auto_lines?: number | null;
   sample: string; node?: number;
 }
 export interface Fragment { x: number; y: number; width: number; height: number; items: Item[]; slots: Slot[]; nodes: Node[] }
-export interface Band { name: string; repeat_on_break: boolean; fragment: Fragment }
+/** How a band's variant is picked for an instance: by row parity, by a `true` in the data, or by the lines a wrapping slot needs. */
+export type Select = { kind: 'parity' } | { kind: 'flag'; path: string } | { kind: 'lines'; slot: string };
+/** Variant k of a band is `fragments[k - 1]`; a plain band has one. */
+export interface Band { name: string; repeat_on_break: boolean; fragments: Fragment[]; select?: Select | null }
 export type Block =
   | { kind: 'static'; fragment: Fragment }
-  | { kind: 'repeat'; band: string; header: string | null; header_gap: number; gap: number; sample_rows: number };
+  | { kind: 'repeat'; band: string; header: string | null; header_gap: number; gap: number; sample_rows: number }
+  | { kind: 'choice'; band: string };
 export interface Flow {
   page_width: number; page_height: number; area: { x: number; y: number; width: number; height: number };
   blocks: Block[]; bands: Band[]; overlays: Fragment[];
@@ -450,6 +454,44 @@ function composeFixed(doc: Document, data: unknown, fonts: Font[], structure: St
   });
 }
 
+/** How many lines a wrapping slot would give `text`, measured as the dialect's `lines: auto` measures it in Typst:
+ *  from the stacked height of the broken lines, so a line of nothing but whitespace counts for nothing. */
+function neededLines(slot: Slot, text: string, font: Font, traceName: string): number {
+  const pitch = slot.pitch ?? 0, size = slot.size;
+  if (!(pitch > 0)) throw new Error(`slot \`${traceName}\`: a wrapping slot without a line pitch; export the document again`);
+  if (text.includes('://') || text.includes('www.')) throw new Error(`slot \`${traceName}\`: ${JSON.stringify(text)} contains a web address, which Typst breaks by rules this runtime does not have yet`);
+  const chars = [...text];
+  const ids = chars.map(c => {
+    if (isMandatoryBreak(c)) return 0;
+    const id = font.glyph(c);
+    if (id === undefined) throw new Error(`slot \`${traceName}\`: ${JSON.stringify(c)} (U+${c.codePointAt(0)!.toString(16).toUpperCase().padStart(4, '0')}) is not in the slot's repertoire; declare it with \`charset:\` in the template`);
+    return id;
+  });
+  const widthOf = (from: number, to: number): number => { let w = 0; for (let i = from; i < to; i++) w += font.advance(ids[i]!) * size; return w; };
+  const broken = breakLines(chars, widthOf, width => slot.width + 1e-4 >= width);
+  const lineHeight = slot.baseline - slot.y, leading = pitch - lineHeight;
+  let y = 0;
+  broken.forEach((l, k) => { const h = l.shapingEnd > l.start && l.layoutEnd === l.start ? 0 : lineHeight; if (k > 0) y += leading; y += h; });
+  return Math.max(0, Math.round((y - lineHeight) / pitch)) + 1;
+}
+
+/** The variant of a band for one instance: `data` is the row (or the document for a choice block), `index` the row number. */
+function pick(band: Band, data: unknown, index: number, fonts: Font[]): Fragment {
+  const n = band.fragments.length;
+  const select = band.select;
+  if (n <= 1 || !select) return band.fragments[0]!;
+  let k: number;
+  if (select.kind === 'parity') k = index % 2;
+  else if (select.kind === 'flag') k = (data as Record<string, unknown> | null)?.[select.path] === true ? 0 : 1;
+  else {
+    // A wrapping variant carries the line metrics; the slot has the same width in every variant.
+    const measure = band.fragments[1]!.slots.find(s => s.name === select.slot);
+    if (!measure) throw new Error(`band \`${band.name}\`: no slot \`${select.slot}\` to pick the variant by`);
+    k = neededLines(measure, new Scope(data).text(select.slot), fonts[measure.font]!, `${band.name}.${select.slot}`) - 1;
+  }
+  return band.fragments[Math.min(Math.max(k, 0), n - 1)]!;
+}
+
 function composeFlow(flow: Flow, data: unknown, fonts: Font[], structure: Structure): Composed[] {
   const EPS = 1e-6;
   const area = flow.area, bottom = area.y + area.height;
@@ -460,10 +502,11 @@ function composeFlow(flow: Flow, data: unknown, fonts: Font[], structure: Struct
   let cursor = area.y;
   const last = () => pages[pages.length - 1]!;
   for (const block of flow.blocks) {
-    if (block.kind === 'static') {
-      const f = block.fragment;
+    if (block.kind === 'static' || block.kind === 'choice') {
+      const b = block.kind === 'choice' ? band(block.band) : undefined;
+      const f = b ? pick(b, data, 0, fonts) : (block as { fragment: Fragment }).fragment;
       if (cursor + f.height > bottom + EPS && cursor > area.y + EPS) { pages.push(newPage()); cursor = area.y; }
-      place(f, cursor, scope, fonts, '', false, last(), structure, { kind: 'document' });
+      place(f, cursor, scope, fonts, b ? `${b.name}.` : '', b !== undefined, last(), structure, { kind: 'document' });
       cursor += f.height;
     } else {
       const record = data as Record<string, unknown>;
@@ -471,18 +514,21 @@ function composeFlow(flow: Flow, data: unknown, fonts: Font[], structure: Struct
       if (!Array.isArray(rows)) throw new Error(`data has no array \`${block.band}\` for the repeat region`);
       const rowBand = band(block.band);
       const headerBand = block.header ? band(block.header) : undefined;
-      const headerHeight = headerBand ? headerBand.fragment.height + block.header_gap : 0;
-      const firstRow = rows.length ? rowBand.fragment.height : 0;
+      const header = headerBand?.fragments[0];
+      const fragments = rows.map((row, i) => pick(rowBand, row, i, fonts));
+      const headerHeight = header ? header.height + block.header_gap : 0;
+      const firstRow = fragments.length ? fragments[0]!.height : 0;
       if (cursor + headerHeight + firstRow > bottom + EPS && cursor > area.y + EPS) { pages.push(newPage()); cursor = area.y; }
       const table = structure.add('Table', 0);
-      if (headerBand) { place(headerBand.fragment, cursor, scope, fonts, `${headerBand.name}.`, true, last(), structure, { kind: 'table', table }); cursor += headerHeight; }
+      if (header) { place(header, cursor, scope, fonts, `${headerBand!.name}.`, true, last(), structure, { kind: 'table', table }); cursor += headerHeight; }
       rows.forEach((row, i) => {
-        if (cursor + rowBand.fragment.height > bottom + EPS) {
+        const f = fragments[i]!;
+        if (cursor + f.height > bottom + EPS) {
           pages.push(newPage()); cursor = area.y;
-          if (headerBand) { place(headerBand.fragment, cursor, scope, fonts, `${headerBand.name}.`, true, last(), structure, { kind: 'artifact' }); cursor += headerHeight; }
+          if (header) { place(header, cursor, scope, fonts, `${headerBand!.name}.`, true, last(), structure, { kind: 'artifact' }); cursor += headerHeight; }
         }
-        place(rowBand.fragment, cursor, new Scope(row), fonts, `${block.band}[${i}].`, true, last(), structure, { kind: 'table', table });
-        cursor += rowBand.fragment.height;
+        place(f, cursor, new Scope(row), fonts, `${block.band}[${i}].`, true, last(), structure, { kind: 'table', table });
+        cursor += f.height;
         if (i + 1 < rows.length) cursor += block.gap;
       });
     }

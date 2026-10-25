@@ -22,7 +22,7 @@
     },
     {
       "code": "MATH109",
-      "title": "Discrete Mathematics",
+      "title": "Discrete Mathematics, with Seminars on the History of the Subject and a Supervised Project",
       "credits": 6,
       "grade": "C+"
     },
@@ -34,7 +34,7 @@
     },
     {
       "code": "MATH115",
-      "title": "Real Analysis",
+      "title": "Real Analysis: an Extended Course over Two Terms with Weekly Problem Classes, a Laboratory Component and a Written Dissertation",
       "credits": 5,
       "grade": "B"
     },
@@ -64,7 +64,7 @@
     },
     {
       "code": "MATH130",
-      "title": "Differential Equations",
+      "title": "Differential Equations, with Seminars on the History of the Subject and a Supervised Project",
       "credits": 6,
       "grade": "B"
     },
@@ -100,13 +100,13 @@
     },
     {
       "code": "MATH148",
-      "title": "Cryptography",
+      "title": "Cryptography: an Extended Course over Two Terms with Weekly Problem Classes, a Laboratory Component and a Written Dissertation",
       "credits": 5,
       "grade": "C+"
     },
     {
       "code": "MATH151",
-      "title": "Measure Theory",
+      "title": "Measure Theory, with Seminars on the History of the Subject and a Supervised Project",
       "credits": 5,
       "grade": "B+"
     },
@@ -148,7 +148,7 @@
     },
     {
       "code": "MATH172",
-      "title": "Probability and Statistics",
+      "title": "Probability and Statistics, with Seminars on the History of the Subject and a Supervised Project",
       "credits": 6,
       "grade": "A"
     },
@@ -166,7 +166,7 @@
     },
     {
       "code": "MATH181",
-      "title": "Numerical Methods",
+      "title": "Numerical Methods: an Extended Course over Two Terms with Weekly Problem Classes, a Laboratory Component and a Written Dissertation",
       "credits": 6,
       "grade": "B"
     },
@@ -190,7 +190,7 @@
     },
     {
       "code": "MATH193",
-      "title": "Graph Theory",
+      "title": "Graph Theory, with Seminars on the History of the Subject and a Supervised Project",
       "credits": 6,
       "grade": "C+"
     },
@@ -232,7 +232,7 @@
     },
     {
       "code": "MATH214",
-      "title": "Functional Analysis",
+      "title": "Functional Analysis: an Extended Course over Two Terms with Weekly Problem Classes, a Laboratory Component and a Written Dissertation",
       "credits": 8,
       "grade": "C+"
     },
@@ -256,5 +256,6 @@
     }
   ],
   "total_credits": 279,
-  "gpa": "3.4"
+  "gpa": "3.4",
+  "honours": false
 }

@@ -6,7 +6,7 @@
 
 use serde::{Deserialize, Serialize};
 
-pub const VERSION: u32 = 5;
+pub const VERSION: u32 = 6;
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct Document {
@@ -54,6 +54,9 @@ pub enum Block {
     /// of each page the rows continue on. `gap` is the vertical space between rows, `header_gap` the space
     /// between the header and the first row. `sample_rows` is informative only.
     Repeat { band: String, header: Option<String>, header_gap: f64, gap: f64, sample_rows: usize },
+    /// A single instance of a band, picked among its variants by the band's selector; its slots bind to the
+    /// document's data.
+    Choice { band: String },
 }
 
 /// A piece of layout with its own slots. Items and slots are relative to the fragment's top-left corner;
@@ -70,11 +73,27 @@ pub struct Fragment {
     pub nodes: Vec<Node>,
 }
 
+/// A band's layouts, one per variant (one for a plain band), and how the runtime picks among them.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct Band {
     pub name: String,
     pub repeat_on_break: bool,
-    pub fragment: Fragment,
+    /// Variant k is `fragments[k - 1]`; all were laid out by Typst at export time.
+    pub fragments: Vec<Fragment>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub select: Option<Select>,
+}
+
+/// How the runtime picks a band's variant for an instance.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum Select {
+    /// Variant 1 for the first, third, fifth row, variant 2 for the others.
+    Parity,
+    /// Variant 1 when the data value at `path` is `true`, variant 2 otherwise.
+    Flag { path: String },
+    /// Variant k when the wrapping slot `slot` needs k lines for its text (capped at the variant count).
+    Lines { slot: String },
 }
 
 /// A font as the runtime needs it: a subset program plus everything the runtime would otherwise parse from
@@ -242,6 +261,9 @@ pub struct Slot {
     /// Baseline-to-baseline distance of a wrapping slot's lines, in points; 0 for a single line.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub pitch: f64,
+    /// Set when the slot was declared `lines: auto`: the band's variant count, the most lines it can get.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auto_lines: Option<u32>,
 }
 
 fn one() -> u32 { 1 }

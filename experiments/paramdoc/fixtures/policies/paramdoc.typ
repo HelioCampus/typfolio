@@ -4,6 +4,14 @@
 // Lengths in `em` are relative to the slot's own text size (after `text-args`).
 // Inside a slot, kerning, ligatures and contextual alternates (`calt`: Libertinus swaps in a short f before i) are
 // off, so the runtime can place glyphs from advance widths alone.
+// The band a slot sits in (set by `band`, below) and the variant a compile forces, for `lines: auto` slots.
+#let band-state = state("paramdoc-band", none)
+#let forced-variant(name) = {
+  let v = sys.inputs.at("paramdoc-variant", default: none)
+  if v == none { none } else { let parts = v.split("="); if parts.at(0) == name { int(parts.at(1)) } else { none } }
+}
+#let variant(name, natural) = { let f = forced-variant(name); if f == none { natural } else { f } }
+
 #let slot(
   name,               // slot name in the manifest
   value,              // the sample or current value (string or content)
@@ -14,30 +22,49 @@
   overflow: "error",  // error | clip | shrink | ellipsis: what the runtime does when the text does not fit
   max-length: none,   // the schema's maxLength, informative for now
   charset: none,      // the characters the slot may contain; none means the exporter's default repertoire
-  lines: 1,           // more than 1: a wrapping slot of exactly this many ragged-right lines, aligned to the top
+  lines: 1,           // more than 1: a wrapping slot of exactly this many ragged-right lines, aligned to the top;
+                      // `auto`: as many as the text needs, inside a band with `variants` (one layout per count)
   ..text-args,        // text arguments applied inside the slot: size, weight, style, fill
 ) = text(..text-args.named(), context {
   let d = descent.to-absolute()
   let meta = (name: name, align: repr(align), overflow: overflow, max-length: max-length, charset: charset, descent: d.pt())
-  if lines == 1 {
-    // The box baseline is pinned (`at: bottom`, shifted up by the descent) so content cannot move the line.
-    box(width: width, height: height, clip: true, inset: (bottom: d), baseline: (at: bottom, shift: d))[
-      #metadata(meta) <paramdoc-slot>
-      #set text(kerning: false, ligatures: false, features: (calt: 0), overhang: false, bottom-edge: "baseline")
-      #std.align(align + bottom, value)
-    ]
-  } else {
-    // Lines break as Typst's simple breaker does, without hyphenation or justification, so the runtime can
-    // reproduce them from advance widths alone. The box is exactly `lines` lines tall under these rules; the
-    // first baseline sits one line height below the box top.
-    let line-height = measure({ set text(bottom-edge: "baseline"); [x] }).height
-    let leading = par.leading.to-absolute()
-    box(width: width, height: lines * line-height + (lines - 1) * leading + d, clip: true, inset: (bottom: d))[
-      #metadata(meta + (lines: lines, line-height: line-height.pt(), pitch: (line-height + leading).pt())) <paramdoc-slot>
-      #set par(justify: false, linebreaks: "simple", first-line-indent: 0pt, hanging-indent: 0pt)
-      #set text(hyphenate: false, kerning: false, ligatures: false, features: (calt: 0), overhang: false, bottom-edge: "baseline")
-      #std.align(align + top, value)
-    ]
+  let line-height = measure({ set text(bottom-edge: "baseline"); [x] }).height
+  let leading = par.leading.to-absolute()
+  let pitch = line-height + leading
+  // One line: the box baseline is pinned (`at: bottom`, shifted up by the descent) so content cannot move the line.
+  let single(meta) = box(width: width, height: height, clip: true, inset: (bottom: d), baseline: (at: bottom, shift: d))[
+    #metadata(meta) <paramdoc-slot>
+    #set text(kerning: false, ligatures: false, features: (calt: 0), overhang: false, bottom-edge: "baseline")
+    #std.align(align + bottom, value)
+  ]
+  // Several lines: they break as Typst's simple breaker does, without hyphenation or justification, so the
+  // runtime can reproduce them from advance widths alone. The box is exactly `n` lines tall under these rules;
+  // the first baseline sits one line height below the box top.
+  let wrapping(n, meta) = box(width: width, height: n * line-height + (n - 1) * leading + d, clip: true, inset: (bottom: d))[
+    #metadata(meta + (lines: n, line-height: line-height.pt(), pitch: pitch.pt())) <paramdoc-slot>
+    #set par(justify: false, linebreaks: "simple", first-line-indent: 0pt, hanging-indent: 0pt)
+    #set text(hyphenate: false, kerning: false, ligatures: false, features: (calt: 0), overhang: false, bottom-edge: "baseline")
+    #std.align(align + top, value)
+  ]
+  if lines == 1 { single(meta) } else if lines != auto { wrapping(lines, meta) } else {
+    // `lines: auto`: in the sample compile, as many lines as the text needs (measured, capped by the band's
+    // variant count); in a variant compile, the forced count. Laid out as a block, to know its width.
+    let band = band-state.get()
+    if band == none { panic("slot `" + name + "`: `lines: auto` needs a band with `variants`") }
+    layout(size => {
+      let w = if type(width) == ratio { width * size.width } else if type(width) == relative { width.length.to-absolute() + width.ratio * size.width } else { width.to-absolute() }
+      let forced = forced-variant(band.name)
+      let n = if forced != none { forced } else {
+        let h = measure(box(width: w, {
+          set par(justify: false, linebreaks: "simple", first-line-indent: 0pt, hanging-indent: 0pt)
+          set text(hyphenate: false, kerning: false, ligatures: false, features: (calt: 0), overhang: false, bottom-edge: "baseline")
+          value
+        })).height
+        calc.clamp(int(calc.round((h - line-height) / pitch)) + 1, 1, band.variants)
+      }
+      let meta = meta + (auto-lines: band.variants)
+      if n == 1 { single(meta) } else { wrapping(n, meta) }
+    })
   }
 })
 
@@ -63,15 +90,39 @@
   body
 }
 
+// ---- Variants (M8) -------------------------------------------------------------------------------------
+// A band can exist in several layouts, its variants: the exporter lays the band out once per variant (it
+// compiles the fixture again with `sys.inputs.paramdoc-variant` set to "<band>=<k>", which forces every
+// instance of that band to variant k) and the runtime picks one per instance by the band's selector:
+//   ("parity",)      variant 1 for the 1st, 3rd, 5th row, variant 2 for the others (row stripes)
+//   ("flag", key)    variant 1 when the data's `key` is true, variant 2 otherwise (an optional block)
+//   ("lines", slot)  variant k when the wrapping slot `slot` (declared `lines: auto`) needs k lines
+// In the sample compile `variant(name, natural)` returns `natural`, what the data says for this instance, so the
+// sample is what the runtime would render for the sample data; in a variant compile it returns the forced k.
+
 // A band: a block the exporter extracts as a fragment with its own slots. Instances of one name are the rows
-// of a repeat region; `repeat-on-break: true` marks a band repeated at the top of continuation pages.
-#let band(name, body, repeat-on-break: false) = block(width: 100%, clip: true, breakable: false, above: 0pt, below: 0pt)[
-  #metadata((name: name, repeat-on-break: repeat-on-break)) <paramdoc-band>
+// of a repeat region; `repeat-on-break: true` marks a band repeated at the top of continuation pages. `variant`
+// records which variant this instance renders (`auto` when only the layout can tell, as for `lines`).
+#let band(name, body, repeat-on-break: false, variants: 1, select: none, variant: auto, single: false) = block(width: 100%, clip: true, breakable: false, above: 0pt, below: 0pt)[
+  #metadata((name: name, repeat-on-break: repeat-on-break, variants: variants, select: select, variant: variant, single: single)) <paramdoc-band>
+  #band-state.update((name: name, variants: variants))
   #body
+  #band-state.update(none)
 ]
 
-// The sample rows of a repeat region: one band instance per row of the sample data.
-#let repeat(name, rows, make) = for row in rows { band(name, make(row)) }
+// The variant the data calls for, where the template can tell: the row's parity or a flag; `auto` for `lines`.
+#let natural-variant(select, row, i) = if select == none { 1 } else if select.at(0) == "parity" { calc.rem(i, 2) + 1 } else if select.at(0) == "flag" { if row.at(select.at(1), default: false) == true { 1 } else { 2 } } else { auto }
+
+// The sample rows of a repeat region: one band instance per row of the sample data; `make(row, v)` builds a
+// row as variant `v` (1 without variants).
+#let repeat(name, rows, make, variants: 1, select: none) = for (i, row) in rows.enumerate() {
+  let v = variant(name, natural-variant(select, row, i))
+  band(name, make(row, v), variants: variants, select: select, variant: v)
+}
+
+// A single block that exists in `variants` layouts: `natural` is the variant the data calls for (1-based),
+// `make(v)` builds variant v, and `select` is how the runtime picks, for example ("flag", "honours").
+#let choice(name, natural, make, variants: 2, select: none) = { let v = variant(name, natural); band(name, make(v), variants: variants, select: select, variant: v, single: true) }
 
 // Per-page content (a footer): drawn on every page; slots named `page-number` and `page-count` are counters.
 #let overlay(body) = box(width: 100%, clip: true)[#metadata((:)) <paramdoc-overlay> #body]

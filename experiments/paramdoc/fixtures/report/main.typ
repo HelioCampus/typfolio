@@ -1,7 +1,7 @@
 // The worker-batch benchmark's progress report (examples/pretext-hybrid/src/batch/report/main.typ) in the slot
 // dialect. Differences from the original, forced by the dialect: the title is static, the tutor comment is at
-// most three ragged-right lines with an ellipsis, there are no score bars and no alternating row fill, and
-// columns have fixed widths.
+// most three ragged-right lines with an ellipsis, there are no score bars, and columns have fixed widths. The
+// alternating row fill is back as two band variants picked by row parity.
 #import "paramdoc.typ": paged, slot, band, repeat, overlay
 #let data = json("/data.json")
 
@@ -41,12 +41,12 @@
   #table(columns: cols, ..cell-style,
     table.header(..([Code], [Title], [Score], [Grade]).map(h => text(size: 8.5pt, fill: muted, h))))
 ]
-#repeat("courses", data.courses, c => table(columns: cols, ..cell-style,
+#repeat("courses", data.courses, (c, v) => table(columns: cols, ..cell-style, fill: if v == 2 { rgb("f5f7f4") },
   slot("code", c.code, width: 100%, max-length: 8),
   slot("title", c.title, width: 100%, max-length: 40, overflow: "ellipsis"),
   slot("score", str(c.score), width: 100%, align: right, max-length: 3),
   slot("grade", c.grade, width: 100%, align: center, max-length: 2, weight: "bold"),
-))
+), variants: 2, select: ("parity",))
 
 == Tutor comment
 #slot("comment", data.comment, width: 100%, lines: 3, max-length: 300, overflow: "ellipsis")

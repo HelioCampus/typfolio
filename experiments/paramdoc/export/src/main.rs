@@ -46,7 +46,8 @@ fn file_id(vpath: &str) -> Result<FileId> {
 }
 
 impl MemWorld {
-    fn new(fixture: &Path, data: &[u8], fonts: &[LoadedFont]) -> Result<Self> {
+    /// `forced` is a band name and variant: the compile then sees `sys.inputs.paramdoc-variant = "<band>=<k>"`.
+    fn new(fixture: &Path, data: &[u8], fonts: &[LoadedFont], forced: Option<(&str, u32)>) -> Result<Self> {
         let mut files = HashMap::new();
         for path in walk_files(fixture)? {
             let rel = path.strip_prefix(fixture)?.to_string_lossy().replace('\\', "/");
@@ -56,7 +57,14 @@ impl MemWorld {
         files.insert(file_id("/data.json")?, Bytes::new(data.to_vec()));
         let fonts: Vec<Font> = fonts.iter().map(|f| f.font.clone()).collect();
         Ok(Self {
-            library: LazyHash::new(Library::default()),
+            library: LazyHash::new(match forced {
+                Some((name, k)) => {
+                    let mut inputs = typst::foundations::Dict::new();
+                    inputs.insert("paramdoc-variant".into(), Value::Str(format!("{name}={k}").into()));
+                    Library::builder().with_inputs(inputs).build()
+                }
+                None => Library::default(),
+            }),
             book: LazyHash::new(FontBook::from_fonts(&fonts)),
             fonts,
             files,
@@ -274,10 +282,10 @@ fn localize(items: &mut [ir::Item], slots: &mut [ir::Slot], nodes: &[ir::Node]) 
 // ---------------------------------------------------------------------------------------------------------
 // Tags found in the frames
 
-struct SlotMeta { name: String, align: String, overflow: String, max_length: Option<u32>, descent: f64, charset: Option<String>, lines: u32, line_height: f64, pitch: f64 }
+struct SlotMeta { name: String, align: String, overflow: String, max_length: Option<u32>, descent: f64, charset: Option<String>, lines: u32, line_height: f64, pitch: f64, auto_lines: Option<u32> }
 struct TextStyle { font: usize, size: f64, fill: ir::Color, pen_x: f64 }
 struct SlotRecord { meta: SlotMeta, page: usize, rect: Rect, style: Option<TextStyle>, sample: String, baselines: Vec<f64>, glyphs: Vec<(u16, f64, f64)>, node: Option<usize> }
-struct BandTag { name: String, repeat_on_break: bool, page: usize, rect: Rect }
+struct BandTag { name: String, repeat_on_break: bool, page: usize, rect: Rect, variants: u32, select: Option<ir::Select>, variant: Option<u32>, single: bool }
 struct OverlayTag { page: usize, rect: Rect }
 struct Margins { top: f64, bottom: f64, left: f64, right: f64 }
 
@@ -294,7 +302,7 @@ pub struct ReferenceSlot { pub name: String, pub baseline: f64, pub size: f64, p
 /// A top-level piece of the sample page after flattening: a leaf item, or a clipped/transformed group.
 struct Atom { rect: Rect, item: ir::Item, kind: AtomKind }
 
-enum AtomKind { Static, Band { name: String, repeat_on_break: bool }, Overlay }
+enum AtomKind { Static, Band { name: String, repeat_on_break: bool, variants: u32, select: Option<ir::Select>, variant: Option<u32>, single: bool }, Overlay }
 
 struct Labels { slot: Label, band: Label, overlay: Label, pages: Label }
 
@@ -466,7 +474,8 @@ impl<'a> Exporter<'a> {
         let (line_height, pitch) = (number_or("line-height", 0.0)?, number_or("pitch", 0.0)?);
         let name = string("name")?;
         if lines > 1 && !(line_height > 0.0 && pitch > 0.0) { bail!("slot `{name}`: a wrapping slot needs `line-height` and `pitch` in its metadata"); }
-        Ok(SlotMeta { name, align: string("align")?, overflow: string("overflow")?, max_length, descent: dict_number(dict, "descent")?, charset, lines, line_height, pitch })
+        let auto_lines = match dict.get("auto-lines") { Ok(Value::Int(n)) if *n >= 1 => Some(*n as u32), Err(_) => None, other => bail!("slot `{name}`: `auto-lines` is not a positive integer: {other:?}") };
+        Ok(SlotMeta { name, align: string("align")?, overflow: string("overflow")?, max_length, descent: dict_number(dict, "descent")?, charset, lines, line_height, pitch, auto_lines })
     }
 
     fn rect_of(&self, t: Transform, size: Size) -> Result<Rect> {
@@ -496,7 +505,24 @@ impl<'a> Exporter<'a> {
                         let name = match dict.get("name") { Ok(Value::Str(s)) => s.as_str().to_string(), other => bail!("band `name` is not a string: {other:?}") };
                         let repeat_on_break = matches!(dict.get("repeat-on-break"), Ok(Value::Bool(true)));
                         let rect = clipped.ok_or_else(|| anyhow!("band `{name}` is not inside a clipped block"))?;
-                        tags.bands.push(BandTag { name, repeat_on_break, page, rect });
+                        let variants = match dict.get("variants") { Ok(Value::Int(n)) if *n >= 1 => *n as u32, Err(_) => 1, other => bail!("band `{name}`: `variants` is not a positive integer: {other:?}") };
+                        let variant = match dict.get("variant") { Ok(Value::Int(n)) if *n >= 1 => Some(*n as u32), Ok(Value::Auto) | Ok(Value::None) | Err(_) => None, other => bail!("band `{name}`: `variant` is not a positive integer or auto: {other:?}") };
+                        let single = matches!(dict.get("single"), Ok(Value::Bool(true)));
+                        let select = match dict.get("select") {
+                            Ok(Value::Array(parts)) => {
+                                let part = |i: usize| -> Result<String> { match parts.at(i as i64, None) { Ok(Value::Str(s)) => Ok(s.as_str().to_string()), other => bail!("band `{name}`: `select` part {i} is not a string: {other:?}") } };
+                                Some(match part(0)?.as_str() {
+                                    "parity" => ir::Select::Parity,
+                                    "flag" => ir::Select::Flag { path: part(1)? },
+                                    "lines" => ir::Select::Lines { slot: part(1)? },
+                                    other => bail!("band `{name}`: unknown selector {other:?} (parity, flag or lines)"),
+                                })
+                            }
+                            Ok(Value::None) | Err(_) => None,
+                            other => bail!("band `{name}`: `select` is not an array: {other:?}"),
+                        };
+                        if variants > 1 && select.is_none() { bail!("band `{name}` has {variants} variants but no `select`"); }
+                        tags.bands.push(BandTag { name, repeat_on_break, page, rect, variants, select, variant, single });
                     } else if label == self.labels.overlay {
                         let rect = clipped.ok_or_else(|| anyhow!("overlay is not inside a clipped box"))?;
                         tags.overlays.push(OverlayTag { page, rect });
@@ -575,7 +601,7 @@ impl<'a> Exporter<'a> {
                     let current = slots.iter().position(|s| s.page == page && s.rect.same(&rect));
                     let inner = self.export_frame(page, &group.frame, t, slots, current)?;
                     let kind = if let Some(b) = bands.iter().find(|b| b.page == page && b.rect.same(&rect)) {
-                        AtomKind::Band { name: b.name.clone(), repeat_on_break: b.repeat_on_break }
+                        AtomKind::Band { name: b.name.clone(), repeat_on_break: b.repeat_on_break, variants: b.variants, select: b.select.clone(), variant: b.variant, single: b.single }
                     } else if overlays.iter().any(|o| o.page == page && o.rect.same(&rect)) {
                         AtomKind::Overlay
                     } else { AtomKind::Static };
@@ -653,7 +679,7 @@ impl<'a> Exporter<'a> {
                 name: s.meta.name, page: s.page, x: s.rect.x, y: s.rect.y, width: s.rect.w, height: s.rect.h,
                 baseline, descent: s.meta.descent, pen_x: style.pen_x, font: style.font, size: style.size, fill: style.fill,
                 align: s.meta.align, overflow: s.meta.overflow, max_length: s.meta.max_length, sample: s.sample, node: s.node,
-                charset: s.meta.charset, lines: s.meta.lines, pitch: s.meta.pitch,
+                charset: s.meta.charset, lines: s.meta.lines, pitch: s.meta.pitch, auto_lines: s.meta.auto_lines,
             });
         }
         Ok((slots, unstyled, reference))
@@ -678,7 +704,7 @@ impl<'a> Exporter<'a> {
             pages.push(ir::Page { width: pt(page.frame.width()), height: pt(page.frame.height()), items, nodes: std::mem::take(&mut self.nodes) });
         }
         let (slots, unstyled, reference) = self.finish_slots(tags.slots, strict)?;
-        Ok(Exported { doc: ir::Document { version: ir::VERSION, title, lang: self.lang.clone(), fonts: self.ir_fonts, pages, slots, flow: None }, unstyled, reference })
+        Ok(Exported { doc: ir::Document { version: ir::VERSION, title, lang: self.lang.clone(), fonts: self.ir_fonts, pages, slots, flow: None }, unstyled, reference, declared: HashMap::new() })
     }
 
     /// A flow document: the single sample page segmented into static blocks, repeat regions and overlays.
@@ -727,12 +753,12 @@ impl<'a> Exporter<'a> {
         let mut bands: Vec<ir::Band> = Vec::new();
         let mut pending: Vec<&Atom> = Vec::new();
         let mut prev_bottom = area.y;
-        let mut instances: HashMap<String, usize> = HashMap::new();
+        let mut declared: HashMap<String, Declared> = HashMap::new();
 
         let mut i = 0;
         while i < flow_atoms.len() {
             let atom = &flow_atoms[i];
-            let AtomKind::Band { name, repeat_on_break } = &atom.kind else { pending.push(atom); i += 1; continue };
+            let AtomKind::Band { name, repeat_on_break, variants, select, variant, single } = &atom.kind else { pending.push(atom); i += 1; continue };
             // Everything above this region is a static block ending where the region starts.
             let top = prev_bottom;
             let bottom = atom.rect.y;
@@ -741,44 +767,61 @@ impl<'a> Exporter<'a> {
                 blocks.push(ir::Block::Static { fragment: static_fragment(&pending, top, bottom - top, page_width, &page_nodes, &mut |rect| take_inside(rect, &mut taken, &mut owners, &|| Owner::Flow)) });
                 pending.clear();
             }
+            if *single {
+                // A choice block: one instance of a band, picked among its variants by the selector.
+                if bands.iter().any(|b| &b.name == name) { bail!("choice block `{name}` appears twice"); }
+                let slots = take_inside(&atom.rect, &mut taken, &mut owners, &|| Owner::Band { name: name.clone(), instance: None });
+                let count = slots.len();
+                bands.push(ir::Band { name: name.clone(), repeat_on_break: false, fragments: vec![fragment_of(atom, slots, 0.0)?], select: select.clone() });
+                declared.insert(name.clone(), Declared { variants: *variants, select: select.clone(), instances: vec![Instance { x: atom.rect.x, w: atom.rect.w, h: atom.rect.h, variant: *variant, slots: count }] });
+                blocks.push(ir::Block::Choice { band: name.clone() });
+                prev_bottom = atom.rect.bottom();
+                i += 1;
+                continue;
+            }
             let mut header = None;
             let mut header_gap = 0.0;
             let mut j = i;
             if *repeat_on_break {
                 if bands.iter().any(|b| &b.name == name) { bail!("header band `{name}` appears twice"); }
                 let slots = take_inside(&atom.rect, &mut taken, &mut owners, &|| Owner::Band { name: name.clone(), instance: None });
-                bands.push(ir::Band { name: name.clone(), repeat_on_break: true, fragment: fragment_of(atom, slots, 0.0)? });
+                bands.push(ir::Band { name: name.clone(), repeat_on_break: true, fragments: vec![fragment_of(atom, slots, 0.0)?], select: None });
                 header = Some(name.clone());
                 j += 1;
                 let next = flow_atoms.get(j).ok_or_else(|| anyhow!("header band `{name}` is not followed by row bands"))?;
                 header_gap = { let g = next.rect.y - atom.rect.bottom(); if g.abs() < 0.01 { 0.0 } else { g } };
             }
-            let AtomKind::Band { name: row_name, repeat_on_break: false } = &flow_atoms.get(j).map(|a| &a.kind).ok_or_else(|| anyhow!("expected row bands"))? else {
+            let AtomKind::Band { name: row_name, repeat_on_break: false, variants: row_variants, select: row_select, .. } = &flow_atoms.get(j).map(|a| &a.kind).ok_or_else(|| anyhow!("expected row bands"))? else {
                 bail!("header band `{name}` must be followed directly by its row bands")
             };
             let first = &flow_atoms[j];
             let mut k = j;
             let mut gap = 0.0;
             let mut count = 0;
-            while let Some(a) = flow_atoms.get(k) && matches!(&a.kind, AtomKind::Band { name, repeat_on_break: false } if name == row_name) {
+            let mut rows: Vec<Instance> = Vec::new();
+            while let Some(a) = flow_atoms.get(k) && let AtomKind::Band { name, repeat_on_break: false, variant, .. } = &a.kind && name == row_name {
+                let n;
                 if count == 0 {
                     if bands.iter().any(|b| &b.name == row_name) { bail!("band `{row_name}` is used in two repeat regions"); }
                     let slots = take_inside(&a.rect, &mut taken, &mut owners, &|| Owner::Band { name: row_name.clone(), instance: Some(0) });
-                    bands.push(ir::Band { name: row_name.clone(), repeat_on_break: false, fragment: fragment_of(a, slots, 0.0)? });
+                    n = slots.len();
+                    bands.push(ir::Band { name: row_name.clone(), repeat_on_break: false, fragments: vec![fragment_of(a, slots, 0.0)?], select: row_select.clone() });
                 } else {
-                    if (a.rect.h - first.rect.h).abs() > 0.01 || (a.rect.w - first.rect.w).abs() > 0.01 || (a.rect.x - first.rect.x).abs() > 0.01 {
-                        bail!("band `{row_name}`: instance {count} is {:.2} x {:.2} at x {:.2}, the first is {:.2} x {:.2} at x {:.2}; rows must have a fixed size", a.rect.w, a.rect.h, a.rect.x, first.rect.w, first.rect.h, first.rect.x);
+                    // With variants, instances may differ in height; `build` checks each against the variants later.
+                    if *row_variants == 1 && ((a.rect.h - first.rect.h).abs() > 0.01 || (a.rect.w - first.rect.w).abs() > 0.01 || (a.rect.x - first.rect.x).abs() > 0.01) {
+                        bail!("band `{row_name}`: instance {count} is {:.2} x {:.2} at x {:.2}, the first is {:.2} x {:.2} at x {:.2}; rows must have a fixed size unless the band declares `variants`", a.rect.w, a.rect.h, a.rect.x, first.rect.w, first.rect.h, first.rect.x);
                     }
                     let this_gap = { let g = a.rect.y - flow_atoms[k - 1].rect.bottom(); if g.abs() < 0.01 { 0.0 } else { g } };
                     if count == 1 { gap = this_gap; } else if (this_gap - gap).abs() > 0.01 { bail!("band `{row_name}`: the gap between rows varies ({gap:.2} vs {this_gap:.2})"); }
                     // Slots of later instances are not exported, only accounted for.
-                    let n = take_inside(&a.rect, &mut taken, &mut owners, &|| Owner::Band { name: row_name.clone(), instance: Some(count) }).len();
-                    if n != bands.last().unwrap().fragment.slots.len() { bail!("band `{row_name}`: instance {count} has {n} slots, the first has {}", bands.last().unwrap().fragment.slots.len()); }
+                    n = take_inside(&a.rect, &mut taken, &mut owners, &|| Owner::Band { name: row_name.clone(), instance: Some(count) }).len();
+                    if *row_variants == 1 && n != bands.last().unwrap().fragments[0].slots.len() { bail!("band `{row_name}`: instance {count} has {n} slots, the first has {}", bands.last().unwrap().fragments[0].slots.len()); }
                 }
+                rows.push(Instance { x: a.rect.x, w: a.rect.w, h: a.rect.h, variant: *variant, slots: n });
                 count += 1;
                 k += 1;
             }
-            instances.insert(row_name.clone(), count);
+            declared.insert(row_name.clone(), Declared { variants: *row_variants, select: row_select.clone(), instances: rows });
             blocks.push(ir::Block::Repeat { band: row_name.clone(), header, header_gap, gap, sample_rows: count });
             prev_bottom = flow_atoms[k - 1].rect.bottom();
             i = k;
@@ -803,13 +846,12 @@ impl<'a> Exporter<'a> {
             };
             r
         }).collect();
-        let _ = instances;
         Ok(Exported {
             doc: ir::Document {
                 version: ir::VERSION, title, lang: self.lang.clone(), fonts: self.ir_fonts, pages: Vec::new(), slots: Vec::new(),
                 flow: Some(ir::Flow { page_width, page_height, area, blocks, bands, overlays }),
             },
-            unstyled, reference,
+            unstyled, reference, declared,
         })
     }
 }
@@ -824,7 +866,13 @@ fn static_fragment(atoms: &[&Atom], top: f64, height: f64, width: f64, nodes: &[
     ir::Fragment { x: 0.0, y: 0.0, width, height, items, slots, nodes }
 }
 
-struct Exported { doc: ir::Document, unstyled: Vec<String>, reference: Vec<ReferenceSlot> }
+struct Exported { doc: ir::Document, unstyled: Vec<String>, reference: Vec<ReferenceSlot>, declared: HashMap<String, Declared> }
+
+/// What the sample said about a band with variants: how many, how to pick, and each sample instance's size,
+/// declared variant (`None` when only the layout can tell) and slot count, for `build` to check against the
+/// variant layouts.
+struct Declared { variants: u32, select: Option<ir::Select>, instances: Vec<Instance> }
+struct Instance { x: f64, w: f64, h: f64, variant: Option<u32>, slots: usize }
 
 // ---------------------------------------------------------------------------------------------------------
 // Export-time font subsetting
@@ -842,7 +890,7 @@ fn each_items_mut(doc: &mut ir::Document, f: &mut dyn FnMut(&mut Vec<ir::Item>))
     for page in &mut doc.pages { f(&mut page.items); }
     if let Some(flow) = &mut doc.flow {
         for block in &mut flow.blocks { if let ir::Block::Static { fragment } = block { f(&mut fragment.items); } }
-        for band in &mut flow.bands { f(&mut band.fragment.items); }
+        for band in &mut flow.bands { for fragment in &mut band.fragments { f(&mut fragment.items); } }
         for overlay in &mut flow.overlays { f(&mut overlay.items); }
     }
 }
@@ -851,7 +899,7 @@ fn each_slot(doc: &ir::Document, f: &mut dyn FnMut(&ir::Slot)) {
     for slot in &doc.slots { f(slot); }
     if let Some(flow) = &doc.flow {
         for block in &flow.blocks { if let ir::Block::Static { fragment } = block { for slot in &fragment.slots { f(slot); } } }
-        for band in &flow.bands { for slot in &band.fragment.slots { f(slot); } }
+        for band in &flow.bands { for fragment in &band.fragments { for slot in &fragment.slots { f(slot); } } }
         for overlay in &flow.overlays { for slot in &overlay.slots { f(slot); } }
     }
 }
@@ -1074,11 +1122,91 @@ fn parse_args() -> Result<Args> {
     Ok(parsed)
 }
 
-fn build(fixture: &Path, data: &[u8], fonts: &[LoadedFont], strict: bool) -> Result<(PagedDocument, Exported)> {
-    let world = MemWorld::new(fixture, data, fonts)?;
+fn build_once(fixture: &Path, data: &[u8], fonts: &[LoadedFont], strict: bool, forced: Option<(&str, u32)>) -> Result<(PagedDocument, Exported)> {
+    let world = MemWorld::new(fixture, data, fonts, forced)?;
     let doc = compile(&world)?;
     let exported = Exporter::new(fonts)?.export(&doc, strict)?;
     Ok((doc, exported))
+}
+
+/// The sample compile, then one compile per variant of every band that declares variants, each forcing all
+/// instances of that band to one variant: the band's fragment from each goes into the sample's band, after a
+/// check that nothing outside the band changed and that every sample instance is one of the variants.
+fn build(fixture: &Path, data: &[u8], fonts: &[LoadedFont], strict: bool) -> Result<(PagedDocument, Exported)> {
+    let (doc, mut exported) = build_once(fixture, data, fonts, strict, None)?;
+    let mut plan: Vec<(String, u32)> = exported.declared.iter().filter(|(_, d)| d.variants > 1).map(|(n, d)| (n.clone(), d.variants)).collect();
+    plan.sort();
+    if plan.is_empty() { return Ok((doc, exported)); }
+    let sample_view = without_band_layouts(static_view(&exported.doc));
+    for (name, n) in plan {
+        let mut fragments = Vec::with_capacity(n as usize);
+        for k in 1..=n {
+            let (_, forced) = build_once(fixture, data, fonts, false, Some((&name, k))).with_context(|| format!("band `{name}`, variant {k}"))?;
+            let mut differences = Vec::new();
+            diff(&sample_view, &without_band_layouts(static_view(&forced.doc)), "doc", &mut differences);
+            if !differences.is_empty() {
+                bail!("band `{name}`, variant {k}: the layout outside the bands differs from the sample's; a variant may only change its own band:\n  {}", differences.iter().take(8).cloned().collect::<Vec<_>>().join("\n  "));
+            }
+            let band = forced.doc.flow.as_ref().and_then(|f| f.bands.iter().find(|b| b.name == name)).ok_or_else(|| anyhow!("band `{name}` is missing from the variant {k} compile"))?;
+            let mut fragment = band.fragments[0].clone();
+            adopt_fonts(&mut fragment, &forced.doc.fonts, &mut exported.doc.fonts);
+            fragments.push(fragment);
+        }
+        let declared = &exported.declared[&name];
+        let heights: Vec<String> = fragments.iter().map(|f| format!("{:.2}", f.height)).collect();
+        if let Some(ir::Select::Lines { slot }) = &declared.select {
+            // Heights must identify the variant, and the selecting slot must be the same width in every variant.
+            if !fragments.windows(2).all(|w| w[1].height > w[0].height + 0.01) { bail!("band `{name}`: variants picked by lines must grow with each line; heights are {}", heights.join(", ")); }
+            let widths: Vec<f64> = fragments.iter().map(|f| f.slots.iter().find(|s| &s.name == slot).map(|s| s.width).ok_or_else(|| anyhow!("band `{name}`: variant has no slot `{slot}` to pick by"))).collect::<Result<_>>()?;
+            if widths.iter().any(|w| (w - widths[0]).abs() > 0.01) { bail!("band `{name}`: slot `{slot}` has a different width per variant"); }
+            if fragments.iter().skip(1).any(|f| f.slots.iter().find(|s| &s.name == slot).is_some_and(|s| s.auto_lines.is_none())) { bail!("band `{name}`: slot `{slot}` must be declared `lines: auto` to pick the variant by its lines"); }
+        }
+        for (i, inst) in declared.instances.iter().enumerate() {
+            let v = match inst.variant {
+                Some(v) if (v as usize) <= fragments.len() => v as usize - 1,
+                Some(v) => bail!("band `{name}`: instance {i} declares variant {v} but the band has {}", fragments.len()),
+                None => fragments.iter().position(|f| (f.height - inst.h).abs() < 0.01).ok_or_else(|| anyhow!("band `{name}`: instance {i} is {:.2} pt tall, which is none of the variants ({})", inst.h, heights.join(", ")))?,
+            };
+            let f = &fragments[v];
+            if (f.height - inst.h).abs() > 0.01 || (f.width - inst.w).abs() > 0.01 || (f.x - inst.x).abs() > 0.01 {
+                bail!("band `{name}`: instance {i} ({:.2} x {:.2} at x {:.2}) is not variant {} ({:.2} x {:.2} at x {:.2})", inst.w, inst.h, inst.x, v + 1, f.width, f.height, f.x);
+            }
+            if inst.slots != f.slots.len() { bail!("band `{name}`: instance {i} has {} slots, variant {} has {}", inst.slots, v + 1, f.slots.len()); }
+        }
+        let band = exported.doc.flow.as_mut().and_then(|f| f.bands.iter_mut().find(|b| b.name == name)).expect("declared band exists");
+        band.fragments = fragments;
+    }
+    Ok((doc, exported))
+}
+
+/// A static view with every band's layouts removed: what a variant compile must leave unchanged.
+fn without_band_layouts(mut view: serde_json::Value) -> serde_json::Value {
+    if let Some(bands) = view.pointer_mut("/flow/bands").and_then(|b| b.as_array_mut()) {
+        for band in bands { if let Some(map) = band.as_object_mut() { map.insert("fragments".into(), serde_json::Value::Array(Vec::new())); } }
+    }
+    view
+}
+
+/// Points a fragment from another compile at this document's font table, adding fonts it does not have yet.
+/// Font numbering is by order of first use, so it differs between compiles.
+fn adopt_fonts(fragment: &mut ir::Fragment, from: &[ir::Font], into: &mut Vec<ir::Font>) {
+    let map: Vec<usize> = from.iter().map(|font| {
+        match into.iter().position(|f| f.source_sha256 == font.source_sha256 && f.index == font.index) {
+            Some(i) => i,
+            None => { into.push(font.clone()); into.len() - 1 }
+        }
+    }).collect();
+    fn rewrite(items: &mut [ir::Item], map: &[usize]) {
+        for item in items {
+            match item {
+                ir::Item::Group { items: inner, .. } => rewrite(inner, map),
+                ir::Item::Text { font, .. } => *font = map[*font],
+                _ => {}
+            }
+        }
+    }
+    rewrite(&mut fragment.items, &map);
+    for slot in &mut fragment.slots { slot.font = map[slot.font]; }
 }
 
 fn count(items: &[ir::Item]) -> (usize, usize, usize) {
@@ -1120,12 +1248,16 @@ fn describe(exported: &ir::Document) {
                 ir::Block::Repeat { band, header, header_gap, gap, sample_rows } => {
                     println!("  repeat `{band}`: header {header:?} (gap after {header_gap:.2}), row gap {gap:.2}, {sample_rows} sample row(s)");
                 }
+                ir::Block::Choice { band } => println!("  choice `{band}`"),
             }
         }
         for band in &flow.bands {
-            let (t, s, g) = count(&band.fragment.items);
-            println!("  band `{}`{}: x {:.2} w {:.2} h {:.2}, {t} text runs, {s} shapes, {g} groups, {} slot(s), nodes [{}]", band.name, if band.repeat_on_break { " (repeat on break)" } else { "" }, band.fragment.x, band.fragment.width, band.fragment.height, band.fragment.slots.len(), roles(&band.fragment.nodes));
-            for slot in &band.fragment.slots { describe_slot(slot, "    "); }
+            for (v, fragment) in band.fragments.iter().enumerate() {
+                let (t, s, g) = count(&fragment.items);
+                let which = if band.fragments.len() > 1 { format!(" variant {} of {} ({:?})", v + 1, band.fragments.len(), band.select) } else { String::new() };
+                println!("  band `{}`{}{which}: x {:.2} w {:.2} h {:.2}, {t} text runs, {s} shapes, {g} groups, {} slot(s), nodes [{}]", band.name, if band.repeat_on_break { " (repeat on break)" } else { "" }, fragment.x, fragment.width, fragment.height, fragment.slots.len(), roles(&fragment.nodes));
+                for slot in &fragment.slots { describe_slot(slot, "    "); }
+            }
         }
         for overlay in &flow.overlays {
             println!("  overlay: ({:.2}, {:.2}) {:.2} x {:.2}, {} slot(s)", overlay.x, overlay.y, overlay.width, overlay.height, overlay.slots.len());
@@ -1200,14 +1332,14 @@ fn run() -> Result<()> {
         };
         // An empty sample shows no style; copy the baseline's so only the geometry is compared for that slot.
         for name in &unstyled {
-            let from = exported.slots.iter().chain(exported.flow.iter().flat_map(|f| f.bands.iter().flat_map(|b| b.fragment.slots.iter()).chain(f.overlays.iter().flat_map(|o| o.slots.iter())).chain(f.blocks.iter().filter_map(|b| match b { ir::Block::Static { fragment } => Some(fragment.slots.iter()), _ => None }).flatten()))).find(|s| &s.name == name);
+            let from = exported.slots.iter().chain(exported.flow.iter().flat_map(|f| f.bands.iter().flat_map(|b| b.fragments.iter().flat_map(|fr| fr.slots.iter())).chain(f.overlays.iter().flat_map(|o| o.slots.iter())).chain(f.blocks.iter().filter_map(|b| match b { ir::Block::Static { fragment } => Some(fragment.slots.iter()), _ => None }).flatten()))).find(|s| &s.name == name);
             let Some(from) = from else { continue };
             let entry = exported.fonts[from.font].clone();
             let font = match fuzzed.fonts.iter().position(|f| f == &entry) { Some(index) => index, None => { fuzzed.fonts.push(entry); fuzzed.fonts.len() - 1 } };
             let (size, fill) = (from.size, from.fill);
             let mut all: Vec<&mut ir::Slot> = fuzzed.slots.iter_mut().collect();
             if let Some(flow) = &mut fuzzed.flow {
-                all.extend(flow.bands.iter_mut().flat_map(|b| b.fragment.slots.iter_mut()));
+                all.extend(flow.bands.iter_mut().flat_map(|b| b.fragments.iter_mut().flat_map(|fr| fr.slots.iter_mut())));
                 all.extend(flow.overlays.iter_mut().flat_map(|o| o.slots.iter_mut()));
                 all.extend(flow.blocks.iter_mut().filter_map(|b| match b { ir::Block::Static { fragment } => Some(fragment.slots.iter_mut()), _ => None }).flatten());
             }

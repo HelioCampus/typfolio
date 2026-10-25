@@ -3,7 +3,7 @@
 // experiments/paramdoc/documents/report), and a runtime of about 16 kB fills the slots and writes each PDF in a
 // Web Worker without a compiler. Its output is tagged PDF/UA-1. The exported report is the slot dialect's version
 // of ./report/main.typ: the same text, boxes and table, but a static title, a tutor comment of up to three lines, no score
-// bars and no row stripes.
+// bars.
 import docUrl from '../../../../experiments/paramdoc/documents/report/doc.json?url';
 import type { ReportInput } from './data.ts';
 

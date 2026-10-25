@@ -58,16 +58,17 @@ Commits, oldest first:
 ## How to prove it still works (do this first after any change)
 
 ```sh
-cd experiments/paramdoc && ./check.sh      # 74 checks, about two minutes after the first build; FUZZ=20 ./check.sh is quicker
+cd experiments/paramdoc && ./check.sh      # 81 checks, a few minutes after the first build; FUZZ=20 ./check.sh is quicker
 DEMO_URL=http://127.0.0.1:4190 ./check.sh  # also drives the performance page of a running pretext-hybrid dev server
 ```
 
 It builds, exports every fixture with fuzzing and a Typst reference, runs both runtimes against Typst and
 against each other, rasterises and compares pixels, compares text extraction, inspects the structure and
 validates every runtime PDF with veraPDF as PDF/UA-1; it also fails when `documents/<fixture>` no longer equals a
-fresh export (the export is byte-deterministic, so this is a plain comparison). For the wrapping slots it exports a
-Typst reference per data case of `fixtures/wrap` and for 40 random samples of `fixtures/wrapfuzz` (the exporter's
-`--fuzz-references`), and checks both runtimes against every one of them, glyph for glyph and pixel for pixel. Tools it cannot find (poppler,
+fresh export (the export is byte-deterministic, so this is a plain comparison). Every fixture gets a Typst
+reference for `data.json` and for each other `data-*.json` case (the `wrap` cases, the transcript without
+honours), and `fixtures/wrapfuzz` references for 40 random samples (the exporter's `--fuzz-references`); both
+runtimes are checked against every one of them, glyph for glyph and pixel for pixel. Tools it cannot find (poppler,
 veraPDF, the dev-tools build, Playwright) are reported as SKIP; anything else that fails fails the script.
 
 Prerequisites: Rust stable (1.97 on Linux and 1.99 on macOS have been used; crates pin Typst 0.15.1 which needs
@@ -117,7 +118,12 @@ slot** (`lines: n`, since 2026-10-25) is the same box made exactly `n` lines tal
 justification and hyphenation off, so Typst breaks it with its simple breaker and the runtimes reproduce the
 breaks from advance widths; the first baseline is one line height below the box top. A **band** is a clipped block;
 instances of one name are the rows of a repeat region; `repeat-on-break: true` marks a header band. `paged`
-records the margins; `overlay` marks per-page content with `page-number`/`page-count` counter slots. Everything
+records the margins; `overlay` marks per-page content with `page-number`/`page-count` counter slots. A band may
+declare **variants** (since 2026-10-25): `repeat(..., variants: n, select: ...)` or a `choice` block; the exporter
+compiles the fixture once more per variant with `sys.inputs.paramdoc-variant = "<band>=<k>"`, which forces every
+instance of the band to variant k, and the runtime picks per instance by `("parity",)`, `("flag", key)` or
+`("lines", slot)` (a `lines: auto` slot). In the sample compile `variant(name, natural)` is what the data says, so
+the sample is the runtime's output for the sample data and stays the oracle. Everything
 outside slots must lay out identically for every valid input; the exporter proves it by fuzzing. Slots bind to
 data by name (slot name = data key; rows bind to the array named after the band). The runtime only does trivial
 geometry or picks among things Typst already produced. Bands must use `table`, not `grid`, to get table
@@ -155,8 +161,8 @@ Per report the compiler needs about 5 ms on a warm worker (the same template com
 hidden pane, gave 12.8 s, ten times its real figure, so never compare runs from a hidden tab. All 1000 synthetic
 reports from the same data path, written by the TypeScript runtime (`notes/bench/write-all.mjs`), pass veraPDF
 PDF/UA-1. The exported report is the slot dialect's version of the page's template, so the PDFs differ from the
-compiler's: a static title, a tutor comment of at most three ragged-right lines, no score bars and no row stripes;
-the page says so next to the switch. The compiler's PDFs are 26 kB, the runtime's 61 kB (the two repertoire subsets embedded whole).
+compiler's: a static title, a tutor comment of at most three ragged-right lines and no score bars; the page says
+so next to the switch. The row stripes are back since 2026-10-25 (two band variants picked by row parity). The compiler's PDFs are 26 kB, the runtime's 61 kB (the two repertoire subsets embedded whole).
 
 ## Open items, in the order I would do them
 
@@ -168,30 +174,34 @@ profiles (1724 rules) only the PDF 2.0 rules fail: file version 2.0, `pdfuaid:pa
 rule passes, so UA-2 is a metadata change away if it is ever wanted. Typst's own PDFs of the same fixtures fail
 UA-1 on two rules (no `DisplayDocTitle`, no `pdfuaid:part`), as expected for a plain export.
 
-Wrapping text (M7 in `PLAN.md`) is done (2026-10-25): multi-line slots break lines exactly as Typst does,
-checked on every data case of `fixtures/wrap` and on 300 random texts of `fixtures/wrapfuzz`, both runtimes, glyph
-positions and pixels. Ragged right only; see the status log in `PLAN.md` for what had to be copied from Typst.
+Wrapping text (M7 in `PLAN.md`) and variants (M8) are done (2026-10-25): multi-line slots break lines exactly
+as Typst does, checked on every data case of `fixtures/wrap` and on 300 random texts of `fixtures/wrapfuzz`; rows
+grow with their wrapping slot, blocks appear by a flag and rows stripe by parity, each a Typst layout the runtime
+picks, checked on the transcript and the report. Both runtimes, glyph positions and pixels. See the status log
+in `PLAN.md` and `docs/2026-10-25-*.md` at the repository root.
 
-1. **Variants (M8 in `PLAN.md`).** Variable-height rows, optional blocks and row stripes as layouts made once per
-   variant at export time, picked by the runtime: a band declared for 1..n lines of a wrapping slot, a parity or
-   a flag in the data. The plan is written; rows are one fixed height until then.
-2. **Parametric geometry and image slots (M9).** A bar whose length is a value, so the report gets its score bars
+1. **Parametric geometry and image slots (M9).** A bar whose length is a value, so the report gets its score bars
    back, and a box the data fills with a PNG or JPEG, which is how charts arrive (`examples/vite-react` renders
    them to PNG in the application). Images are otherwise recorded in the IR and not drawn; links (Typst's link
    items) are dropped at export today; they bring annotations, `/Tabs /S` and the Link structure rules, so run
    `./check.sh` with veraPDF when they land.
-3. **A Worker wrapper** for the TypeScript runtime as something reusable: the demo page has one (`paramdoc.worker.ts`
+2. **A Worker wrapper** for the TypeScript runtime as something reusable: the demo page has one (`paramdoc.worker.ts`
    and the pool in `batch.ts`), written for that page; moving it under `ts/` with a small API would let other pages
    use it. A compact binary form of `doc.json` if its 87 kB raw (6.5 kB gzip) ever matters.
-4. **Export as a Vite plugin** fed by `defineTemplate`, with the schema's `maxLength` and `pattern` sizing
+3. **Export as a Vite plugin** fed by `defineTemplate`, with the schema's `maxLength` and `pattern` sizing
    slots and setting repertoires. This is where the experiment would meet the real packages; design it with the
    repository's maintainers before writing it.
-5. The Rust runtime still deflates every stream per document, which is why it is slower than the TypeScript
+4. The Rust runtime still deflates every stream per document, which is why it is slower than the TypeScript
    one; writing small streams uncompressed and caching the font streams would even them out.
-6. **Justified wrapping slots.** Every template in this repository justifies its paragraphs; wrapping slots are
-   ragged right because justification means porting Typst's optimized breaker and its justification arithmetic.
-   Web addresses (`://`, `www.`) are refused in wrapping slots for the same reason: Typst breaks links by rules
-   of its own (`linebreak_link`).
+5. **Justified wrapping slots.** Every template in this repository justifies its paragraphs; wrapping slots are
+   ragged right because justification means porting Typst's optimized breaker (`linebreak_optimized`: cost
+   `(1 + badness + penalty)²` per line with `badness = 100·|ratio|³`, runt and hyphen penalties) and the
+   `commit` arithmetic that stretches spaces by up to half their width and shrinks by a third. Looked at on
+   2026-10-25: the JavaScript library `@chenglou/pretext` (already a devDependency of the pretext-hybrid demo)
+   does not help; it is a greedy wrapper with no justification API, its Knuth–Plass lives only in demo code with
+   a cost unlike Typst's, and it measures through canvas. Port Typst's own arithmetic into both runtimes, keep
+   hyphenation off inside slots, and add `justify: true` fixtures to the oracle. Web addresses (`://`, `www.`)
+   are refused in wrapping slots for a related reason: Typst breaks links by rules of its own (`linebreak_link`).
 
 ## Things that will bite you
 
@@ -221,6 +231,17 @@ positions and pixels. Ragged right only; see the status log in `PLAN.md` for wha
   it overflows, ragged or justified (`par.justification-limits`). Trailing spaces are glyphs: at a normal break
   they are drawn at zero advance at the line end; before a hard newline and at the end of the text they keep
   their advance. The traces include them, so the comparison with Typst sees all of this.
+- **Variants compile the fixture once per variant**, forcing every instance of the band to that variant; the
+  sample page must still fit on one page with every row at its tallest, so keep sample rows few. The forced
+  document must equal the sample everywhere outside the bands (the exporter diffs them and says where not); a
+  variant that moves anything else is refused. Fonts are numbered by first use, so fragments from a forced
+  compile are re-pointed at the sample's font table (`adopt_fonts`).
+- **`lines: auto` needs its band.** The band publishes itself through `state("paramdoc-band")` so the slot can
+  read the forced variant and the cap; the slot is laid out through `layout` to learn its width, which makes it
+  block-level: fine as the only content of a cell, not inline in a sentence. In a closure passed to `repeat` or
+  `choice`, do not name the variant parameter `v`: it shadows `v()`.
+- **The runtime's selector and the dialect's `natural-variant` must agree** (parity, `== true` for flags, the
+  measured line count for lines); a disagreement shows as the runtime differing from the sample reference.
 - **Running the repo's dev server regenerates `examples/pretext-hybrid/src/routeTree.gen.ts`**; revert it
   before committing.
 - **`pkill -f` with a pattern that appears in your own shell command kills the shell.** Track server PIDs.

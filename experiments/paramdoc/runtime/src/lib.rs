@@ -522,6 +522,49 @@ fn compose_fixed(doc: &ir::Document, data: &serde_json::Value, fonts: &[LoadedFo
     Ok(pages)
 }
 
+/// How many lines a wrapping slot would give `text`, measured as the dialect's `lines: auto` measures it in
+/// Typst: from the stacked height of the broken lines, so a line of nothing but whitespace counts for nothing.
+fn needed_lines(slot: &ir::Slot, text: &str, font: &LoadedFont, trace_name: &str) -> Result<usize> {
+    let (pitch, size) = (slot.pitch, slot.size);
+    if !(pitch > 0.0) { bail!("slot `{trace_name}`: a wrapping slot without a line pitch; export the document again"); }
+    if text.contains("://") || text.contains("www.") { bail!("slot `{trace_name}`: {text:?} contains a web address, which Typst breaks by rules this runtime does not have yet"); }
+    let chars: Vec<char> = text.chars().collect();
+    let ids: Vec<u16> = chars.iter().map(|&c| if is_mandatory_break(c) { Ok(0) } else {
+        font.glyph(c).ok_or_else(|| anyhow!("slot `{trace_name}`: {c:?} (U+{:04X}) is not in the slot's repertoire; declare it with `charset:` in the template", c as u32))
+    }).collect::<Result<_>>()?;
+    let width_of = |from: usize, to: usize| -> f64 { ids[from..to].iter().map(|&id| font.advance(id) * size).sum() };
+    let fits = |width: f64| slot.width + 1e-4 >= width;
+    let broken = break_lines(&chars, &width_of, &fits);
+    let line_height = slot.baseline - slot.y;
+    let leading = pitch - line_height;
+    let mut y = 0.0;
+    for (k, l) in broken.iter().enumerate() {
+        let h = if l.shaping_end > l.start && l.layout_end == l.start { 0.0 } else { line_height };
+        if k > 0 { y += leading; }
+        y += h;
+    }
+    Ok(((y - line_height) / pitch).round().max(0.0) as usize + 1)
+}
+
+/// The variant of a band for one instance: `data` is the row (or the document for a choice block), `index` the
+/// row number.
+fn pick<'a>(band: &'a ir::Band, data: &serde_json::Value, index: usize, fonts: &[LoadedFont]) -> Result<&'a ir::Fragment> {
+    let n = band.fragments.len();
+    let k = match &band.select {
+        _ if n <= 1 => 0,
+        None => 0,
+        Some(ir::Select::Parity) => index % 2,
+        Some(ir::Select::Flag { path }) => if data.get(path) == Some(&serde_json::Value::Bool(true)) { 0 } else { 1 },
+        Some(ir::Select::Lines { slot }) => {
+            // A wrapping variant carries the line metrics; the slot has the same width in every variant.
+            let measure = band.fragments[1].slots.iter().find(|s| &s.name == slot).ok_or_else(|| anyhow!("band `{}`: no slot `{slot}` to pick the variant by", band.name))?;
+            let text = Scope { data, counters: None }.text(slot)?;
+            needed_lines(measure, &text, &fonts[measure.font], &format!("{}.{slot}", band.name))? - 1
+        }
+    };
+    Ok(&band.fragments[k.min(n - 1)])
+}
+
 fn compose_flow(flow: &ir::Flow, data: &serde_json::Value, fonts: &[LoadedFont], structure: &mut Structure) -> Result<Vec<Composed>> {
     const EPS: f64 = 1e-6;
     let area = flow.area;
@@ -534,36 +577,44 @@ fn compose_flow(flow: &ir::Flow, data: &serde_json::Value, fonts: &[LoadedFont],
     let mut cursor = area.y;
     for block in &flow.blocks {
         match block {
-            ir::Block::Static { fragment } => {
+            ir::Block::Static { .. } | ir::Block::Choice { .. } => {
+                let (fragment, prefix, clip) = match block {
+                    ir::Block::Choice { band: name } => { let b = band(name)?; (pick(b, data, 0, fonts)?, format!("{name}."), true) }
+                    ir::Block::Static { fragment } => (fragment, String::new(), false),
+                    _ => unreachable!(),
+                };
                 if cursor + fragment.height > bottom + EPS && cursor > area.y + EPS { pages.push(new_page()); cursor = area.y; }
-                place(fragment, cursor, &scope, fonts, "", false, pages.last_mut().unwrap(), structure, Attach::Document)?;
+                place(fragment, cursor, &scope, fonts, &prefix, clip, pages.last_mut().unwrap(), structure, Attach::Document)?;
                 cursor += fragment.height;
             }
             ir::Block::Repeat { band: name, header, header_gap, gap, .. } => {
                 let rows = data.get(name).and_then(|v| v.as_array()).ok_or_else(|| anyhow!("data has no array `{name}` for the repeat region"))?;
                 let row_band = band(name)?;
                 let header_band = header.as_deref().map(band).transpose()?;
-                let header_height = header_band.map(|h| h.fragment.height + header_gap).unwrap_or(0.0);
-                let first_row = if rows.is_empty() { 0.0 } else { row_band.fragment.height };
+                let header_fragment = header_band.map(|h| &h.fragments[0]);
+                let fragments: Vec<&ir::Fragment> = rows.iter().enumerate().map(|(i, row)| pick(row_band, row, i, fonts)).collect::<Result<_>>()?;
+                let header_height = header_fragment.map(|h| h.height + header_gap).unwrap_or(0.0);
+                let first_row = fragments.first().map(|f| f.height).unwrap_or(0.0);
                 if cursor + header_height + first_row > bottom + EPS && cursor > area.y + EPS { pages.push(new_page()); cursor = area.y; }
                 // One table for the whole region; the first header is its header row, repeats are artifacts.
                 let table = structure.add("Table", 0, None, None);
-                if let Some(h) = header_band {
-                    place(&h.fragment, cursor, &scope, fonts, &format!("{}.", h.name), true, pages.last_mut().unwrap(), structure, Attach::Table(table))?;
+                if let (Some(h), Some(hf)) = (header_band, header_fragment) {
+                    place(hf, cursor, &scope, fonts, &format!("{}.", h.name), true, pages.last_mut().unwrap(), structure, Attach::Table(table))?;
                     cursor += header_height;
                 }
                 for (i, row) in rows.iter().enumerate() {
-                    if cursor + row_band.fragment.height > bottom + EPS {
+                    let fragment = fragments[i];
+                    if cursor + fragment.height > bottom + EPS {
                         pages.push(new_page());
                         cursor = area.y;
-                        if let Some(h) = header_band {
-                            place(&h.fragment, cursor, &scope, fonts, &format!("{}.", h.name), true, pages.last_mut().unwrap(), structure, Attach::Artifact)?;
+                        if let (Some(h), Some(hf)) = (header_band, header_fragment) {
+                            place(hf, cursor, &scope, fonts, &format!("{}.", h.name), true, pages.last_mut().unwrap(), structure, Attach::Artifact)?;
                             cursor += header_height;
                         }
                     }
                     let row_scope = Scope { data: row, counters: None };
-                    place(&row_band.fragment, cursor, &row_scope, fonts, &format!("{name}[{i}]."), true, pages.last_mut().unwrap(), structure, Attach::Table(table))?;
-                    cursor += row_band.fragment.height;
+                    place(fragment, cursor, &row_scope, fonts, &format!("{name}[{i}]."), true, pages.last_mut().unwrap(), structure, Attach::Table(table))?;
+                    cursor += fragment.height;
                     if i + 1 < rows.len() { cursor += gap; }
                 }
             }

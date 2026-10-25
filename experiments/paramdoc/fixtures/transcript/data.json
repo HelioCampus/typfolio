@@ -2,10 +2,26 @@
   "student": "Ada Lovelace",
   "programme": "BSc Mathematics",
   "courses": [
-    { "code": "MATH101", "title": "Calculus I", "credits": 6, "grade": "A" },
-    { "code": "MATH102", "title": "Linear Algebra", "credits": 6, "grade": "A-" },
-    { "code": "CS110", "title": "Introduction to Analytical Engines", "credits": 5, "grade": "B+" }
+    {
+      "code": "MATH101",
+      "title": "Calculus I",
+      "credits": 6,
+      "grade": "A"
+    },
+    {
+      "code": "MATH102",
+      "title": "Linear Algebra with Applications to Geometry, Mechanics and the Theory of Equations",
+      "credits": 6,
+      "grade": "A-"
+    },
+    {
+      "code": "CS110",
+      "title": "Introduction to Analytical Engines: Punched Cards, Store and Mill, Conditional Branching, Loops, and the Programming of Bernoulli Numbers",
+      "credits": 5,
+      "grade": "B+"
+    }
   ],
   "total_credits": 17,
-  "gpa": "3.7"
+  "gpa": "3.7",
+  "honours": true
 }

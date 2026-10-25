@@ -152,7 +152,7 @@ export function BatchWorkbench() {
           Experimental, from <code>experiments/paramdoc</code>: Typst typeset this report once at export time into a document
           with slots. Each worker fills the slots and writes the PDF with a 16 kB runtime and no compiler, from a 150 kB document
           with two subset fonts; the output is tagged PDF/UA-1. The layout is the slot dialect's version of the report: a static
-          title, a tutor comment of up to three lines, no score bars and no row stripes.
+          title, a tutor comment of up to three lines, no score bars.
         </p>
       )}
 
