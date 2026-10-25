@@ -18,7 +18,8 @@ async function load(dir: string): Promise<Runtime> {
   const docJson = readFileSync(join(dir, 'doc.json'));
   const listed: Document = JSON.parse(docJson.toString());
   const fonts = listed.fonts.map(f => new Uint8Array(readFileSync(join(dir, 'fonts', f.file))));
-  return Runtime.create(new Uint8Array(docJson), fonts);
+  const images = (listed.image_files ?? []).map(f => new Uint8Array(readFileSync(join(dir, 'images', f.file))));
+  return Runtime.create(new Uint8Array(docJson), fonts, images);
 }
 
 const percentile = (sorted: number[], p: number): number => sorted[Math.round((sorted.length - 1) * p)] ?? 0;

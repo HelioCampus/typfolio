@@ -10,14 +10,14 @@
 #
 # Every fixture is exported with a Typst reference for `data.json` and for each of its other `data-*.json` cases
 # (except `*-long*`, which paginate beyond the sample page, and the `wrap` overflow and error cases, which the
-# runtimes handle by policy); both runtimes are then checked against every reference, by glyph positions and by
-# pixels. `wrapfuzz` gets Typst references for random samples as well.
+# runtimes handle by policy); both runtimes are then checked against every reference, by glyph positions, bar
+# shapes, image placement and pixels. `wrapfuzz` gets Typst references for random samples as well.
 set -u
 cd "$(dirname "$0")"
 FUZZ="${FUZZ:-100}"
 SAMPLES=$(( FUZZ < 40 ? FUZZ : 40 ))
 B=../../.build/paramdoc
-FIXTURES="certificate policies transcript report wrap"
+FIXTURES="certificate policies transcript report wrap figures"
 PASS=0; FAIL=0; SKIP=0
 ok()   { PASS=$((PASS + 1)); printf '  ok    %s\n' "$1"; }
 fail() { FAIL=$((FAIL + 1)); printf '  FAIL  %s\n' "$1"; }
@@ -73,7 +73,7 @@ for i in $(seq 0 $((SAMPLES - 1))); do
 done
 if [ "$wf_fail" -eq 0 ]; then ok "wrapfuzz: both runtimes == Typst on $SAMPLES random samples"; else fail "wrapfuzz: $wf_fail of $((SAMPLES * 2)) runs differ from Typst"; fi
 
-echo "4. Pixels at 150 dpi against Typst (tolerance: 1 pixel, the report's known one; 0 for the extra cases)"
+echo "4. Pixels at 150 dpi against Typst (tolerance: 1 pixel, the report's known one; 0 for the extra cases; images included)"
 if have pdftoppm; then
   for f in $FIXTURES; do
     for v in runtime runtime-ts; do
@@ -98,11 +98,14 @@ if have pdftotext; then
   done
   if [ "$(pdftotext -layout "$B/wrap/overflow.pdf" - | grep -c '…')" = 2 ]; then ok "wrap/overflow: two ellipsis lines, as the policies say"; else fail "wrap/overflow: expected two ellipsis lines"; fi
   if [ "$(pdftotext -layout "$B/transcript/long.pdf" - | grep -c 'honours')" = 0 ] && [ "$(pdftotext -layout "$B/transcript/runtime.pdf" - | grep -c 'honours')" = 1 ]; then ok "transcript: the honours block appears only when the data says so"; else fail "transcript: the honours block is not picked by the data"; fi
+  for v in runtime runtime-ts; do
+    if [ "$(pdfimages -list "$B/figures/$v.pdf" 2>/dev/null | awk '$3 == "image"' | wc -l | tr -d ' ')" = 4 ] && [ "$(pdfimages -list "$B/figures/$v.pdf" | awk '$3 == "smask"' | wc -l | tr -d ' ')" = 2 ]; then ok "figures/$v: four images, two with a soft mask (the RGBA chart and the keyed icon)"; else fail "figures/$v: expected 4 images and 2 soft masks: $(pdfimages -list "$B/figures/$v.pdf" | tail -n +3 | awk '{print $3, $4, $5}' | tr '\n' ';')"; fi
+  done
 else skip "pdftotext not on PATH (poppler)"; fi
 
 echo "6. Structure (inspectPdf from @typfolio/dev-tools)"
 if [ -f ../../packages/dev-tools/dist/pdf.js ]; then
-  run "inspect" node notes/bench/inspect.mjs "$B/transcript/long.pdf" "$B/report/runtime.pdf" "$B/report/runtime-ts.pdf"
+  run "inspect" node notes/bench/inspect.mjs "$B/transcript/long.pdf" "$B/report/runtime.pdf" "$B/report/runtime-ts.pdf" "$B/figures/runtime.pdf"
   grep -E '^\S|pages|roles' "$B/.last.log" | sed 's/^/        /'
 else skip "packages/dev-tools/dist is not built (npm run build at the repository root)"; fi
 
@@ -110,7 +113,7 @@ echo "7. PDF/UA-1 conformance (veraPDF)"
 if have verapdf; then
   list=""
   for f in $FIXTURES; do list="$list $f/runtime $f/runtime-ts"; done
-  for p in $list policies/long transcript/long transcript/long-ts transcript/nohonours wrap/overflow wrap/overflow-ts wrapfuzz/fuzz-0 wrapfuzz/fuzz-0-ts; do
+  for p in $list policies/long transcript/long transcript/long-ts transcript/nohonours wrap/overflow wrap/overflow-ts wrapfuzz/fuzz-0 wrapfuzz/fuzz-0-ts figures/tall figures/tall-ts; do
     if verapdf --flavour ua1 --format text "$B/$p.pdf" > "$B/.last.log" 2>&1 && head -1 "$B/.last.log" | grep -q '^PASS'; then ok "$p"; else fail "$p"; grep -v '^PASS' "$B/.last.log" | head -20 | sed 's/^/        /'; fi
   done
 else skip "verapdf not on PATH (brew install verapdf)"; fi

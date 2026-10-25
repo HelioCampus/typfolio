@@ -7,7 +7,7 @@
 // because CompressionStream costs milliseconds per call in browsers. Erasable TypeScript only, so Node can run it
 // with `--experimental-strip-types` and a bundler can ship it to a browser unchanged.
 
-export const IR_VERSION = 6;
+export const IR_VERSION = 7;
 
 // ---------------------------------------------------------------------------------------------------------
 // IR (mirrors ../ir/src/lib.rs; serde writes `None` as null unless skipped)
@@ -24,6 +24,7 @@ export type Item =
   | { kind: 'group'; x: number; y: number; transform: number[]; clip?: PathOp[] | null; items: Item[] }
   | { kind: 'text'; x: number; y: number; font: number; size: number; fill: Color; text: string; glyphs: Glyph[]; node?: number }
   | { kind: 'shape'; x: number; y: number; geometry: Geometry; fill?: Color | null; stroke?: Stroke | null; node?: number }
+  /** `sha256` names an entry of the document's `image_files`, or the runtime's own key for data-supplied bytes. */
   | { kind: 'image'; x: number; y: number; width: number; height: number; format: string; sha256: string; node?: number };
 export interface Node { role: string; parent: number | null; alt?: string; scope?: string }
 export interface Slot {
@@ -31,7 +32,13 @@ export interface Slot {
   pen_x: number; font: number; size: number; fill: Color; align: string; overflow: string; max_length?: number | null; lines?: number; pitch?: number; auto_lines?: number | null;
   sample: string; node?: number;
 }
-export interface Fragment { x: number; y: number; width: number; height: number; items: Item[]; slots: Slot[]; nodes: Node[] }
+/** A bar hole: one filled rectangle, `value / max` of the hole's width (clamped to 0..1), as tall as the hole, rounded by `radius`. */
+export interface Bar { name: string; page: number; x: number; y: number; width: number; height: number; max: number; fill: Color; radius: number; node?: number; sample: number }
+/** An image hole: a fixed box the data fills with a PNG or JPEG, placed as Typst's `image` with `fit` places it. */
+export interface ImageSlot { name: string; page: number; x: number; y: number; width: number; height: number; fit: string; alt?: string | null; node?: number; sample: string }
+/** A raster image the static content draws, shipped next to the document like a font. */
+export interface ImageFile { sha256: string; file: string; format: string; width: number; height: number }
+export interface Fragment { x: number; y: number; width: number; height: number; items: Item[]; slots: Slot[]; bars?: Bar[]; images?: ImageSlot[]; nodes: Node[] }
 /** How a band's variant is picked for an instance: by row parity, by a `true` in the data, or by the lines a wrapping slot needs. */
 export type Select = { kind: 'parity' } | { kind: 'flag'; path: string } | { kind: 'lines'; slot: string };
 /** Variant k of a band is `fragments[k - 1]`; a plain band has one. */
@@ -56,7 +63,81 @@ export interface FontRef {
   /** Character to glyph id, for the slot repertoire and the static text. */
   cmap: Record<string, number>;
 }
-export interface Document { version: number; title?: string | null; lang?: string | null; fonts: FontRef[]; pages: Page[]; slots: Slot[]; flow?: Flow | null }
+export interface Document {
+  version: number; title?: string | null; lang?: string | null; fonts: FontRef[]; image_files?: ImageFile[];
+  pages: Page[]; slots: Slot[]; bars?: Bar[]; images?: ImageSlot[]; flow?: Flow | null;
+}
+
+// ---------------------------------------------------------------------------------------------------------
+// Geometry the runtime regenerates from data, ported from typst-layout 0.15.1 (the same port as
+// ../ir/src/lib.rs `geometry`), so that what it draws equals Typst's own layout. The exporter checks these ports
+// against Typst on every sample it compiles.
+
+/** A filled rectangle with a uniform corner radius and no stroke, as `styled_rect` builds it: a plain rectangle
+ *  for radius 0, otherwise the fill curve of `segmented_rect` (radius capped at half the shorter side, arcs as
+ *  the cubic Béziers of `bezier_arc_control`). */
+export function roundedRect(width: number, height: number, radius: number): Geometry {
+  if (radius === 0) return { kind: 'rect', width, height };
+  const r = Math.min(radius, Math.min(Math.abs(width), Math.abs(height)) / 2);
+  const sx = Object.is(width, -0) || width < 0 ? -1 : 1, sy = Object.is(height, -0) || height < 0 ? -1 : 1;
+  const rotate = (corner: number, px: number, py: number): [number, number] =>
+    corner === 0 ? [sx * px, sy * py] : corner === 1 ? [width - sx * py, sy * px] : corner === 2 ? [width - sx * px, height - sy * py] : [sx * py, height - sy * px];
+  const ops: PathOp[] = [];
+  for (let corner = 0; corner < 4; corner++) {
+    const center = rotate(corner, r, r);
+    if (r > 0) {
+      const start = rotate(corner, 0, r), end = rotate(corner, r, 0);
+      ops.push(corner === 0 ? { op: 'move', to: start } : { op: 'line', to: start });
+      const [c1, c2] = bezierArcControl(start, center, end);
+      ops.push({ op: 'cubic', c1, c2, to: end });
+    } else {
+      ops.push(corner === 0 ? { op: 'move', to: center } : { op: 'line', to: center });
+    }
+  }
+  ops.push({ op: 'close' });
+  return { kind: 'path', ops };
+}
+
+function bezierArcControl(start: [number, number], center: [number, number], end: [number, number]): [[number, number], [number, number]] {
+  const a = [start[0] - center[0], start[1] - center[1]], b = [end[0] - center[0], end[1] - center[1]];
+  const q1 = a[0]! * a[0]! + a[1]! * a[1]!;
+  const q2 = q1 + a[0]! * b[0]! + a[1]! * b[1]!;
+  const k2 = (4 / 3) * (Math.sqrt(2 * q1 * q2) - q2) / (a[0]! * b[1]! - a[1]! * b[0]!);
+  return [[center[0] + a[0]! - k2 * a[1]!, center[1] + a[1]! + k2 * a[0]!], [center[0] + b[0]! + k2 * b[1]!, center[1] + b[1]! - k2 * b[0]!]];
+}
+
+/** A geometry as absolute path operations, for comparing shapes: a rectangle becomes its four sides. */
+export function opsOf(geometry: Geometry, x: number, y: number): PathOp[] {
+  const shift = (p: [number, number]): [number, number] => [p[0] + x, p[1] + y];
+  if (geometry.kind === 'rect') {
+    return [{ op: 'move', to: [x, y] }, { op: 'line', to: [x + geometry.width, y] }, { op: 'line', to: [x + geometry.width, y + geometry.height] }, { op: 'line', to: [x, y + geometry.height] }, { op: 'close' }];
+  }
+  if (geometry.kind === 'line') return [{ op: 'move', to: [x, y] }, { op: 'line', to: shift(geometry.to) }];
+  return geometry.ops.map(op => op.op === 'move' || op.op === 'line' ? { op: op.op, to: shift(op.to) } : op.op === 'cubic' ? { op: 'cubic', c1: shift(op.c1), c2: shift(op.c2), to: shift(op.to) } : op);
+}
+
+export function sameOps(a: PathOp[], b: PathOp[], eps: number): boolean {
+  const close = (p: [number, number], q: [number, number]) => Math.abs(p[0] - q[0]) <= eps && Math.abs(p[1] - q[1]) <= eps;
+  return a.length === b.length && a.every((x, i) => {
+    const y = b[i]!;
+    if (x.op !== y.op) return false;
+    if (x.op === 'close') return true;
+    if (x.op === 'cubic') return y.op === 'cubic' && close(x.c1, y.c1) && close(x.c2, y.c2) && close(x.to, y.to);
+    return close(x.to, (y as { to: [number, number] }).to);
+  });
+}
+
+/** Where `layout_image` puts an image of `pxW` × `pxH` pixels into a box with both sides forced: `[x, y, w, h]`
+ *  relative to the box. `cover` and `contain` keep the aspect ratio and centre the image; `stretch` fills the box. */
+export function fitImage(fit: string, width: number, height: number, pxW: number, pxH: number): [number, number, number, number] {
+  const pxRatio = pxW / pxH;
+  const wide = pxRatio > width / height;
+  let w: number, h: number;
+  if (fit === 'cover' || fit === 'contain') { if (wide === (fit === 'contain')) { w = width; h = width / pxRatio; } else { w = height * pxRatio; h = height; } }
+  else if (fit === 'stretch') { w = width; h = height; }
+  else throw new Error(`unknown image fit ${JSON.stringify(fit)} (cover, contain or stretch)`);
+  return [(width - w) / 2, (height - h) / 2, w, h];
+}
 
 // ---------------------------------------------------------------------------------------------------------
 // Fonts: as exported, nothing is parsed from the file
@@ -90,8 +171,12 @@ export class Font {
 // Slot filling
 
 export interface ReferenceGlyph { id: number; x: number; y?: number }
-export interface ReferenceSlot { name: string; baseline: number; size: number; glyphs: ReferenceGlyph[] }
-interface Filled { slot: Slot; items: (Item & { kind: 'text' })[]; trace: ReferenceSlot; node?: number }
+/** For a text slot, its glyphs; for a bar (`<name>#bar`), the absolute path drawn (`ops`) and its box (`rect`);
+ *  for an image slot (`<name>#image`), the rectangle the image was placed in (`rect`). */
+export interface ReferenceSlot { name: string; baseline: number; size: number; glyphs: ReferenceGlyph[]; ops?: PathOp[]; rect?: [number, number, number, number] }
+/** A filled hole: the items to draw, clipped to `rect` (the hole's box), and what was drawn, for the reference check.
+ *  An image slot carries the image's bytes under the key its item refers to, and its alternative text. */
+interface Filled { rect: [number, number, number, number]; items: Item[]; trace: ReferenceSlot; node?: number; image?: { key: string; bytes: Uint8Array }; alt?: string }
 
 function textOf(value: unknown): string {
   if (typeof value === 'string') return value;
@@ -152,7 +237,7 @@ function fillSlot(slot: Slot, text: string, font: Font, traceName: string): Fill
   let pen = x;
   const traceGlyphs = glyphs.map(g => { const at = pen; pen += g.x_advance; return { id: g.id, x: at, y: slot.baseline }; });
   return {
-    slot,
+    rect: [slot.x, slot.y, slot.width, slot.height],
     items: [{ kind: 'text', x, y: slot.baseline, font: slot.font, size, fill: slot.fill, text: shown, glyphs }],
     trace: { name: traceName, baseline: slot.baseline, size, glyphs: traceGlyphs },
   };
@@ -350,7 +435,229 @@ function fillLines(slot: Slot, text: string, font: Font, traceName: string): Fil
     if (glyphs.length) items.push({ kind: 'text', x, y, font: slot.font, size, fill: slot.fill, text: line.text, glyphs });
   });
   // The trace reports the first line's baseline as Typst's frame has it: at the box top when that line is whitespace.
-  return { slot, items, trace: { name: traceName, baseline: ys[0] ?? slot.baseline, size, glyphs: traceGlyphs } };
+  return { rect: [slot.x, slot.y, slot.width, slot.height], items, trace: { name: traceName, baseline: ys[0] ?? slot.baseline, size, glyphs: traceGlyphs } };
+}
+
+// ---------------------------------------------------------------------------------------------------------
+// Structure
+
+// ---------------------------------------------------------------------------------------------------------
+// Bars and image slots
+
+/** A bar: the value's share of `max` (clamped to 0..1) of the hole's width, as Typst's rounded rectangle. */
+function fillBar(bar: Bar, value: number, traceName: string): Filled {
+  const width = Math.min(Math.max(value / bar.max, 0), 1) * bar.width;
+  const geometry = roundedRect(width, bar.height, bar.radius);
+  return {
+    rect: [bar.x, bar.y, bar.width, bar.height],
+    items: [{ kind: 'shape', x: bar.x, y: bar.y, geometry, fill: bar.fill, stroke: null }],
+    trace: { name: `${traceName}#bar`, baseline: 0, size: 0, glyphs: [], ops: opsOf(geometry, bar.x, bar.y), rect: [bar.x, bar.y, width, bar.height] },
+  };
+}
+
+/** An image slot: the data's PNG or JPEG, placed as Typst's `image` places it. Only the header is read here;
+ *  decoding happens when the PDF is written, once per distinct image. */
+function fillImage(slot: ImageSlot, bytes: Uint8Array, alt: string | undefined, traceName: string): Filled {
+  const [pxW, pxH, format] = imageSize(bytes, traceName);
+  const [dx, dy, w, h] = fitImage(slot.fit, slot.width, slot.height, pxW, pxH);
+  const key = `data:${quickHash(bytes)}`;
+  const shown = alt ?? slot.alt ?? undefined;
+  if (!shown) throw new Error(`image slot \`${traceName}\`: no alternative text; PDF/UA needs one: give the value as {src, alt} or the template an \`alt:\``);
+  return {
+    rect: [slot.x, slot.y, slot.width, slot.height],
+    items: [{ kind: 'image', x: slot.x + dx, y: slot.y + dy, width: w, height: h, format, sha256: key }],
+    trace: { name: `${traceName}#image`, baseline: 0, size: 0, glyphs: [], rect: [slot.x + dx, slot.y + dy, w, h] },
+    image: { key, bytes }, alt: shown,
+  };
+}
+
+/** The bytes and alternative text of an image the data supplies: a `data:image/…;base64,…` URL or the bytes
+ *  themselves, or `{ src: <either>, alt: "…" }`. */
+function imageValue(value: unknown, name: string): { bytes: Uint8Array; alt?: string } {
+  let src: unknown = value, alt: string | undefined;
+  if (value && typeof value === 'object' && !(value instanceof Uint8Array)) {
+    const record = value as { src?: unknown; alt?: unknown };
+    src = record.src; alt = typeof record.alt === 'string' ? record.alt : undefined;
+  }
+  if (src instanceof Uint8Array) return { bytes: src, alt };
+  if (typeof src !== 'string') throw new Error(`image slot \`${name}\`: cannot read an image from ${JSON.stringify(value)?.slice(0, 60)}`);
+  const comma = src.indexOf(',');
+  const header = comma < 0 ? '' : src.slice(0, comma);
+  if (!header.startsWith('data:image/') || !header.endsWith(';base64')) throw new Error(`image slot \`${name}\`: the image must be a base64 data URL (data:image/png;base64,…) or bytes, not ${JSON.stringify(src.slice(0, 40))}`);
+  const text = atob(src.slice(comma + 1));
+  const bytes = new Uint8Array(text.length);
+  for (let i = 0; i < text.length; i++) bytes[i] = text.charCodeAt(i);
+  return { bytes, alt };
+}
+
+/** A cheap content key for caching decoded images and sharing one XObject between equal images: two 32-bit
+ *  FNV-1a hashes with different seeds plus the length. */
+function quickHash(bytes: Uint8Array): string {
+  let h1 = 0x811c9dc5, h2 = 0x01000193 ^ 0x7f4a7c15;
+  for (let i = 0; i < bytes.length; i++) {
+    h1 = Math.imul(h1 ^ bytes[i]!, 0x01000193);
+    h2 = Math.imul(h2 ^ bytes[i]!, 0x01000193) ^ (h2 >>> 15);
+  }
+  return `${(h1 >>> 0).toString(16).padStart(8, '0')}${(h2 >>> 0).toString(16).padStart(8, '0')}${bytes.length.toString(16)}`;
+}
+
+// ---------------------------------------------------------------------------------------------------------
+// Images: PNG and JPEG, decoded as far as a PDF needs. Typst's PDF writer (krilla) embeds them the same way:
+// 8-bit grey or RGB samples deflated, the alpha channel as a soft mask when any pixel is not opaque, JPEG data
+// as it is. Inflating and deflating go through the platform's streams, so decoding is asynchronous.
+
+/** An image ready for an image XObject: `data` is the stream (deflated samples, or the JPEG file), `smask` the
+ *  deflated 8-bit alpha when the image has transparency. */
+interface Decoded { width: number; height: number; gray: boolean; dct: boolean; data: Uint8Array; smask?: Uint8Array }
+
+const be32 = (b: Uint8Array, at: number): number => ((b[at]! << 24) | (b[at + 1]! << 16) | (b[at + 2]! << 8) | b[at + 3]!) >>> 0;
+const isPng = (b: Uint8Array): boolean => b.length > 8 && b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4e && b[3] === 0x47 && b[4] === 0x0d && b[5] === 0x0a && b[6] === 0x1a && b[7] === 0x0a;
+const isJpeg = (b: Uint8Array): boolean => b.length > 2 && b[0] === 0xff && b[1] === 0xd8;
+
+function pngChunks(bytes: Uint8Array): { kind: string; data: Uint8Array }[] {
+  const chunks: { kind: string; data: Uint8Array }[] = [];
+  let at = 8;
+  while (at + 8 <= bytes.length) {
+    const len = be32(bytes, at);
+    const kind = String.fromCharCode(bytes[at + 4]!, bytes[at + 5]!, bytes[at + 6]!, bytes[at + 7]!);
+    const start = at + 8, end = start + len;
+    if (end + 4 > bytes.length) throw new Error(`truncated PNG chunk ${kind}`);
+    chunks.push({ kind, data: bytes.subarray(start, end) });
+    if (kind === 'IEND') break;
+    at = end + 4;
+  }
+  return chunks;
+}
+
+/** Pixel size and format ("png" or "jpg") from the header: enough to lay the image out before decoding it. */
+function imageSize(bytes: Uint8Array, what: string): [number, number, string] {
+  if (isPng(bytes)) {
+    const ihdr = pngChunks(bytes).find(c => c.kind === 'IHDR')?.data;
+    if (!ihdr || ihdr.length < 13) throw new Error(`${what}: PNG without a valid IHDR`);
+    return [be32(ihdr, 0), be32(ihdr, 4), 'png'];
+  }
+  if (isJpeg(bytes)) { const [w, h] = jpegHeader(bytes); return [w, h, 'jpg']; }
+  throw new Error(`${what}: not a PNG or JPEG (the file starts with ${[...bytes.subarray(0, 4)].map(b => b.toString(16).padStart(2, '0')).join(' ')})`);
+}
+
+async function inflate(bytes: Uint8Array): Promise<Uint8Array> {
+  const stream = new Blob([bytes as BlobPart]).stream().pipeThrough(new DecompressionStream('deflate'));
+  return new Uint8Array(await new Response(stream).arrayBuffer());
+}
+
+/** 8-bit, non-interlaced PNGs of every colour type; palettes are expanded, a tRNS chunk becomes alpha. */
+async function decodePng(bytes: Uint8Array): Promise<Decoded> {
+  const chunks = pngChunks(bytes);
+  const ihdr = chunks.find(c => c.kind === 'IHDR')?.data;
+  if (!ihdr || ihdr.length < 13) throw new Error('PNG without a valid IHDR');
+  const width = be32(ihdr, 0), height = be32(ihdr, 4), depth = ihdr[8]!, colorType = ihdr[9]!, interlace = ihdr[12]!;
+  if (depth !== 8) throw new Error(`PNG with ${depth}-bit samples is not supported (8-bit only); re-encode it`);
+  if (interlace !== 0) throw new Error('interlaced PNG is not supported; re-encode it without interlacing');
+  const channels = colorType === 0 ? 1 : colorType === 2 ? 3 : colorType === 3 ? 1 : colorType === 4 ? 2 : colorType === 6 ? 4 : 0;
+  if (!channels) throw new Error(`PNG colour type ${colorType} is not supported`);
+  const palette = chunks.find(c => c.kind === 'PLTE')?.data;
+  const trns = chunks.find(c => c.kind === 'tRNS')?.data;
+  const idats = chunks.filter(c => c.kind === 'IDAT').map(c => c.data);
+  const idat = new Uint8Array(idats.reduce((n, d) => n + d.length, 0));
+  idats.reduce((at, d) => { idat.set(d, at); return at + d.length; }, 0);
+  const raw = await inflate(idat);
+  const stride = width * channels;
+  if (raw.length !== (stride + 1) * height) throw new Error(`PNG image data is ${raw.length} bytes, expected ${(stride + 1) * height}`);
+  // Undo the per-row filters (filter method 0: none, sub, up, average, Paeth).
+  const pixels = new Uint8Array(stride * height);
+  for (let y = 0; y < height; y++) {
+    const filter = raw[y * (stride + 1)]!;
+    const rowAt = y * (stride + 1) + 1, outAt = y * stride, prevAt = (y - 1) * stride;
+    for (let i = 0; i < stride; i++) {
+      const a = i >= channels ? pixels[outAt + i - channels]! : 0;
+      const b = y > 0 ? pixels[prevAt + i]! : 0;
+      const c = y > 0 && i >= channels ? pixels[prevAt + i - channels]! : 0;
+      const x = raw[rowAt + i]!;
+      let v: number;
+      if (filter === 0) v = x;
+      else if (filter === 1) v = x + a;
+      else if (filter === 2) v = x + b;
+      else if (filter === 3) v = x + ((a + b) >> 1);
+      else if (filter === 4) { const p = a + b - c, pa = Math.abs(p - a), pb = Math.abs(p - b), pc = Math.abs(p - c); v = x + (pa <= pb && pa <= pc ? a : pb <= pc ? b : c); }
+      else throw new Error(`PNG row ${y} uses unknown filter ${filter}`);
+      pixels[outAt + i] = v & 0xff;
+    }
+  }
+  const n = width * height;
+  let color: Uint8Array, alpha: Uint8Array | undefined, gray = false;
+  if (colorType === 0) {
+    gray = true; color = pixels;
+    if (trns && trns.length >= 2) { const key = trns[1]!; alpha = new Uint8Array(n); for (let i = 0; i < n; i++) alpha[i] = pixels[i] === key ? 0 : 255; }
+  } else if (colorType === 2) {
+    color = pixels;
+    if (trns && trns.length >= 6) { const k = [trns[1], trns[3], trns[5]]; alpha = new Uint8Array(n); for (let i = 0; i < n; i++) alpha[i] = pixels[i * 3] === k[0] && pixels[i * 3 + 1] === k[1] && pixels[i * 3 + 2] === k[2] ? 0 : 255; }
+  } else if (colorType === 3) {
+    if (!palette) throw new Error('palette PNG without PLTE');
+    color = new Uint8Array(n * 3);
+    for (let i = 0; i < n; i++) { const at = pixels[i]! * 3; if (at + 3 > palette.length) throw new Error('PNG palette index out of range'); color[i * 3] = palette[at]!; color[i * 3 + 1] = palette[at + 1]!; color[i * 3 + 2] = palette[at + 2]!; }
+    if (trns) { alpha = new Uint8Array(n); for (let i = 0; i < n; i++) alpha[i] = pixels[i]! < trns.length ? trns[pixels[i]!]! : 255; }
+  } else if (colorType === 4) {
+    gray = true; color = new Uint8Array(n); alpha = new Uint8Array(n);
+    for (let i = 0; i < n; i++) { color[i] = pixels[i * 2]!; alpha[i] = pixels[i * 2 + 1]!; }
+  } else {
+    color = new Uint8Array(n * 3); alpha = new Uint8Array(n);
+    for (let i = 0; i < n; i++) { color[i * 3] = pixels[i * 4]!; color[i * 3 + 1] = pixels[i * 4 + 1]!; color[i * 3 + 2] = pixels[i * 4 + 2]!; alpha[i] = pixels[i * 4 + 3]!; }
+  }
+  const transparent = alpha !== undefined && alpha.some(a => a !== 255);
+  const [data, smask] = await Promise.all([deflate(color), transparent ? deflate(alpha!) : Promise.resolve(undefined)]);
+  return { width, height, gray, dct: false, data, smask };
+}
+
+/** Width, height and component count from a JPEG's frame header. */
+function jpegHeader(bytes: Uint8Array): [number, number, number] {
+  let at = 2;
+  while (at + 4 <= bytes.length) {
+    if (bytes[at] !== 0xff) throw new Error(`malformed JPEG: expected a marker at byte ${at}`);
+    const code = bytes[at + 1]!;
+    if (code === 0xff) { at += 1; continue; }
+    if (code === 0xd8 || code === 0x01 || (code >= 0xd0 && code <= 0xd7)) { at += 2; continue; }
+    const len = (bytes[at + 2]! << 8) | bytes[at + 3]!;
+    if (code === 0xc0 || code === 0xc1 || code === 0xc2) {
+      if (at + 10 > bytes.length) throw new Error('truncated JPEG frame header');
+      if (bytes[at + 4] !== 8) throw new Error(`JPEG with ${bytes[at + 4]}-bit samples is not supported`);
+      return [(bytes[at + 7]! << 8) | bytes[at + 8]!, (bytes[at + 5]! << 8) | bytes[at + 6]!, bytes[at + 9]!];
+    }
+    if (code === 0xc3 || (code >= 0xc5 && code <= 0xc7) || (code >= 0xc9 && code <= 0xcb) || (code >= 0xcd && code <= 0xcf)) throw new Error(`JPEG frame type 0x${code.toString(16)} (lossless, hierarchical or arithmetic coding) is not supported`);
+    if (code === 0xd9 || code === 0xda) break;
+    at += 2 + len;
+  }
+  throw new Error('JPEG without a frame header');
+}
+
+/** Baseline and progressive JPEGs pass through as DCT-encoded data, as in Typst's PDFs. */
+function decodeJpeg(bytes: Uint8Array): Decoded {
+  const [width, height, components] = jpegHeader(bytes);
+  if (components !== 1 && components !== 3) throw new Error(`JPEG with ${components} components (CMYK?) is not supported`);
+  return { width, height, gray: components === 1, dct: true, data: bytes };
+}
+
+async function decodeImage(bytes: Uint8Array): Promise<Decoded> {
+  return isPng(bytes) ? decodePng(bytes) : decodeJpeg(bytes);
+}
+
+/** The image files a document ships (by hash) and a cache of decoded images by key, so that an image used in
+ *  many documents is decoded once per runtime. */
+class Images {
+  private readonly cache = new Map<string, Promise<Decoded>>();
+  private readonly files: Map<string, Uint8Array>;
+  constructor(files: Map<string, Uint8Array>) { this.files = files; }
+
+  /** `bytes` are the image's own bytes for a data-supplied image; a static image is looked up by its hash. */
+  decoded(key: string, bytes?: Uint8Array): Promise<Decoded> {
+    const cached = this.cache.get(key);
+    if (cached) return cached;
+    const source = bytes ?? this.files.get(key);
+    if (!source) return Promise.reject(new Error(`the document draws image ${key}, which was not supplied; pass the files under images/`));
+    const pending = decodeImage(source).catch(error => { this.cache.delete(key); throw new Error(`decoding image ${key.slice(0, 24)}: ${error instanceof Error ? error.message : error}`); });
+    if (this.cache.size >= 256) this.cache.clear();
+    this.cache.set(key, pending);
+    return pending;
+  }
 }
 
 // ---------------------------------------------------------------------------------------------------------
@@ -414,15 +721,24 @@ class Scope {
   private readonly data: unknown;
   private readonly counters: [number, number] | undefined;
   constructor(data: unknown, counters?: [number, number]) { this.data = data; this.counters = counters; }
+  private value(name: string): unknown {
+    const record = this.data as Record<string, unknown> | null;
+    if (!record || typeof record !== 'object' || !(name in record)) throw new Error(`data has no value for slot \`${name}\``);
+    return record[name];
+  }
   text(name: string): string {
     if (this.counters) {
       if (name === 'page-number') return String(this.counters[0]);
       if (name === 'page-count') return String(this.counters[1]);
     }
-    const record = this.data as Record<string, unknown> | null;
-    if (!record || typeof record !== 'object' || !(name in record)) throw new Error(`data has no value for slot \`${name}\``);
-    return textOf(record[name]);
+    return textOf(this.value(name));
   }
+  number(name: string): number {
+    const value = this.value(name);
+    if (typeof value !== 'number' || !Number.isFinite(value)) throw new Error(`bar \`${name}\`: ${JSON.stringify(value)} is not a number`);
+    return value;
+  }
+  image(name: string): { bytes: Uint8Array; alt?: string } { return imageValue(this.value(name), name); }
 }
 
 const clipOps = (w: number, h: number): PathOp[] => [{ op: 'move', to: [0, 0] }, { op: 'line', to: [w, 0] }, { op: 'line', to: [w, h] }, { op: 'line', to: [0, h] }, { op: 'close' }];
@@ -438,6 +754,18 @@ function place(fragment: Fragment, top: number, scope: Scope, fonts: Font[], pre
     filled.node = slot.node == null ? undefined : map[slot.node];
     page.fills.push(filled);
   }
+  for (const bar of fragment.bars ?? []) {
+    const filled = fillBar({ ...bar, x: bar.x + fragment.x, y: bar.y + top }, scope.number(bar.name), `${prefix}${bar.name}`);
+    filled.node = bar.node == null ? undefined : map[bar.node];
+    page.fills.push(filled);
+  }
+  for (const image of fragment.images ?? []) {
+    const { bytes, alt } = scope.image(image.name);
+    const filled = fillImage({ ...image, x: image.x + fragment.x, y: image.y + top }, bytes, alt, `${prefix}${image.name}`);
+    filled.node = image.node == null ? undefined : map[image.node];
+    if (filled.node !== undefined && filled.alt) structure.nodes[filled.node]!.alt = filled.alt;
+    page.fills.push(filled);
+  }
 }
 
 function composeFixed(doc: Document, data: unknown, fonts: Font[], structure: Structure): Composed[] {
@@ -448,6 +776,18 @@ function composeFixed(doc: Document, data: unknown, fonts: Font[], structure: St
     for (const slot of doc.slots.filter(s => s.page === index)) {
       const filled = fillSlot(slot, scope.text(slot.name), fonts[slot.font]!, slot.name);
       filled.node = slot.node == null ? undefined : map[slot.node];
+      composed.fills.push(filled);
+    }
+    for (const bar of (doc.bars ?? []).filter(b => b.page === index)) {
+      const filled = fillBar(bar, scope.number(bar.name), bar.name);
+      filled.node = bar.node == null ? undefined : map[bar.node];
+      composed.fills.push(filled);
+    }
+    for (const image of (doc.images ?? []).filter(i => i.page === index)) {
+      const { bytes, alt } = scope.image(image.name);
+      const filled = fillImage(image, bytes, alt, image.name);
+      filled.node = image.node == null ? undefined : map[image.node];
+      if (filled.node !== undefined && filled.alt) structure.nodes[filled.node]!.alt = filled.alt;
       composed.fills.push(filled);
     }
     return composed;
@@ -604,12 +944,13 @@ class ContentBuilder {
   private ops: string[] = [];
   private open: number | null | undefined = undefined; // undefined: nothing open; null: artifact; number: node
   readonly parents: number[] = [];
-  private warnedImages = false;
   private readonly fonts: Font[];
   private readonly structure: Structure;
   private readonly page: number;
+  /** Image XObject resource name per image key. */
+  private readonly imageNames: Map<string, string>;
 
-  constructor(fonts: Font[], structure: Structure, page: number) { this.fonts = fonts; this.structure = structure; this.page = page; }
+  constructor(fonts: Font[], structure: Structure, page: number, imageNames: Map<string, string>) { this.fonts = fonts; this.structure = structure; this.page = page; this.imageNames = imageNames; }
 
   private ensure(node: number | undefined): void {
     const want = node ?? null;
@@ -668,9 +1009,14 @@ class ContentBuilder {
           this.ops.push(item.fill && s ? 'B' : item.fill ? 'f' : s ? 'S' : 'n', 'Q');
           break;
         }
-        case 'image':
-          if (!this.warnedImages) { console.warn('warning: images are not drawn yet'); this.warnedImages = true; }
+        case 'image': {
+          this.ensure(item.node);
+          const name = this.imageNames.get(item.sha256);
+          if (!name) throw new Error(`image ${item.sha256} was not registered before the page was written`);
+          // The page CTM flips y; this matrix flips the unit square back so the first row is at the top.
+          this.ops.push('q', `${num(item.width)} 0 0 ${num(-item.height)} ${num(item.x)} ${num(item.y + item.height)} cm`, `/${name} Do`, 'Q');
           break;
+        }
       }
     }
   }
@@ -719,7 +1065,14 @@ function usedGlyphs(items: Item[], used: Set<number>[], multi: Map<string, strin
   }
 }
 
-async function writePdf(doc: Document, fonts: Font[], fontStreams: Uint8Array[], pages: Composed[], structure: Structure): Promise<Uint8Array> {
+function imageKeys(items: Item[], out: string[]): void {
+  for (const item of items) {
+    if (item.kind === 'group') imageKeys(item.items, out);
+    else if (item.kind === 'image') out.push(item.sha256);
+  }
+}
+
+async function writePdf(doc: Document, fonts: Font[], fontStreams: Uint8Array[], images: Images, pages: Composed[], structure: Structure): Promise<Uint8Array> {
   const pdf = new PdfWriter();
   const catalog = pdf.alloc(), pagesId = pdf.alloc(), info = pdf.alloc(), metadata = pdf.alloc(), structRoot = pdf.alloc();
   const fontRefs = fonts.map(() => pdf.alloc());
@@ -755,20 +1108,48 @@ async function writePdf(doc: Document, fonts: Font[], fontStreams: Uint8Array[],
     pdf.setStream(toUnicode, '', encoder.encode(toUnicodeCmap(entries)));
   }
 
+  // Image XObjects: the static images by file, the images the data supplied by content; each written once.
+  const wanted = new Map<string, Uint8Array | undefined>();
+  for (const page of pages) {
+    const keys: string[] = [];
+    imageKeys(page.items, keys);
+    for (const key of keys) if (!wanted.has(key)) wanted.set(key, undefined);
+    for (const fill of page.fills) if (fill.image && !wanted.has(fill.image.key)) wanted.set(fill.image.key, fill.image.bytes);
+  }
+  const imageNames = new Map<string, string>();
+  const imageRefs: [string, number][] = [];
+  const decodedAll = await Promise.all([...wanted].map(async ([key, bytes]) => [key, await images.decoded(key, bytes)] as const));
+  for (const [key, decoded] of decodedAll) {
+    const id = pdf.alloc();
+    let mask = '';
+    if (decoded.smask) {
+      const maskId = pdf.alloc();
+      pdf.setStream(maskId, `/Type /XObject /Subtype /Image /Width ${decoded.width} /Height ${decoded.height} /ColorSpace /DeviceGray /BitsPerComponent 8 /Filter /FlateDecode`, decoded.smask);
+      mask = ` /SMask ${maskId} 0 R`;
+    }
+    pdf.setStream(id, `/Type /XObject /Subtype /Image /Width ${decoded.width} /Height ${decoded.height} /ColorSpace /${decoded.gray ? 'DeviceGray' : 'DeviceRGB'} /BitsPerComponent 8 /Filter /${decoded.dct ? 'DCTDecode' : 'FlateDecode'}${mask}`, decoded.data);
+    const name = `Im${imageRefs.length}`;
+    imageRefs.push([name, id]);
+    imageNames.set(key, name);
+  }
+  const xobjects = imageRefs.length ? ` /XObject << ${imageRefs.map(([name, id]) => `/${name} ${id} 0 R`).join(' ')} >>` : '';
+
   // Pages with marked content; each page's parent-tree array is written after the structure elements exist.
   const pageParents: number[][] = [];
   for (let index = 0; index < pages.length; index++) {
     const page = pages[index]!;
-    const builder = new ContentBuilder(fonts, structure, index);
+    const builder = new ContentBuilder(fonts, structure, index, imageNames);
     builder.emit([{ kind: 'group', x: 0, y: 0, transform: [1, 0, 0, -1, 0, page.height], items: page.items }]);
+    // A hole's content is clipped to its box, exactly as Typst clips the box in the baseline document.
     for (const fill of page.fills) {
-      builder.emit([{ kind: 'group', x: 0, y: 0, transform: [1, 0, 0, -1, 0, page.height], clip: [{ op: 'move', to: [fill.slot.x, fill.slot.y] }, { op: 'line', to: [fill.slot.x + fill.slot.width, fill.slot.y] }, { op: 'line', to: [fill.slot.x + fill.slot.width, fill.slot.y + fill.slot.height] }, { op: 'line', to: [fill.slot.x, fill.slot.y + fill.slot.height] }, { op: 'close' }], items: fill.items.map(item => ({ ...item, node: fill.node })) }]);
+      const [x, y, w, h] = fill.rect;
+      builder.emit([{ kind: 'group', x: 0, y: 0, transform: [1, 0, 0, -1, 0, page.height], clip: [{ op: 'move', to: [x, y] }, { op: 'line', to: [x + w, y] }, { op: 'line', to: [x + w, y + h] }, { op: 'line', to: [x, y + h] }, { op: 'close' }], items: fill.items.map(item => (item.kind === 'group' ? item : { ...item, node: fill.node })) }]);
     }
     builder.close();
     pageParents.push(builder.parents);
     const contentId = pdf.alloc();
     pdf.setStream(contentId, '', builder.bytes());
-    pdf.set(pageIds[index]!, `<< /Type /Page /Parent ${pagesId} 0 R /MediaBox [0 0 ${num(page.width)} ${num(page.height)}] /Contents ${contentId} 0 R /StructParents ${index} /Resources << /Font << ${fontRefs.map((r, i) => `/F${i} ${r} 0 R`).join(' ')} >> >> >>`);
+    pdf.set(pageIds[index]!, `<< /Type /Page /Parent ${pagesId} 0 R /MediaBox [0 0 ${num(page.width)} ${num(page.height)}] /Contents ${contentId} 0 R /StructParents ${index} /Resources << /Font << ${fontRefs.map((r, i) => `/F${i} ${r} 0 R`).join(' ')} >>${xobjects} >> >>`);
   }
 
   // Structure tree: only nodes with content below them.
@@ -805,10 +1186,12 @@ export class Runtime {
   private readonly fonts: Font[];
   /** The font programs, compressed once: they are the same in every output. */
   private readonly fontStreams: Uint8Array[];
-  private constructor(document: Document, fonts: Font[], fontStreams: Uint8Array[]) { this.document = document; this.fonts = fonts; this.fontStreams = fontStreams; }
+  private readonly images: Images;
+  private constructor(document: Document, fonts: Font[], fontStreams: Uint8Array[], images: Images) { this.document = document; this.fonts = fonts; this.fontStreams = fontStreams; this.images = images; }
 
-  /** `fonts` are the font files in the document's order; their hashes are checked. */
-  static async create(docJson: string | Uint8Array, fonts: Uint8Array[]): Promise<Runtime> {
+  /** `fonts` are the font files in the document's order; their hashes are checked. `images` are the document's
+   *  image files (any order, matched by hash), needed only when the static content draws images. */
+  static async create(docJson: string | Uint8Array, fonts: Uint8Array[], images: Uint8Array[] = []): Promise<Runtime> {
     const doc: Document = JSON.parse(typeof docJson === 'string' ? docJson : new TextDecoder().decode(docJson));
     if (doc.version !== IR_VERSION) throw new Error(`the document is IR version ${doc.version}, this runtime reads ${IR_VERSION}`);
     if (fonts.length !== doc.fonts.length) throw new Error(`the document lists ${doc.fonts.length} font(s) but ${fonts.length} were supplied`);
@@ -818,13 +1201,21 @@ export class Runtime {
       if (sha !== doc.fonts[i]!.sha256) throw new Error(`${doc.fonts[i]!.file}: sha256 ${sha} does not match the document's ${doc.fonts[i]!.sha256}`);
       parsed.push(new Font(doc.fonts[i]!, fonts[i]!));
     }
-    return new Runtime(doc, parsed, await Promise.all(parsed.map(f => deflate(f.data))));
+    const byHash = new Map<string, Uint8Array>();
+    for (const bytes of images) byHash.set(await sha256Hex(bytes), bytes);
+    const files = new Map<string, Uint8Array>();
+    for (const file of doc.image_files ?? []) {
+      const bytes = byHash.get(file.sha256);
+      if (!bytes) throw new Error(`the document needs image file ${file.file} (sha256 ${file.sha256}), which was not supplied`);
+      files.set(file.sha256, bytes);
+    }
+    return new Runtime(doc, parsed, await Promise.all(parsed.map(f => deflate(f.data))), new Images(files));
   }
 
   async fill(data: unknown): Promise<Output> {
     const structure = new Structure();
     const pages = this.document.flow ? composeFlow(this.document.flow, data, this.fonts, structure) : composeFixed(this.document, data, this.fonts, structure);
-    const pdf = await writePdf(this.document, this.fonts, this.fontStreams, pages, structure);
+    const pdf = await writePdf(this.document, this.fonts, this.fontStreams, this.images, pages, structure);
     return { pdf, trace: pages.flatMap(p => p.fills.map(f => f.trace)), pages: pages.length };
   }
 }
@@ -838,6 +1229,11 @@ export function compare(trace: ReferenceSlot[], reference: ReferenceSlot[]): str
     if (!expected) { problems.push(`${slot.name}: not in the reference`); continue; }
     if (Math.abs(slot.baseline - expected.baseline) > 1e-3) problems.push(`${slot.name}: baseline ${slot.baseline.toFixed(3)} vs ${expected.baseline.toFixed(3)}`);
     if (expected.glyphs.length && Math.abs(slot.size - expected.size) > 1e-3) problems.push(`${slot.name}: size ${slot.size.toFixed(3)} vs ${expected.size.toFixed(3)}`); // an empty value shows no size
+    if (expected.rect) {
+      if (!slot.rect) problems.push(`${slot.name}: the reference has a box, the runtime drew none`);
+      else if (!slot.rect.every((v, i) => Math.abs(v - expected.rect![i]!) <= 1e-3)) problems.push(`${slot.name}: box [${slot.rect.map(num).join(', ')}] vs [${expected.rect.map(num).join(', ')}]`);
+    }
+    if (expected.ops && !(slot.ops && sameOps(slot.ops, expected.ops, 1e-3))) problems.push(`${slot.name}: shape ${JSON.stringify(slot.ops)} vs ${JSON.stringify(expected.ops)}`);
     const ours = slot.glyphs.map(g => g.id).join(','), theirs = expected.glyphs.map(g => g.id).join(',');
     if (ours !== theirs) { problems.push(`${slot.name}: glyphs [${ours}] vs [${theirs}]`); continue; }
     for (let i = 0; i < slot.glyphs.length; i++) {

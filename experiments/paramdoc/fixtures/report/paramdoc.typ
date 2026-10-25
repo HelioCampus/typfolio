@@ -126,3 +126,31 @@
 
 // Per-page content (a footer): drawn on every page; slots named `page-number` and `page-count` are counters.
 #let overlay(body) = box(width: 100%, clip: true)[#metadata((:)) <paramdoc-overlay> #body]
+
+// ---- Parametric geometry and image slots (M9) ----------------------------------------------------------
+// A bar is a hole whose content is one filled rectangle: `value / max` of the hole's width (clamped to 0..1),
+// as tall as the hole, rounded by `radius`. The track is the hole's own fill, static content the exporter keeps;
+// the runtime regenerates the bar's shape with Typst's own rounded-rectangle construction. The bar is
+// decorative (an artifact): print the value as text as well.
+#let bar(name, value, max: 100, width: 100%, height: 7pt, fill: black, track: none, radius: 0pt) = context {
+  let r = radius.to-absolute()
+  let ratio = calc.clamp(float(value) / float(max), 0, 1)
+  box(width: width, height: height, fill: track, radius: r, clip: true)[
+    #metadata((name: name, value: float(value), max: float(max), radius: r.pt())) <paramdoc-bar>
+    #place(top + left, rect(width: ratio * 100%, height: height, fill: fill, radius: r, stroke: none))
+  ]
+}
+
+// An image slot: a fixed box the data fills with a PNG or JPEG, given as a data URL (`data:image/png;base64,…`)
+// or as `(src: …, alt: …)`; the exporter turns data URLs into files for Typst. The image is placed as Typst's
+// `image` with `fit` places it and clipped to the box, and tagged as a Figure with `alt` (the data's `alt` wins),
+// which PDF/UA requires.
+#let image-slot(name, value, width: auto, height: auto, alt: none, fit: "cover") = {
+  // The metadata carries the template's `alt` only; the data's is what Typst shows, and what the runtime shows.
+  let src = if type(value) == dictionary { value.src } else { value }
+  let shown-alt = if type(value) == dictionary { value.at("alt", default: alt) } else { alt }
+  box(width: width, height: height, clip: true)[
+    #metadata((name: name, fit: fit, alt: alt)) <paramdoc-image>
+    #image(src, width: 100%, height: 100%, fit: fit, alt: shown-alt)
+  ]
+}

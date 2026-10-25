@@ -48,7 +48,8 @@ labelled `metadata`; the exporter finds it through the frame's tags and the encl
    rows, optional blocks, row stripes. Exit: a transcript with one-to-three-line titles paginates and matches Typst per variant. ✅
    (2026-10-25; the report stripes and the transcript's optional block too.)
 9. **Parametric geometry and image slots.** A bar whose length is a value; a box the data fills with an image.
-   Exit: the report's score bars are back and match Typst; an image fixture passes veraPDF's Figure rules.
+   Exit: the report's score bars are back and match Typst; an image fixture passes veraPDF's Figure rules. ✅
+   (2026-10-25; bars path-identical and figures pixel-identical to Typst, both runtimes.)
 
 Re-evaluate after each milestone; stop and discuss on critical findings.
 
@@ -128,6 +129,12 @@ certificate, each matching Typst for its variant's sample; long data paginates; 
 
 ### M9: parametric geometry and image slots
 
+Result (2026-10-25): built as designed below with two corrections. The track needed no recording: Typst's box puts
+its fill outside the clip group, so the track is static content and only the inner rectangle is the hole. And the
+bar could not stay an artifact: an untagged bar left its table cell empty and failed PDF/UA's table-regularity
+rule, so bars are content of the node they sit in. The ports of Typst's rounded rectangle and image placement are
+checked against Typst on every compile, fuzz samples included. See the status log.
+
 - `bar(name, value, max: 100, width, height, fill, track, radius)`: a slot whose content is a track rectangle and
   a bar rectangle; the exporter records both and that the bar's width is `value / max` of the track's; the
   runtime draws them. The report gets its score bars back.
@@ -181,6 +188,29 @@ Defaults: fonts from `../../fixtures/fonts`, output under `../../.build/paramdoc
 
 ## Status log
 
+- **M9 bars and image slots (2026-10-25).** `bar(name, value, max:, width:, height:, fill:, track:, radius:)` is a
+  clipped box whose fill is the static track and whose content is one `rect` of `value / max` of the box width;
+  `image-slot(name, value, width:, height:, alt:, fit:)` is a clipped box one `image` fills, the value a data URL
+  or `(src:, alt:)`. IR v7: `Bar` and `ImageSlot` holes beside slots, `ImageFile`s for static raster images, and
+  `ir::geometry` with `rounded_rect` (Typst's `styled_rect` fill curve: radius capped at half the shorter side,
+  one `bezier_arc_control` cubic per corner, a plain rectangle for a declared radius of 0) and `fit_image`
+  (`layout_image` with both sides forced: cover/contain by aspect ratio, centred). The exporter virtualizes data
+  URLs into files for Typst, records the shape inside a bar and the image inside an image slot as hole content,
+  and checks on every compile that Typst's shape equals `rounded_rect` of the metadata's value (1e-6) and that the
+  image sits where `fit_image` puts it; the fuzz feeds random PNGs of random size and colour type. Runtimes draw
+  bars from the port, place images by the port, decode 8-bit PNGs of every colour type (palettes expanded, tRNS to
+  alpha) and pass JPEGs through, embed them as krilla does (soft mask only when some alpha is not 255), draw the
+  static images, cache decodes per runtime, set the Figure's alt from the data and refuse an image without one.
+  Checked: the report's five bars are path-identical to Typst's and the page differs by its known pixel; the
+  figures fixture (canvas RGBA chart with transparency under `cover`, JPEG under `contain`, keyed grey icon under
+  `stretch`, palette logo static; a second data file with a tall PNG, the chart as JPEG and a one-pixel image) is
+  pixel-identical to Typst in both runtimes for both data files; the bar port matched Typst on 30 random value
+  sets and the image port on 40 random image sets; fuzz 0 leaks on every fixture; veraPDF PDF/UA-1 passes; the
+  demo page renders 200 reports with bars; `check.sh` runs 96 checks. One wrong turn: bars tagged as artifacts
+  emptied their table cells (veraPDF 7.2-43); they are cell content now. Open: hyperlinks and SVG images (the
+  rest of the images-and-links item), 16-bit/interlaced PNGs and CMYK JPEGs refused, EXIF orientation and
+  `/Interpolate` not reproduced, left-aligned unstroked bars only, image slots need both sizes, the wasm C ABI
+  takes no image files yet. Notes in `docs/2026-10-25-geometry-and-images.md`.
 - **M8 variants (2026-10-25).** A band declares `variants: n` and a selector; the exporter compiles the fixture
   once more per variant with `sys.inputs.paramdoc-variant = "<band>=<k>"` (every instance forced to k), checks the
   forced document equals the sample outside the bands, re-points the forced fragment's fonts at the sample's

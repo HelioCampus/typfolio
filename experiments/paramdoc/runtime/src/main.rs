@@ -57,11 +57,13 @@ fn bench() -> Result<()> {
     let listed: paramdoc_ir::Document = serde_json::from_slice(&doc_json)?;
     let font_files = listed.fonts.iter().map(|f| fs::read(dir.join("fonts").join(&f.file)).with_context(|| format!("reading font {}", f.file))).collect::<Result<Vec<_>>>()?;
     let fonts: Vec<&[u8]> = font_files.iter().map(|f| f.as_slice()).collect();
+    let image_files = listed.image_files.iter().map(|f| fs::read(dir.join("images").join(&f.file)).with_context(|| format!("reading image {}", f.file))).collect::<Result<Vec<_>>>()?;
+    let images: Vec<&[u8]> = image_files.iter().map(|f| f.as_slice()).collect();
     let values: Vec<serde_json::Value> = serde_json::from_slice(&fs::read(&inputs).with_context(|| format!("reading {}", inputs.display()))?)?;
     let payloads: Vec<Vec<u8>> = values.iter().map(|v| serde_json::to_vec(v).expect("serializable")).collect();
 
     let setup = std::time::Instant::now();
-    let runtime = Runtime::new(&doc_json, &fonts)?;
+    let runtime = Runtime::new(&doc_json, &fonts, &images)?;
     let setup_time = setup.elapsed();
     let mut durations = Vec::with_capacity(payloads.len() * repeat);
     let (mut bytes, mut pages) = (0usize, 0usize);
@@ -96,9 +98,11 @@ fn run() -> Result<()> {
     let data = fs::read(&args.data).with_context(|| format!("reading {}", args.data.display()))?;
     let font_files = listed.fonts.iter().map(|f| fs::read(args.dir.join("fonts").join(&f.file)).with_context(|| format!("reading font {}", f.file))).collect::<Result<Vec<_>>>()?;
     let fonts: Vec<&[u8]> = font_files.iter().map(|f| f.as_slice()).collect();
+    let image_files = listed.image_files.iter().map(|f| fs::read(args.dir.join("images").join(&f.file)).with_context(|| format!("reading image {}", f.file))).collect::<Result<Vec<_>>>()?;
+    let images: Vec<&[u8]> = image_files.iter().map(|f| f.as_slice()).collect();
 
     let started = std::time::Instant::now();
-    let runtime = Runtime::new(&doc_json, &fonts)?;
+    let runtime = Runtime::new(&doc_json, &fonts, &images)?;
     let output = runtime.fill(&data)?;
     let elapsed = started.elapsed();
     fs::write(&args.out, &output.pdf)?;

@@ -47,10 +47,10 @@ Commits, oldest first:
 | `export-documents.sh` | Exports a fixture and copies what a browser runtime needs, `doc.json` and the subset fonts, into `documents/<fixture>/`. |
 | `documents/report/` | The report fixture exported, checked in (152 kB) because the demo page cannot run the exporter at build time. Regenerate after changing the fixture, the dialect or the exporter. |
 | `Cargo.toml`, `Cargo.lock`, `.cargo/config.toml` | Rust workspace; build output goes to `../../.build/paramdoc-target` (gitignored), never in-tree. |
-| `ir/` | The parametric document format (`doc.json`), serde types, version 4. |
+| `ir/` | The parametric document format (`doc.json`), serde types, version 7, plus `geometry`: the ports of Typst's rounded rectangle and image placement both the exporter and the runtimes use. |
 | `export/` | `paramdoc-export`: links Typst 0.15.1 as a library (crates.io), compiles a fixture with sample data, walks the frames, exports the document, subsets fonts, dumps Typst's layout as a reference, fuzzes the data and diffs the contract. |
 | `runtime/` | `paramdoc-runtime`: Rust library + CLI (`fill`, `bench`) + C ABI (`paramdoc_open/render/close`, `paramdoc_fill`) for the wasm32 cdylib build. Depends on pdf-writer, flate2, serde_json, sha2 only. |
-| `ts/runtime.ts`, `ts/cli.ts` | The same runtime in dependency-free erasable TypeScript; Node 22 runs it with `--experimental-strip-types`; esbuild bundles it (16 kB). |
+| `ts/runtime.ts`, `ts/cli.ts` | The same runtime in dependency-free erasable TypeScript; Node 22 runs it with `--experimental-strip-types`; Vite bundles it with the demo's worker into 33 kB minified, 13 kB gzipped (16 kB before images and bars). |
 | `fixtures/*/` | Templates in the slot dialect, each with `paramdoc.typ` (the dialect helper, identical copies), `main.typ`, `data.json`: `certificate` (fixed page), `policies` (overflow policies), `leak` (deliberately broken, must fail the check), `transcript` (flow: table bands, 42-row `data-long.json`), `report` (the worker-batch benchmark's report in the dialect). |
 | `notes/wasm-size-report.md` | Where the 24 MB compiler's bytes go (crate by crate, data blobs, dependency paths). |
 | `notes/bench/` | Scripts: `gen-inputs.mjs` (1000 inputs from the repo's `data.ts`), `bench-wasm.mjs` (Rust wasm in Node), `bench-browser.mjs` (drives the repo's `/performance` page headlessly), `bench-ts.html` + `bench-ts-browser.mjs` (TypeScript runtime in Chromium), `inspect.mjs` (structure via the repo's `inspectPdf`), `ppmdiff.mjs` (pixel diff of two PPMs, used by `check.sh`), `write-all.mjs` (every benchmark input as a PDF, for veraPDF over the set). |
@@ -58,7 +58,7 @@ Commits, oldest first:
 ## How to prove it still works (do this first after any change)
 
 ```sh
-cd experiments/paramdoc && ./check.sh      # 81 checks, a few minutes after the first build; FUZZ=20 ./check.sh is quicker
+cd experiments/paramdoc && ./check.sh      # 96 checks, a few minutes after the first build; FUZZ=20 ./check.sh is quicker
 DEMO_URL=http://127.0.0.1:4190 ./check.sh  # also drives the performance page of a running pretext-hybrid dev server
 ```
 
@@ -67,7 +67,7 @@ against each other, rasterises and compares pixels, compares text extraction, in
 validates every runtime PDF with veraPDF as PDF/UA-1; it also fails when `documents/<fixture>` no longer equals a
 fresh export (the export is byte-deterministic, so this is a plain comparison). Every fixture gets a Typst
 reference for `data.json` and for each other `data-*.json` case (the `wrap` cases, the transcript without
-honours), and `fixtures/wrapfuzz` references for 40 random samples (the exporter's `--fuzz-references`); both
+honours, the figures with other images), and `fixtures/wrapfuzz` references for 40 random samples (the exporter's `--fuzz-references`); both
 runtimes are checked against every one of them, glyph for glyph and pixel for pixel. Tools it cannot find (poppler,
 veraPDF, the dev-tools build, Playwright) are reported as SKIP; anything else that fails fails the script.
 
@@ -123,10 +123,16 @@ declare **variants** (since 2026-10-25): `repeat(..., variants: n, select: ...)`
 compiles the fixture once more per variant with `sys.inputs.paramdoc-variant = "<band>=<k>"`, which forces every
 instance of the band to variant k, and the runtime picks per instance by `("parity",)`, `("flag", key)` or
 `("lines", slot)` (a `lines: auto` slot). In the sample compile `variant(name, natural)` is what the data says, so
-the sample is the runtime's output for the sample data and stays the oracle. Everything
-outside slots must lay out identically for every valid input; the exporter proves it by fuzzing. Slots bind to
-data by name (slot name = data key; rows bind to the array named after the band). The runtime only does trivial
-geometry or picks among things Typst already produced. Bands must use `table`, not `grid`, to get table
+the sample is the runtime's output for the sample data and stays the oracle. A **bar** (since 2026-10-25) is a
+clipped box whose own fill is a static track and whose content is one filled rectangle, `value / max` of the box
+width, which the runtime regenerates with Typst's own rounded-rectangle construction (`ir::geometry::rounded_rect`,
+checked against Typst on every compile); it is tagged as content of the cell it sits in. An **image slot** is a
+clipped box one `image` fills, placed as Typst's `layout_image` places it (`ir::geometry::fit_image`, also checked
+on every compile) and tagged Figure with the data's alternative text; images arrive in the data as data URLs,
+which the exporter turns into files for Typst. Static raster images are shipped as `images/*` next to the fonts.
+Everything outside holes must lay out identically for every valid input; the exporter proves it by fuzzing.
+Holes bind to data by name (hole name = data key; rows bind to the array named after the band). The runtime only
+does geometry Typst's source was ported for, or picks among things Typst already produced. Bands must use `table`, not `grid`, to get table
 semantics in the structure tree. Slot text may only contain characters in the slot's repertoire (`charset:` or
 the default Latin set); the exporter subsets fonts to exactly that plus the static glyphs.
 
@@ -161,8 +167,9 @@ Per report the compiler needs about 5 ms on a warm worker (the same template com
 hidden pane, gave 12.8 s, ten times its real figure, so never compare runs from a hidden tab. All 1000 synthetic
 reports from the same data path, written by the TypeScript runtime (`notes/bench/write-all.mjs`), pass veraPDF
 PDF/UA-1. The exported report is the slot dialect's version of the page's template, so the PDFs differ from the
-compiler's: a static title, a tutor comment of at most three ragged-right lines and no score bars; the page says
-so next to the switch. The row stripes are back since 2026-10-25 (two band variants picked by row parity). The compiler's PDFs are 26 kB, the runtime's 61 kB (the two repertoire subsets embedded whole).
+compiler's: a static title and a tutor comment of at most three ragged-right lines; the page says so next to the
+switch. The row stripes and the score bars are back since 2026-10-25 (two band variants picked by row parity; a
+`bar` hole per row over a static track). The compiler's PDFs are 26 kB, the runtime's 66 kB (the two repertoire subsets embedded whole).
 
 ## Open items, in the order I would do them
 
@@ -174,26 +181,23 @@ profiles (1724 rules) only the PDF 2.0 rules fail: file version 2.0, `pdfuaid:pa
 rule passes, so UA-2 is a metadata change away if it is ever wanted. Typst's own PDFs of the same fixtures fail
 UA-1 on two rules (no `DisplayDocTitle`, no `pdfuaid:part`), as expected for a plain export.
 
-Wrapping text (M7 in `PLAN.md`) and variants (M8) are done (2026-10-25): multi-line slots break lines exactly
-as Typst does, checked on every data case of `fixtures/wrap` and on 300 random texts of `fixtures/wrapfuzz`; rows
-grow with their wrapping slot, blocks appear by a flag and rows stripe by parity, each a Typst layout the runtime
-picks, checked on the transcript and the report. Both runtimes, glyph positions and pixels. See the status log
-in `PLAN.md` and `docs/2026-10-25-*.md` at the repository root.
+Wrapping text (M7 in `PLAN.md`), variants (M8) and bars and image slots (M9) are done (2026-10-25): multi-line
+slots break lines exactly as Typst does, checked on every data case of `fixtures/wrap` and on 300 random texts of
+`fixtures/wrapfuzz`; rows grow with their wrapping slot, blocks appear by a flag and rows stripe by parity, each a
+Typst layout the runtime picks, checked on the transcript and the report; the report's score bars are Typst's
+rounded rectangles regenerated from the data, and `fixtures/figures` fills PNG and JPEG image slots (a canvas chart
+with transparency, a photograph, a keyed icon) and draws a static logo, pixel-identical to Typst. Both runtimes,
+glyph positions, shapes and pixels. See the status log in `PLAN.md` and `docs/2026-10-25-*.md` at the repository root.
 
-1. **Parametric geometry and image slots (M9).** A bar whose length is a value, so the report gets its score bars
-   back, and a box the data fills with a PNG or JPEG, which is how charts arrive (`examples/vite-react` renders
-   them to PNG in the application). Images are otherwise recorded in the IR and not drawn; links (Typst's link
-   items) are dropped at export today; they bring annotations, `/Tabs /S` and the Link structure rules, so run
-   `./check.sh` with veraPDF when they land.
-2. **A Worker wrapper** for the TypeScript runtime as something reusable: the demo page has one (`paramdoc.worker.ts`
+1. **A Worker wrapper** for the TypeScript runtime as something reusable: the demo page has one (`paramdoc.worker.ts`
    and the pool in `batch.ts`), written for that page; moving it under `ts/` with a small API would let other pages
    use it. A compact binary form of `doc.json` if its 87 kB raw (6.5 kB gzip) ever matters.
-3. **Export as a Vite plugin** fed by `defineTemplate`, with the schema's `maxLength` and `pattern` sizing
+2. **Export as a Vite plugin** fed by `defineTemplate`, with the schema's `maxLength` and `pattern` sizing
    slots and setting repertoires. This is where the experiment would meet the real packages; design it with the
    repository's maintainers before writing it.
-4. The Rust runtime still deflates every stream per document, which is why it is slower than the TypeScript
+3. The Rust runtime still deflates every stream per document, which is why it is slower than the TypeScript
    one; writing small streams uncompressed and caching the font streams would even them out.
-5. **Justified wrapping slots.** Every template in this repository justifies its paragraphs; wrapping slots are
+4. **Justified wrapping slots.** Every template in this repository justifies its paragraphs; wrapping slots are
    ragged right because justification means porting Typst's optimized breaker (`linebreak_optimized`: cost
    `(1 + badness + penalty)²` per line with `badness = 100·|ratio|³`, runt and hyphen penalties) and the
    `commit` arithmetic that stretches spaces by up to half their width and shrinks by a third. Looked at on
@@ -202,6 +206,13 @@ in `PLAN.md` and `docs/2026-10-25-*.md` at the repository root.
    a cost unlike Typst's, and it measures through canvas. Port Typst's own arithmetic into both runtimes, keep
    hyphenation off inside slots, and add `justify: true` fixtures to the oracle. Web addresses (`://`, `www.`)
    are refused in wrapping slots for a related reason: Typst breaks links by rules of its own (`linebreak_link`).
+5. **Hyperlinks and SVG images**, the rest of the images-and-links item. Typst's link items are dropped at export;
+   they bring annotations, `/Tabs /S` and the Link structure rules, so run `./check.sh` with veraPDF when they
+   land. SVG images are refused by the exporter (the runtimes have no SVG renderer; the shared header of
+   `examples/vite-react` uses an SVG logo, so a template from there needs the logo rasterized to PNG, or an SVG
+   port of krilla-svg's output). Also unsupported, each with a message: 16-bit, interlaced and sub-8-bit PNGs,
+   CMYK and lossless JPEGs, EXIF orientation, `scaling: "smooth"`; and the wasm C ABI has no parameter for the
+   image files yet.
 
 ## Things that will bite you
 
@@ -242,6 +253,25 @@ in `PLAN.md` and `docs/2026-10-25-*.md` at the repository root.
   `choice`, do not name the variant parameter `v`: it shadows `v()`.
 - **The runtime's selector and the dialect's `natural-variant` must agree** (parity, `== true` for flags, the
   measured line count for lines); a disagreement shows as the runtime differing from the sample reference.
+- **A hole tagged as an artifact can empty its table cell.** Shapes are artifacts unless inside a Figure; a bar
+  tagged that way left its cell with no content, the cell was dropped from the structure, and veraPDF failed the
+  table-regularity rule (7.2-43: rows with fewer cells than the header). Bars are content of the node they sit in
+  (`Bar.node`). Keep that in mind for any new hole kind.
+- **A box's fill sits outside its clip group** (`layout_box` clips first, then prepends the fill), which is why a
+  bar's track is static and its inner `rect` is the hole content; `rect(width: 45%)` inside `place` inside the box
+  resolves against the box width. The exporter compares Typst's curve with `rounded_rect` on every compile, so a
+  Typst change to `styled_rect` would show up as an export error, not as a wrong PDF.
+- **Image slot metadata carries the template's `alt` only.** The data's `alt` goes to `image(alt:)` so Typst's
+  own PDF has it, and the runtime sets it on the Figure at fill time. Putting the data's `alt` in the metadata
+  makes every fuzz sample a "leak" (the node's `alt` changes).
+- **Images in data are data URLs** (`data:image/png;base64,…`, or `(src:, alt:)`); the exporter rewrites them to
+  `/paramdoc-images/<n>.<ext>` files for Typst (`virtualize_images`) and the runtime decodes them. The TypeScript
+  runtime also takes a `Uint8Array`. Image slots need a fixed width and height.
+- **Erasable TypeScript only** in `ts/runtime.ts`: no parameter properties, enums or namespaces; Node's
+  `--experimental-strip-types` refuses them.
+- **The fixture images are generated**, by `notes/make-figure-images.mjs` from the repository root (Chromium via
+  Playwright for the canvas chart, sharp for the JPEG and the tall PNG, hand-written PNGs for the palette logo and
+  the keyed icon). Re-run it rather than editing the data files' base64 by hand.
 - **Running the repo's dev server regenerates `examples/pretext-hybrid/src/routeTree.gen.ts`**; revert it
   before committing.
 - **`pkill -f` with a pattern that appears in your own shell command kills the shell.** Track server PIDs.

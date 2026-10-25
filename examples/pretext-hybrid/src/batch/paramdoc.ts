@@ -1,9 +1,9 @@
 // The paramdoc engine of the batch demo, from the experiment in experiments/paramdoc: Typst typeset the report
 // once at export time into a document with slots (`doc.json` and two subset fonts, checked in under
-// experiments/paramdoc/documents/report), and a runtime of about 16 kB fills the slots and writes each PDF in a
+// experiments/paramdoc/documents/report), and a runtime of about 33 kB (13 kB gzipped) fills the slots and writes each PDF in a
 // Web Worker without a compiler. Its output is tagged PDF/UA-1. The exported report is the slot dialect's version
-// of ./report/main.typ: the same text, boxes and table, but a static title, a tutor comment of up to three lines, no score
-// bars.
+// of ./report/main.typ: the same text, boxes, table and score bars, but a static title and a tutor comment of up to
+// three lines.
 import docUrl from '../../../../experiments/paramdoc/documents/report/doc.json?url';
 import type { ReportInput } from './data.ts';
 

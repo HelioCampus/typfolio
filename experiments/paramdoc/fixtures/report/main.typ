@@ -1,8 +1,8 @@
 // The worker-batch benchmark's progress report (examples/pretext-hybrid/src/batch/report/main.typ) in the slot
 // dialect. Differences from the original, forced by the dialect: the title is static, the tutor comment is at
-// most three ragged-right lines with an ellipsis, there are no score bars, and columns have fixed widths. The
-// alternating row fill is back as two band variants picked by row parity.
-#import "paramdoc.typ": paged, slot, band, repeat, overlay
+// most three ragged-right lines with an ellipsis, and columns have fixed widths. The alternating row fill is
+// two band variants picked by row parity; the score bar is a `bar` hole over a static track.
+#import "paramdoc.typ": paged, slot, band, repeat, overlay, bar
 #let data = json("/data.json")
 
 #let ink = rgb("17211b")
@@ -35,17 +35,18 @@
     ]))
 
 == Courses
-#let cols = (20mm, 1fr, 16mm, 16mm)
-#let cell-style = (stroke: none, inset: (x: 6pt, y: 5pt), align: (left, left, right, center))
+#let cols = (20mm, 1fr, 16mm, 16mm, 32mm)
+#let cell-style = (stroke: none, inset: (x: 6pt, y: 5pt), align: (left, left, right, center, left + horizon))
 #band("courses-header", repeat-on-break: true)[
   #table(columns: cols, ..cell-style,
-    table.header(..([Code], [Title], [Score], [Grade]).map(h => text(size: 8.5pt, fill: muted, h))))
+    table.header(..([Code], [Title], [Score], [Grade], [Score bar]).map(h => text(size: 8.5pt, fill: muted, h))))
 ]
 #repeat("courses", data.courses, (c, v) => table(columns: cols, ..cell-style, fill: if v == 2 { rgb("f5f7f4") },
   slot("code", c.code, width: 100%, max-length: 8),
   slot("title", c.title, width: 100%, max-length: 40, overflow: "ellipsis"),
   slot("score", str(c.score), width: 100%, align: right, max-length: 3),
   slot("grade", c.grade, width: 100%, align: center, max-length: 2, weight: "bold"),
+  bar("score", c.score, max: 100, width: 100%, height: 7pt, fill: accent, track: rgb("e3e8e4"), radius: 2pt),
 ), variants: 2, select: ("parity",))
 
 == Tutor comment

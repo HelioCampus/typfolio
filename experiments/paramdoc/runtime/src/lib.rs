@@ -7,11 +7,13 @@
 //! Library entry point: [`fill`]. The binary in `main.rs` is a thin CLI around it, and `paramdoc_fill` is a
 //! C ABI for a wasm32 build without any binding generator.
 
+use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
-use std::io::Write;
+use std::io::{Read, Write};
+use std::rc::Rc;
 
 use anyhow::{Context, Result, anyhow, bail};
-use flate2::{Compression, write::ZlibEncoder};
+use flate2::{Compression, read::ZlibDecoder, write::ZlibEncoder};
 use pdf_writer::types::{CidFontType, FontFlags, LineCapStyle, LineJoinStyle, StructRole, SystemInfo, TableHeaderScope};
 use pdf_writer::writers::StructTreeRoot;
 use pdf_writer::types::UnicodeCmap;
@@ -79,8 +81,14 @@ fn load_fonts<'a>(doc: &ir::Document, data: &[&'a [u8]]) -> Result<Vec<LoadedFon
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct ReferenceGlyph { pub id: u16, pub x: f64, #[serde(default)] pub y: f64 }
 
+/// For a text slot, its glyphs; for a bar (`<name>#bar`), the absolute path drawn (`ops`) and its box (`rect`);
+/// for an image slot (`<name>#image`), the rectangle the image was placed in (`rect`).
 #[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct ReferenceSlot { pub name: String, pub baseline: f64, pub size: f64, pub glyphs: Vec<ReferenceGlyph> }
+pub struct ReferenceSlot {
+    pub name: String, pub baseline: f64, pub size: f64, pub glyphs: Vec<ReferenceGlyph>,
+    #[serde(default, skip_serializing_if = "Option::is_none")] pub ops: Option<Vec<ir::PathOp>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")] pub rect: Option<[f64; 4]>,
+}
 
 fn text_of(value: &serde_json::Value) -> Result<String> {
     Ok(match value {
@@ -91,8 +99,9 @@ fn text_of(value: &serde_json::Value) -> Result<String> {
     })
 }
 
-/// A filled slot: the text item to draw (clipped to the slot's box) and what was drawn, for the reference check.
-struct Filled { slot: ir::Slot, items: Vec<ir::Item>, trace: ReferenceSlot, node: Option<usize> }
+/// A filled hole: the items to draw, clipped to `rect` (the hole's box), and what was drawn, for the reference
+/// check. An image slot carries the image's bytes under the key its item refers to, and its alternative text.
+struct Filled { rect: [f64; 4], items: Vec<ir::Item>, trace: ReferenceSlot, node: Option<usize>, image: Option<(String, Vec<u8>)>, alt: Option<String> }
 
 /// Lays out one line of slot text: glyphs from the cmap, advances from hmtx, alignment from the slot,
 /// and the slot's overflow policy when the line is wider than the box. `slot` is in absolute coordinates.
@@ -147,9 +156,9 @@ fn fill_slot(slot: &ir::Slot, text: &str, font: &LoadedFont, trace_name: String)
     let mut pen = x;
     let trace_glyphs = glyphs.iter().map(|g| { let at = pen; pen += g.x_advance; ReferenceGlyph { id: g.id, x: at, y: slot.baseline } }).collect();
     Ok(Filled {
-        slot: slot.clone(),
+        rect: [slot.x, slot.y, slot.width, slot.height], image: None, alt: None,
         items: vec![ir::Item::Text { x, y: slot.baseline, font: slot.font, size, fill: slot.fill, text: shown, glyphs, node: None }],
-        trace: ReferenceSlot { name: trace_name, baseline: slot.baseline, size, glyphs: trace_glyphs },
+        trace: ReferenceSlot { name: trace_name, baseline: slot.baseline, size, glyphs: trace_glyphs, ops: None, rect: None },
         node: None,
     })
 }
@@ -385,7 +394,237 @@ fn fill_lines(slot: &ir::Slot, text: &str, font: &LoadedFont, trace_name: String
     }
     // The trace reports the first line's baseline as Typst's frame has it: at the box top when that line is whitespace.
     let baseline = ys.first().copied().unwrap_or(slot.baseline);
-    Ok(Filled { slot: slot.clone(), items, trace: ReferenceSlot { name: trace_name, baseline, size, glyphs: trace_glyphs }, node: None })
+    Ok(Filled { rect: [slot.x, slot.y, slot.width, slot.height], items, trace: ReferenceSlot { name: trace_name, baseline, size, glyphs: trace_glyphs, ops: None, rect: None }, node: None, image: None, alt: None })
+}
+
+// ---------------------------------------------------------------------------------------------------------
+// Bars and image slots
+
+/// A bar: the value's share of `max` (clamped to 0..1) of the hole's width, as Typst's rounded rectangle.
+fn fill_bar(bar: &ir::Bar, value: f64, trace_name: String) -> Filled {
+    let width = (value / bar.max).clamp(0.0, 1.0) * bar.width;
+    let geometry = ir::geometry::rounded_rect(width, bar.height, bar.radius);
+    let ops = ir::geometry::ops_of(&geometry, bar.x, bar.y);
+    Filled {
+        rect: [bar.x, bar.y, bar.width, bar.height],
+        items: vec![ir::Item::Shape { x: bar.x, y: bar.y, geometry, fill: Some(bar.fill), stroke: None, node: None }],
+        trace: ReferenceSlot { name: format!("{trace_name}#bar"), baseline: 0.0, size: 0.0, glyphs: Vec::new(), ops: Some(ops), rect: Some([bar.x, bar.y, width, bar.height]) },
+        node: None, image: None, alt: None,
+    }
+}
+
+/// An image slot: the data's PNG or JPEG, placed as Typst's `image` places it. Only the header is read here;
+/// decoding happens when the PDF is written, once per distinct image.
+fn fill_image(slot: &ir::ImageSlot, bytes: Vec<u8>, alt: Option<String>, trace_name: String) -> Result<Filled> {
+    let (px_w, px_h, format) = image_size(&bytes).with_context(|| format!("image slot `{trace_name}`"))?;
+    let [dx, dy, w, h] = ir::geometry::fit_image(&slot.fit, slot.width, slot.height, px_w as f64, px_h as f64).map_err(|e| anyhow!("image slot `{trace_name}`: {e}"))?;
+    let key = format!("data:{:x}", Sha256::digest(&bytes));
+    let alt = alt.or_else(|| slot.alt.clone());
+    if alt.as_deref().is_none_or(str::is_empty) { bail!("image slot `{trace_name}`: no alternative text; PDF/UA needs one: give the value as (src, alt) or the template an `alt:`"); }
+    Ok(Filled {
+        rect: [slot.x, slot.y, slot.width, slot.height],
+        items: vec![ir::Item::Image { x: slot.x + dx, y: slot.y + dy, width: w, height: h, format: format.to_string(), sha256: key.clone(), node: None }],
+        trace: ReferenceSlot { name: format!("{trace_name}#image"), baseline: 0.0, size: 0.0, glyphs: Vec::new(), ops: None, rect: Some([slot.x + dx, slot.y + dy, w, h]) },
+        node: None, image: Some((key, bytes)), alt,
+    })
+}
+
+/// The bytes and alternative text of an image the data supplies: a `data:image/…;base64,…` URL, or
+/// `{ "src": <that>, "alt": "…" }`.
+fn image_value(value: &serde_json::Value, name: &str) -> Result<(Vec<u8>, Option<String>)> {
+    let (src, alt) = match value {
+        serde_json::Value::String(s) => (s.as_str(), None),
+        serde_json::Value::Object(map) => (
+            map.get("src").and_then(|v| v.as_str()).ok_or_else(|| anyhow!("image slot `{name}`: the value has no `src` string"))?,
+            map.get("alt").and_then(|v| v.as_str()).map(str::to_string),
+        ),
+        other => bail!("image slot `{name}`: cannot read an image from {other}"),
+    };
+    let payload = src.strip_prefix("data:").and_then(|r| r.split_once(',')).filter(|(h, _)| h.starts_with("image/") && h.ends_with(";base64")).map(|(_, p)| p)
+        .ok_or_else(|| anyhow!("image slot `{name}`: the image must be a base64 data URL (data:image/png;base64,…), not {:?}", src.chars().take(40).collect::<String>()))?;
+    Ok((base64_decode(payload).with_context(|| format!("image slot `{name}`"))?, alt))
+}
+
+fn base64_decode(text: &str) -> Result<Vec<u8>> {
+    let mut out = Vec::with_capacity(text.len() * 3 / 4);
+    let (mut buffer, mut bits) = (0u32, 0u32);
+    for c in text.bytes() {
+        let v = match c {
+            b'A'..=b'Z' => c - b'A', b'a'..=b'z' => c - b'a' + 26, b'0'..=b'9' => c - b'0' + 52,
+            b'+' | b'-' => 62, b'/' | b'_' => 63, b'=' | b'\n' | b'\r' | b' ' => continue,
+            other => bail!("invalid base64 character {:?}", other as char),
+        };
+        buffer = (buffer << 6) | v as u32;
+        bits += 6;
+        if bits >= 8 { bits -= 8; out.push((buffer >> bits) as u8); buffer &= (1 << bits) - 1; }
+    }
+    Ok(out)
+}
+
+// ---------------------------------------------------------------------------------------------------------
+// Images: PNG and JPEG, decoded as far as a PDF needs. Typst's PDF writer (krilla) embeds them the same way:
+// 8-bit grey or RGB samples deflated, the alpha channel as a soft mask when any pixel is not opaque, JPEG data
+// as it is. So an image placed by the runtime renders as Typst's does.
+
+/// An image ready for an image XObject: `data` is the stream (deflated samples, or the JPEG file), `smask` the
+/// deflated 8-bit alpha when the image has transparency.
+struct Decoded { width: u32, height: u32, gray: bool, dct: bool, data: Vec<u8>, smask: Option<Vec<u8>> }
+
+/// The image files a document ships (by hash) and a cache of decoded images by key, so that an image used in
+/// many documents is decoded once per runtime.
+struct Images<'a> { files: HashMap<String, &'a [u8]>, cache: RefCell<HashMap<String, Rc<Decoded>>> }
+
+impl Images<'_> {
+    /// `bytes` are the image's own bytes for a data-supplied image; a static image is looked up by its hash.
+    fn decoded(&self, key: &str, bytes: Option<&[u8]>) -> Result<Rc<Decoded>> {
+        if let Some(d) = self.cache.borrow().get(key) { return Ok(d.clone()); }
+        let bytes = match bytes {
+            Some(b) => b,
+            None => *self.files.get(key).ok_or_else(|| anyhow!("the document draws image {key}, which was not supplied; pass the files under images/"))?,
+        };
+        let decoded = Rc::new(decode_image(bytes).with_context(|| format!("decoding image {}", &key[..key.len().min(24)]))?);
+        let mut cache = self.cache.borrow_mut();
+        if cache.len() >= 256 { cache.clear(); }
+        cache.insert(key.to_string(), decoded.clone());
+        Ok(decoded)
+    }
+}
+
+fn be32(b: &[u8], at: usize) -> u32 { u32::from_be_bytes([b[at], b[at + 1], b[at + 2], b[at + 3]]) }
+
+/// Pixel size and format ("png" or "jpg") from the header: enough to lay the image out before decoding it.
+fn image_size(bytes: &[u8]) -> Result<(u32, u32, &'static str)> {
+    if bytes.starts_with(&[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A]) {
+        let ihdr = png_chunks(bytes)?.into_iter().find(|(kind, _)| kind == b"IHDR").map(|(_, d)| d).ok_or_else(|| anyhow!("PNG without IHDR"))?;
+        if ihdr.len() < 13 { bail!("PNG IHDR is too short"); }
+        Ok((be32(ihdr, 0), be32(ihdr, 4), "png"))
+    } else if bytes.starts_with(&[0xFF, 0xD8]) {
+        let (width, height, _) = jpeg_header(bytes)?;
+        Ok((width, height, "jpg"))
+    } else {
+        bail!("not a PNG or JPEG (the file starts with {:02x?})", &bytes[..bytes.len().min(4)])
+    }
+}
+
+fn decode_image(bytes: &[u8]) -> Result<Decoded> {
+    if image_size(bytes)?.2 == "png" { decode_png(bytes) } else { decode_jpeg(bytes) }
+}
+
+fn png_chunks(bytes: &[u8]) -> Result<Vec<([u8; 4], &[u8])>> {
+    let mut chunks = Vec::new();
+    let mut at = 8;
+    while at + 8 <= bytes.len() {
+        let len = be32(bytes, at) as usize;
+        let kind = [bytes[at + 4], bytes[at + 5], bytes[at + 6], bytes[at + 7]];
+        let (start, end) = (at + 8, at + 8 + len);
+        if end + 4 > bytes.len() { bail!("truncated PNG chunk {}", String::from_utf8_lossy(&kind)); }
+        chunks.push((kind, &bytes[start..end]));
+        if &kind == b"IEND" { break; }
+        at = end + 4;
+    }
+    Ok(chunks)
+}
+
+/// 8-bit, non-interlaced PNGs of every colour type; palettes are expanded, a tRNS chunk becomes alpha.
+fn decode_png(bytes: &[u8]) -> Result<Decoded> {
+    let chunks = png_chunks(bytes)?;
+    let ihdr = chunks.iter().find(|(k, _)| k == b"IHDR").map(|(_, d)| *d).ok_or_else(|| anyhow!("PNG without IHDR"))?;
+    if ihdr.len() < 13 { bail!("PNG IHDR is too short"); }
+    let (width, height, depth, color_type, interlace) = (be32(ihdr, 0), be32(ihdr, 4), ihdr[8], ihdr[9], ihdr[12]);
+    if depth != 8 { bail!("PNG with {depth}-bit samples is not supported (8-bit only); re-encode it"); }
+    if interlace != 0 { bail!("interlaced PNG is not supported; re-encode it without interlacing"); }
+    let channels = match color_type { 0 => 1, 2 => 3, 3 => 1, 4 => 2, 6 => 4, other => bail!("PNG colour type {other} is not supported") };
+    let palette = chunks.iter().find(|(k, _)| k == b"PLTE").map(|(_, d)| *d);
+    let trns = chunks.iter().find(|(k, _)| k == b"tRNS").map(|(_, d)| *d);
+    let mut idat = Vec::new();
+    for (k, d) in &chunks { if k == b"IDAT" { idat.extend_from_slice(d); } }
+    let mut raw = Vec::new();
+    ZlibDecoder::new(idat.as_slice()).read_to_end(&mut raw).context("inflating PNG image data")?;
+    let stride = width as usize * channels;
+    if raw.len() != (stride + 1) * height as usize { bail!("PNG image data is {} bytes, expected {}", raw.len(), (stride + 1) * height as usize); }
+    // Undo the per-row filters (filter method 0: none, sub, up, average, Paeth).
+    let mut pixels = vec![0u8; stride * height as usize];
+    for y in 0..height as usize {
+        let filter = raw[y * (stride + 1)];
+        let row = &raw[y * (stride + 1) + 1..(y + 1) * (stride + 1)];
+        let (before, current) = pixels.split_at_mut(y * stride);
+        let prev: &[u8] = if y == 0 { &[] } else { &before[(y - 1) * stride..] };
+        let out = &mut current[..stride];
+        for i in 0..stride {
+            let a = if i >= channels { out[i - channels] } else { 0 };
+            let b = if y > 0 { prev[i] } else { 0 };
+            let c = if y > 0 && i >= channels { prev[i - channels] } else { 0 };
+            let x = row[i];
+            out[i] = match filter {
+                0 => x,
+                1 => x.wrapping_add(a),
+                2 => x.wrapping_add(b),
+                3 => x.wrapping_add(((a as u16 + b as u16) / 2) as u8),
+                4 => {
+                    let p = a as i16 + b as i16 - c as i16;
+                    let (pa, pb, pc) = ((p - a as i16).abs(), (p - b as i16).abs(), (p - c as i16).abs());
+                    x.wrapping_add(if pa <= pb && pa <= pc { a } else if pb <= pc { b } else { c })
+                }
+                other => bail!("PNG row {y} uses unknown filter {other}"),
+            };
+        }
+    }
+    let (mut color, mut alpha): (Vec<u8>, Vec<u8>) = (Vec::new(), Vec::new());
+    let gray = match color_type {
+        0 => {
+            color = pixels;
+            if let Some(t) = trns && t.len() >= 2 { let key = t[1]; alpha = color.iter().map(|&g| if g == key { 0 } else { 255 }).collect(); }
+            true
+        }
+        2 => {
+            color = pixels;
+            if let Some(t) = trns && t.len() >= 6 { let key = [t[1], t[3], t[5]]; alpha = color.chunks_exact(3).map(|p| if p == key { 0 } else { 255 }).collect(); }
+            false
+        }
+        3 => {
+            let palette = palette.ok_or_else(|| anyhow!("palette PNG without PLTE"))?;
+            for &i in &pixels { let i = i as usize * 3; color.extend_from_slice(palette.get(i..i + 3).ok_or_else(|| anyhow!("PNG palette index out of range"))?); }
+            if let Some(t) = trns { alpha = pixels.iter().map(|&i| t.get(i as usize).copied().unwrap_or(255)).collect(); }
+            false
+        }
+        4 => { for p in pixels.chunks_exact(2) { color.push(p[0]); alpha.push(p[1]); } true }
+        _ => { for p in pixels.chunks_exact(4) { color.extend_from_slice(&p[..3]); alpha.push(p[3]); } false }
+    };
+    let smask = if alpha.iter().any(|&a| a != 255) { Some(deflate(&alpha)) } else { None };
+    Ok(Decoded { width, height, gray, dct: false, data: deflate(&color), smask })
+}
+
+/// Width, height and component count from a JPEG's frame header.
+fn jpeg_header(bytes: &[u8]) -> Result<(u32, u32, u8)> {
+    let mut at = 2;
+    while at + 4 <= bytes.len() {
+        if bytes[at] != 0xFF { bail!("malformed JPEG: expected a marker at byte {at}"); }
+        let code = bytes[at + 1];
+        if code == 0xFF { at += 1; continue; }
+        if code == 0xD8 || code == 0x01 || (0xD0..=0xD7).contains(&code) { at += 2; continue; }
+        let len = u16::from_be_bytes([bytes[at + 2], bytes[at + 3]]) as usize;
+        match code {
+            0xC0 | 0xC1 | 0xC2 => {
+                if at + 10 > bytes.len() { bail!("truncated JPEG frame header"); }
+                if bytes[at + 4] != 8 { bail!("JPEG with {}-bit samples is not supported", bytes[at + 4]); }
+                let height = u16::from_be_bytes([bytes[at + 5], bytes[at + 6]]) as u32;
+                let width = u16::from_be_bytes([bytes[at + 7], bytes[at + 8]]) as u32;
+                return Ok((width, height, bytes[at + 9]));
+            }
+            0xC3 | 0xC5..=0xC7 | 0xC9..=0xCB | 0xCD..=0xCF => bail!("JPEG frame type {code:#x} (lossless, hierarchical or arithmetic coding) is not supported"),
+            0xD9 | 0xDA => break,
+            _ => {}
+        }
+        at += 2 + len;
+    }
+    bail!("JPEG without a frame header")
+}
+
+/// Baseline and progressive JPEGs pass through as DCT-encoded data, as in Typst's PDFs.
+fn decode_jpeg(bytes: &[u8]) -> Result<Decoded> {
+    let (width, height, components) = jpeg_header(bytes)?;
+    let gray = match components { 1 => true, 3 => false, other => bail!("JPEG with {other} components (CMYK?) is not supported") };
+    Ok(Decoded { width, height, gray, dct: true, data: bytes.to_vec(), smask: None })
 }
 
 // ---------------------------------------------------------------------------------------------------------
@@ -461,6 +700,17 @@ struct Composed { width: f64, height: f64, items: Vec<ir::Item>, fills: Vec<Fill
 struct Scope<'a> { data: &'a serde_json::Value, counters: Option<(usize, usize)> }
 
 impl Scope<'_> {
+    fn value(&self, name: &str) -> Result<&serde_json::Value> { self.data.get(name).ok_or_else(|| anyhow!("data has no value for slot `{name}`")) }
+
+    fn number(&self, name: &str) -> Result<f64> {
+        match self.value(name)? {
+            serde_json::Value::Number(n) => n.as_f64().ok_or_else(|| anyhow!("bar `{name}`: {n} is not a number")),
+            other => bail!("bar `{name}`: {other} is not a number"),
+        }
+    }
+
+    fn image(&self, name: &str) -> Result<(Vec<u8>, Option<String>)> { image_value(self.value(name)?, name) }
+
     fn text(&self, name: &str) -> Result<String> {
         if let Some((number, count)) = self.counters {
             if name == "page-number" { return Ok(number.to_string()); }
@@ -501,6 +751,22 @@ fn place(fragment: &ir::Fragment, top: f64, scope: &Scope, fonts: &[LoadedFont],
         filled.node = slot.node.and_then(|n| map.get(n).copied().flatten());
         page.fills.push(filled);
     }
+    for bar in &fragment.bars {
+        let mut absolute = bar.clone();
+        absolute.x += fragment.x; absolute.y += top;
+        let mut filled = fill_bar(&absolute, scope.number(&bar.name)?, format!("{prefix}{}", bar.name));
+        filled.node = bar.node.and_then(|n| map.get(n).copied().flatten());
+        page.fills.push(filled);
+    }
+    for image in &fragment.images {
+        let mut absolute = image.clone();
+        absolute.x += fragment.x; absolute.y += top;
+        let (bytes, alt) = scope.image(&image.name)?;
+        let mut filled = fill_image(&absolute, bytes, alt, format!("{prefix}{}", image.name))?;
+        filled.node = image.node.and_then(|n| map.get(n).copied().flatten());
+        if let (Some(n), Some(alt)) = (filled.node, &filled.alt) { structure.nodes[n].alt = Some(alt.clone()); }
+        page.fills.push(filled);
+    }
     Ok(())
 }
 
@@ -515,6 +781,18 @@ fn compose_fixed(doc: &ir::Document, data: &serde_json::Value, fonts: &[LoadedFo
         for slot in doc.slots.iter().filter(|s| s.page == index) {
             let mut filled = fill_slot(slot, &scope.text(&slot.name)?, &fonts[slot.font], slot.name.clone())?;
             filled.node = slot.node.and_then(|n| map.get(n).copied().flatten());
+            composed.fills.push(filled);
+        }
+        for bar in doc.bars.iter().filter(|b| b.page == index) {
+            let mut filled = fill_bar(bar, scope.number(&bar.name)?, bar.name.clone());
+            filled.node = bar.node.and_then(|n| map.get(n).copied().flatten());
+            composed.fills.push(filled);
+        }
+        for image in doc.images.iter().filter(|i| i.page == index) {
+            let (bytes, alt) = scope.image(&image.name)?;
+            let mut filled = fill_image(image, bytes, alt, image.name.clone())?;
+            filled.node = image.node.and_then(|n| map.get(n).copied().flatten());
+            if let (Some(n), Some(alt)) = (filled.node, &filled.alt) { structure.nodes[n].alt = Some(alt.clone()); }
             composed.fills.push(filled);
         }
         pages.push(composed);
@@ -635,7 +913,8 @@ fn compose_flow(flow: &ir::Flow, data: &serde_json::Value, fonts: &[LoadedFont],
 
 struct Writer<'a> {
     fonts: &'a [LoadedFont<'a>],
-    warned_images: bool,
+    /// Image XObject resource name per image key.
+    image_names: &'a HashMap<String, String>,
     structure: &'a mut Structure,
     /// The page being written and, per marked-content id on it, the node it belongs to (the parent tree).
     page: usize,
@@ -755,8 +1034,14 @@ impl Writer<'_> {
                     }
                     content.restore_state();
                 }
-                ir::Item::Image { .. } => {
-                    if !self.warned_images { eprintln!("warning: images are not drawn yet"); self.warned_images = true; }
+                ir::Item::Image { x, y, width, height, sha256, node, .. } => {
+                    self.ensure(content, *node);
+                    let name = self.image_names.get(sha256).expect("every image was registered before the pages were written");
+                    // The page CTM flips y; this matrix flips the unit square back so the first row is at the top.
+                    content.save_state();
+                    content.transform([*width as f32, 0.0, 0.0, -(*height as f32), *x as f32, (*y + *height) as f32]);
+                    content.x_object(Name(name.as_bytes()));
+                    content.restore_state();
                 }
             }
         }
@@ -805,7 +1090,17 @@ fn xmp(title: Option<&str>) -> String {
         "</rdf:Description></rdf:RDF></x:xmpmeta>\n<?xpacket end=\"w\"?>"), title)
 }
 
-fn write_pdf(doc: &ir::Document, fonts: &[LoadedFont], pages: &[Composed], structure: &mut Structure) -> Result<Vec<u8>> {
+fn image_keys(items: &[ir::Item], out: &mut Vec<String>) {
+    for item in items {
+        match item {
+            ir::Item::Group { items, .. } => image_keys(items, out),
+            ir::Item::Image { sha256, .. } => out.push(sha256.clone()),
+            _ => {}
+        }
+    }
+}
+
+fn write_pdf(doc: &ir::Document, fonts: &[LoadedFont], images: &Images, pages: &[Composed], structure: &mut Structure) -> Result<Vec<u8>> {
     let mut pdf = Pdf::new();
     pdf.set_version(1, 7);
     let mut next = 1;
@@ -892,7 +1187,40 @@ fn write_pdf(doc: &ir::Document, fonts: &[LoadedFont], pages: &[Composed], struc
         stream.finish();
     }
 
-    let mut writer = Writer { fonts, warned_images: false, structure, page: 0, parents: Vec::new(), open: None };
+    // Image XObjects: the static images by file, the images the data supplied by content; each written once.
+    let mut image_names: HashMap<String, String> = HashMap::new();
+    let mut image_refs: Vec<(String, Ref)> = Vec::new();
+    let mut wanted: Vec<(String, Option<&[u8]>)> = Vec::new();
+    for page in pages {
+        let mut keys = Vec::new();
+        image_keys(&page.items, &mut keys);
+        wanted.extend(keys.into_iter().map(|k| (k, None)));
+        for fill in &page.fills { if let Some((key, bytes)) = &fill.image { wanted.push((key.clone(), Some(bytes.as_slice()))); } }
+    }
+    for (key, bytes) in wanted {
+        if image_names.contains_key(&key) { continue; }
+        let decoded = images.decoded(&key, bytes)?;
+        let id = alloc();
+        let mask = decoded.smask.as_ref().map(|_| alloc());
+        if let (Some(mask), Some(data)) = (mask, &decoded.smask) {
+            let mut m = pdf.image_xobject(mask, data);
+            m.filter(Filter::FlateDecode);
+            m.width(decoded.width as i32).height(decoded.height as i32).bits_per_component(8);
+            m.color_space().device_gray();
+            m.finish();
+        }
+        let mut x = pdf.image_xobject(id, &decoded.data);
+        x.filter(if decoded.dct { Filter::DctDecode } else { Filter::FlateDecode });
+        x.width(decoded.width as i32).height(decoded.height as i32).bits_per_component(8);
+        if decoded.gray { x.color_space().device_gray(); } else { x.color_space().device_rgb(); }
+        if let Some(mask) = mask { x.s_mask(mask); }
+        x.finish();
+        let name = format!("Im{}", image_refs.len());
+        image_refs.push((name.clone(), id));
+        image_names.insert(key, name);
+    }
+
+    let mut writer = Writer { fonts, image_names: &image_names, structure, page: 0, parents: Vec::new(), open: None };
     let mut page_parents: Vec<Vec<usize>> = Vec::new();
     for (index, page) in pages.iter().enumerate() {
         writer.page = index;
@@ -902,14 +1230,17 @@ fn write_pdf(doc: &ir::Document, fonts: &[LoadedFont], pages: &[Composed], struc
         content.transform([1.0, 0.0, 0.0, -1.0, 0.0, page.height as f32]);
         writer.emit(&mut content, &page.items);
         writer.close(&mut content);
-        // Slot text is clipped to its box, exactly as Typst clips the box in the baseline document.
+        // A hole's content is clipped to its box, exactly as Typst clips the box in the baseline document.
         for fill in &page.fills {
             content.save_state();
-            content.rect(fill.slot.x as f32, fill.slot.y as f32, fill.slot.width as f32, fill.slot.height as f32);
+            let [x, y, w, h] = fill.rect;
+            content.rect(x as f32, y as f32, w as f32, h as f32);
             content.clip_nonzero();
             content.end_path();
             let mut items = fill.items.clone();
-            for item in &mut items { if let ir::Item::Text { node, .. } = item { *node = fill.node; } }
+            for item in &mut items {
+                match item { ir::Item::Text { node, .. } | ir::Item::Shape { node, .. } | ir::Item::Image { node, .. } => *node = fill.node, ir::Item::Group { .. } => {} }
+            }
             writer.emit(&mut content, &items);
             writer.close(&mut content);
             content.restore_state();
@@ -923,6 +1254,11 @@ fn write_pdf(doc: &ir::Document, fonts: &[LoadedFont], pages: &[Composed], struc
         let mut font_dict = resources.fonts();
         for (i, font_ref) in font_refs.iter().enumerate() { font_dict.pair(Name(format!("F{i}").as_bytes()), *font_ref); }
         font_dict.finish();
+        if !image_refs.is_empty() {
+            let mut xobjects = resources.x_objects();
+            for (name, id) in &image_refs { xobjects.pair(Name(name.as_bytes()), *id); }
+            xobjects.finish();
+        }
         resources.finish();
         page_obj.finish();
     }
@@ -975,16 +1311,23 @@ fn write_pdf(doc: &ir::Document, fonts: &[LoadedFont], pages: &[Composed], struc
 /// A filled document: the PDF, what was drawn into every slot (for the reference check), the page count.
 pub struct Output { pub pdf: Vec<u8>, pub trace: Vec<ReferenceSlot>, pub pages: usize }
 
-/// A parsed document with its fonts, ready to be filled many times.
-pub struct Runtime<'a> { doc: ir::Document, fonts: Vec<LoadedFont<'a>> }
+/// A parsed document with its fonts and image files, ready to be filled many times.
+pub struct Runtime<'a> { doc: ir::Document, fonts: Vec<LoadedFont<'a>>, images: Images<'a> }
 
 impl<'a> Runtime<'a> {
-    /// `fonts` are the font files in the document's order.
-    pub fn new(doc_json: &[u8], fonts: &[&'a [u8]]) -> Result<Self> {
+    /// `fonts` are the font files in the document's order; `images` the document's image files (any order,
+    /// matched by hash), needed only when the static content draws images.
+    pub fn new(doc_json: &[u8], fonts: &[&'a [u8]], images: &[&'a [u8]]) -> Result<Self> {
         let doc: ir::Document = serde_json::from_slice(doc_json).context("parsing the document")?;
         if doc.version != ir::VERSION { bail!("the document is IR version {}, this runtime reads {}", doc.version, ir::VERSION); }
         let fonts = load_fonts(&doc, fonts)?;
-        Ok(Self { doc, fonts })
+        let by_hash: HashMap<String, &'a [u8]> = images.iter().map(|bytes| (format!("{:x}", Sha256::digest(bytes)), *bytes)).collect();
+        let mut files = HashMap::new();
+        for file in &doc.image_files {
+            let bytes = by_hash.get(&file.sha256).ok_or_else(|| anyhow!("the document needs image file {} (sha256 {}), which was not supplied", file.file, file.sha256))?;
+            files.insert(file.sha256.clone(), *bytes);
+        }
+        Ok(Self { doc, fonts, images: Images { files, cache: RefCell::new(HashMap::new()) } })
     }
 
     pub fn document(&self) -> &ir::Document { &self.doc }
@@ -996,15 +1339,16 @@ impl<'a> Runtime<'a> {
             Some(flow) => compose_flow(flow, &data, &self.fonts, &mut structure)?,
             None => compose_fixed(&self.doc, &data, &self.fonts, &mut structure)?,
         };
-        let pdf = write_pdf(&self.doc, &self.fonts, &pages, &mut structure)?;
+        let pdf = write_pdf(&self.doc, &self.fonts, &self.images, &pages, &mut structure)?;
         let trace = pages.iter().flat_map(|p| p.fills.iter().map(|f| f.trace.clone())).collect();
         Ok(Output { pdf, trace, pages: pages.len() })
     }
 }
 
 /// Fills `doc_json` (an exported document) with `data_json`; `fonts` are the font files in the document's order.
+/// A document whose static content draws images needs [`Runtime::new`] with the image files.
 pub fn fill(doc_json: &[u8], fonts: &[&[u8]], data_json: &[u8]) -> Result<Output> {
-    Runtime::new(doc_json, fonts)?.fill(data_json)
+    Runtime::new(doc_json, fonts, &[])?.fill(data_json)
 }
 
 /// Differences between what the runtime drew and Typst's own layout of the same data.
@@ -1017,6 +1361,16 @@ pub fn compare(trace: &[ReferenceSlot], reference: &[ReferenceSlot]) -> Vec<Stri
         if !expected.glyphs.is_empty() && (slot.size - expected.size).abs() > 1e-3 { problems.push(format!("{}: size {:.3} vs Typst {:.3}", slot.name, slot.size, expected.size)); } // an empty value shows no size
         let ours: Vec<u16> = slot.glyphs.iter().map(|g| g.id).collect();
         let theirs: Vec<u16> = expected.glyphs.iter().map(|g| g.id).collect();
+        if let Some(rect) = &expected.rect {
+            match &slot.rect {
+                Some(ours) if ours.iter().zip(rect).all(|(a, b)| (a - b).abs() <= 1e-3) => {}
+                Some(ours) => problems.push(format!("{}: box {ours:?} vs Typst {rect:?}", slot.name)),
+                None => problems.push(format!("{}: Typst has a box, the runtime drew none", slot.name)),
+            }
+        }
+        if let Some(ops) = &expected.ops && !slot.ops.as_deref().is_some_and(|ours| ir::geometry::same_ops(ours, ops, 1e-3)) {
+            problems.push(format!("{}: shape {:?} vs Typst {ops:?}", slot.name, slot.ops));
+        }
         if ours != theirs { problems.push(format!("{}: glyphs {ours:?} vs Typst {theirs:?}", slot.name)); continue; }
         for (i, (a, b)) in slot.glyphs.iter().zip(&expected.glyphs).enumerate() {
             if (a.x - b.x).abs() > 1e-3 { problems.push(format!("{}: glyph {i} (id {}) at x {:.4} vs Typst {:.4}", slot.name, a.id, a.x, b.x)); break; }
@@ -1064,7 +1418,7 @@ pub mod ffi {
         let doc = unsafe { std::slice::from_raw_parts(doc, doc_len) };
         let owned: Vec<Vec<u8>> = unsafe { font_slices(fonts, font_count) }.into_iter().map(|f| f.to_vec()).collect();
         let slices: Vec<&'static [u8]> = owned.iter().map(|f| unsafe { std::slice::from_raw_parts(f.as_ptr(), f.len()) }).collect();
-        match super::Runtime::new(doc, &slices) {
+        match super::Runtime::new(doc, &slices, &[]) {
             Ok(runtime) => Box::into_raw(Box::new(Opened { runtime, _fonts: owned })),
             Err(error) => { unsafe { *err = into_buffer(format!("{error:#}").into_bytes(), err_len); } std::ptr::null_mut() }
         }

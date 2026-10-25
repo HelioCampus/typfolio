@@ -20,7 +20,7 @@ use typst::pdf::{ArtifactElem, PdfMarkerTag, PdfMarkerTagKind, TableCellKind, Ta
 use typst::syntax::{FileId, RootedPath, Source, VirtualPath, VirtualRoot};
 use typst::text::{Font, FontBook, TextItem};
 use typst::utils::{LazyHash, PicoStr};
-use typst::visualize::{Curve, CurveItem, FixedStroke, Geometry, Image, ImageElem, ImageKind, Paint, Shape};
+use typst::visualize::{Curve, CurveItem, ExchangeFormat, FixedStroke, Geometry, Image, ImageElem, ImageKind, Paint, RasterFormat, Shape};
 use typst::{Library, LibraryExt, World, WorldExt};
 use typst_layout::PagedDocument;
 use typst_pdf::PdfOptions;
@@ -54,7 +54,10 @@ impl MemWorld {
             let bytes = fs::read(&path).with_context(|| format!("reading {}", path.display()))?;
             files.insert(file_id(&format!("/{rel}"))?, Bytes::new(bytes));
         }
-        files.insert(file_id("/data.json")?, Bytes::new(data.to_vec()));
+        // Images arrive in the data as data URLs; Typst reads files, so each becomes one under /paramdoc-images/.
+        let (data, images) = virtualize_images(data)?;
+        files.insert(file_id("/data.json")?, Bytes::new(data));
+        for (path, bytes) in images { files.insert(file_id(&path)?, Bytes::new(bytes)); }
         let fonts: Vec<Font> = fonts.iter().map(|f| f.font.clone()).collect();
         Ok(Self {
             library: LazyHash::new(match forced {
@@ -98,6 +101,68 @@ fn walk_files(dir: &Path) -> Result<Vec<PathBuf>> {
     }
     out.sort();
     Ok(out)
+}
+
+/// Replaces every `data:image/…;base64,…` string in the JSON data with the path of a virtual file holding the
+/// decoded bytes, so that the sample compiles from the same data the runtime gets.
+fn virtualize_images(data: &[u8]) -> Result<(Vec<u8>, Vec<(String, Vec<u8>)>)> {
+    let mut value: serde_json::Value = serde_json::from_slice(data).context("parsing the data")?;
+    fn walk(value: &mut serde_json::Value, images: &mut Vec<(String, Vec<u8>)>) -> Result<()> {
+        match value {
+            serde_json::Value::String(s) if s.starts_with("data:image/") => {
+                let (ext, bytes) = decode_data_url(s)?;
+                let path = format!("/paramdoc-images/{}.{ext}", images.len());
+                images.push((path.clone(), bytes));
+                *s = path;
+            }
+            serde_json::Value::Array(items) => for item in items { walk(item, images)?; },
+            serde_json::Value::Object(map) => for item in map.values_mut() { walk(item, images)?; },
+            _ => {}
+        }
+        Ok(())
+    }
+    let mut images = Vec::new();
+    walk(&mut value, &mut images)?;
+    Ok((serde_json::to_vec(&value)?, images))
+}
+
+/// The extension and bytes of a `data:image/png;base64,…` or `data:image/jpeg;base64,…` URL.
+fn decode_data_url(url: &str) -> Result<(&'static str, Vec<u8>)> {
+    let rest = url.strip_prefix("data:").ok_or_else(|| anyhow!("not a data URL"))?;
+    let (header, payload) = rest.split_once(',').ok_or_else(|| anyhow!("data URL without a comma"))?;
+    let (mime, encoding) = header.split_once(';').unwrap_or((header, ""));
+    if encoding != "base64" { bail!("data URL is not base64-encoded: {header}"); }
+    let ext = match mime { "image/png" => "png", "image/jpeg" | "image/jpg" => "jpg", other => bail!("unsupported image type {other} (PNG or JPEG)") };
+    Ok((ext, base64_decode(payload)?))
+}
+
+fn base64_decode(text: &str) -> Result<Vec<u8>> {
+    let mut out = Vec::with_capacity(text.len() * 3 / 4);
+    let (mut buffer, mut bits) = (0u32, 0u32);
+    for c in text.bytes() {
+        let v = match c {
+            b'A'..=b'Z' => c - b'A', b'a'..=b'z' => c - b'a' + 26, b'0'..=b'9' => c - b'0' + 52,
+            b'+' | b'-' => 62, b'/' | b'_' => 63, b'=' | b'\n' | b'\r' | b' ' => continue,
+            other => bail!("invalid base64 character {:?}", other as char),
+        };
+        buffer = (buffer << 6) | v as u32;
+        bits += 6;
+        if bits >= 8 { bits -= 8; out.push((buffer >> bits) as u8); buffer &= (1 << bits) - 1; }
+    }
+    Ok(out)
+}
+
+fn base64_encode(bytes: &[u8]) -> String {
+    const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
+    for chunk in bytes.chunks(3) {
+        let n = (chunk[0] as u32) << 16 | (chunk.get(1).copied().unwrap_or(0) as u32) << 8 | chunk.get(2).copied().unwrap_or(0) as u32;
+        out.push(TABLE[(n >> 18) as usize & 63] as char);
+        out.push(TABLE[(n >> 12) as usize & 63] as char);
+        out.push(if chunk.len() > 1 { TABLE[(n >> 6) as usize & 63] as char } else { '=' });
+        out.push(if chunk.len() > 2 { TABLE[n as usize & 63] as char } else { '=' });
+    }
+    out
 }
 
 fn load_fonts(dir: &Path) -> Result<Vec<LoadedFont>> {
@@ -228,14 +293,29 @@ fn shape_bbox(abs: Point, s: &Shape) -> Rect {
     Rect { x: pt(abs.x) + pt(b.min.x), y: pt(abs.y) + pt(b.min.y), w: pt(b.max.x - b.min.x), h: pt(b.max.y - b.min.y) }
 }
 
-fn image_item(pos: Point, image: &Image, size: Size, node: Option<usize>) -> ir::Item {
-    let (format, sha256) = match image.kind() {
-        ImageKind::Raster(raster) => (format!("{:?}", raster.format()).to_ascii_lowercase(), hex(&Sha256::digest(raster.data()))),
-        ImageKind::Svg(_) => ("svg".to_string(), String::new()),
-        ImageKind::Pdf(_) => ("pdf".to_string(), String::new()),
-    };
-    ir::Item::Image { x: pt(pos.x), y: pt(pos.y), width: pt(size.x), height: pt(size.y), format, sha256, node }
+/// The format, pixel size and bytes of a raster image the runtimes can draw: PNG or JPEG.
+fn raster_of(image: &Image) -> Result<(&'static str, u32, u32, &Bytes)> {
+    match image.kind() {
+        ImageKind::Raster(raster) => {
+            let format = match raster.format() {
+                RasterFormat::Exchange(ExchangeFormat::Png) => "png",
+                RasterFormat::Exchange(ExchangeFormat::Jpg) => "jpg",
+                other => bail!("unsupported image format {other:?}: the runtimes draw PNG and JPEG"),
+            };
+            Ok((format, raster.width(), raster.height(), raster.data()))
+        }
+        ImageKind::Svg(_) => bail!("SVG images are not supported: the runtimes have no SVG renderer; rasterize the image to PNG"),
+        ImageKind::Pdf(_) => bail!("embedded PDF images are not supported"),
+    }
 }
+
+/// A static raster image's bytes, written next to the document as `images/<sha256 prefix>.<ext>`.
+struct ImageBytes { format: &'static str, width: u32, height: u32, bytes: Vec<u8> }
+
+fn image_files_of(images: &BTreeMap<String, ImageBytes>) -> Vec<ir::ImageFile> {
+    images.iter().map(|(sha, i)| ir::ImageFile { sha256: sha.clone(), file: format!("{}.{}", &sha[..16], i.format), format: i.format.to_string(), width: i.width, height: i.height }).collect()
+}
+
 
 fn shift(item: &mut ir::Item, dx: f64, dy: f64) {
     match item {
@@ -263,10 +343,12 @@ fn renumber(items: &mut [ir::Item], map: &HashMap<usize, usize>) {
 
 /// The part of the page's structure a fragment uses (its items' and slots' nodes and their ancestors), as a
 /// local node list; the items and slots are renumbered to it. Parents keep coming before children.
-fn localize(items: &mut [ir::Item], slots: &mut [ir::Slot], nodes: &[ir::Node]) -> Vec<ir::Node> {
+fn localize(items: &mut [ir::Item], holes: &mut HoleSet, nodes: &[ir::Node]) -> Vec<ir::Node> {
     let mut used = BTreeSet::new();
     node_refs(items, &mut used);
-    for slot in slots.iter() { if let Some(n) = slot.node { used.insert(n); } }
+    for slot in holes.slots.iter() { if let Some(n) = slot.node { used.insert(n); } }
+    for bar in holes.bars.iter() { if let Some(n) = bar.node { used.insert(n); } }
+    for image in holes.images.iter() { if let Some(n) = image.node { used.insert(n); } }
     let mut all = BTreeSet::new();
     for &n in &used {
         let mut current = Some(n);
@@ -275,7 +357,9 @@ fn localize(items: &mut [ir::Item], slots: &mut [ir::Slot], nodes: &[ir::Node]) 
     let order: Vec<usize> = all.into_iter().collect();
     let map: HashMap<usize, usize> = order.iter().enumerate().map(|(i, &n)| (n, i)).collect();
     renumber(items, &map);
-    for slot in slots.iter_mut() { slot.node = slot.node.and_then(|n| map.get(&n).copied()); }
+    for slot in holes.slots.iter_mut() { slot.node = slot.node.and_then(|n| map.get(&n).copied()); }
+    for bar in holes.bars.iter_mut() { bar.node = bar.node.and_then(|n| map.get(&n).copied()); }
+    for image in holes.images.iter_mut() { image.node = image.node.and_then(|n| map.get(&n).copied()); }
     order.iter().map(|&n| ir::Node { role: nodes[n].role.clone(), parent: nodes[n].parent.map(|p| map[&p]), alt: nodes[n].alt.clone(), scope: nodes[n].scope.clone() }).collect()
 }
 
@@ -285,26 +369,43 @@ fn localize(items: &mut [ir::Item], slots: &mut [ir::Slot], nodes: &[ir::Node]) 
 struct SlotMeta { name: String, align: String, overflow: String, max_length: Option<u32>, descent: f64, charset: Option<String>, lines: u32, line_height: f64, pitch: f64, auto_lines: Option<u32> }
 struct TextStyle { font: usize, size: f64, fill: ir::Color, pen_x: f64 }
 struct SlotRecord { meta: SlotMeta, page: usize, rect: Rect, style: Option<TextStyle>, sample: String, baselines: Vec<f64>, glyphs: Vec<(u16, f64, f64)>, node: Option<usize> }
+struct BarMeta { name: String, value: f64, max: f64, radius: f64 }
+/// `shapes` are the shapes Typst drew inside the bar's box, in absolute coordinates: the bar itself.
+struct BarRecord { meta: BarMeta, page: usize, rect: Rect, shapes: Vec<ir::Item>, node: Option<usize> }
+struct ImageMeta { name: String, fit: String, alt: Option<String> }
+/// `placed` is the image Typst put inside the box: its absolute rectangle, pixel size and format.
+struct ImageRecord { meta: ImageMeta, page: usize, rect: Rect, placed: Option<(Rect, u32, u32, &'static str)>, node: Option<usize> }
+/// The hole records of a compile, borrowed together while the frames are walked.
+struct Records<'r> { slots: &'r mut Vec<SlotRecord>, bars: &'r mut Vec<BarRecord>, images: &'r mut Vec<ImageRecord> }
+/// What the frame being walked is inside of: a hole's clipped box, or none.
+#[derive(Clone, Copy, PartialEq)]
+enum Inside { Nothing, Slot(usize), Bar(usize), Image(usize) }
 struct BandTag { name: String, repeat_on_break: bool, page: usize, rect: Rect, variants: u32, select: Option<ir::Select>, variant: Option<u32>, single: bool }
 struct OverlayTag { page: usize, rect: Rect }
 struct Margins { top: f64, bottom: f64, left: f64, right: f64 }
 
 #[derive(Default)]
-struct Tags { slots: Vec<SlotRecord>, bands: Vec<BandTag>, overlays: Vec<OverlayTag>, pages: Option<Margins> }
+struct Tags { slots: Vec<SlotRecord>, bars: Vec<BarRecord>, images: Vec<ImageRecord>, bands: Vec<BandTag>, overlays: Vec<OverlayTag>, pages: Option<Margins> }
 
 /// What Typst itself laid out inside a slot for some data: the runtime compares its own output with this.
 #[derive(serde::Serialize)]
 pub struct ReferenceGlyph { pub id: u16, pub x: f64, pub y: f64 }
 
+/// For a text slot, its glyphs; for a bar, the absolute path of the shape Typst drew (`ops`) and its box
+/// (`rect`); for an image slot, the rectangle the image was placed in (`rect`).
 #[derive(serde::Serialize)]
-pub struct ReferenceSlot { pub name: String, pub baseline: f64, pub size: f64, pub glyphs: Vec<ReferenceGlyph>, pub font: String }
+pub struct ReferenceSlot {
+    pub name: String, pub baseline: f64, pub size: f64, pub glyphs: Vec<ReferenceGlyph>, pub font: String,
+    #[serde(skip_serializing_if = "Option::is_none")] pub ops: Option<Vec<ir::PathOp>>,
+    #[serde(skip_serializing_if = "Option::is_none")] pub rect: Option<[f64; 4]>,
+}
 
 /// A top-level piece of the sample page after flattening: a leaf item, or a clipped/transformed group.
 struct Atom { rect: Rect, item: ir::Item, kind: AtomKind }
 
 enum AtomKind { Static, Band { name: String, repeat_on_break: bool, variants: u32, select: Option<ir::Select>, variant: Option<u32>, single: bool }, Overlay }
 
-struct Labels { slot: Label, band: Label, overlay: Label, pages: Label }
+struct Labels { slot: Label, band: Label, overlay: Label, pages: Label, bar: Label, image: Label }
 
 /// An element whose start tag was seen and whose end tag was not: what the content in between belongs to.
 struct Open { location: Location, node: Option<usize>, artifact: bool }
@@ -319,6 +420,8 @@ struct Exporter<'a> {
     nodes: Vec<ir::Node>,
     table_rows: HashMap<(usize, usize), usize>,
     lang: Option<String>,
+    /// Static raster images by hash, for the document's image files.
+    images: BTreeMap<String, ImageBytes>,
 }
 
 fn dict_number(dict: &typst::foundations::Dict, key: &str) -> Result<f64> {
@@ -335,8 +438,8 @@ impl<'a> Exporter<'a> {
         let label = |name: &str| Label::new(PicoStr::intern(name)).ok_or_else(|| anyhow!("empty label"));
         Ok(Self {
             fonts, ir_fonts: Vec::new(), ir_font_of: HashMap::new(),
-            labels: Labels { slot: label("paramdoc-slot")?, band: label("paramdoc-band")?, overlay: label("paramdoc-overlay")?, pages: label("paramdoc-pages")? },
-            stack: Vec::new(), nodes: Vec::new(), table_rows: HashMap::new(), lang: None,
+            labels: Labels { slot: label("paramdoc-slot")?, band: label("paramdoc-band")?, overlay: label("paramdoc-overlay")?, pages: label("paramdoc-pages")?, bar: label("paramdoc-bar")?, image: label("paramdoc-image")? },
+            stack: Vec::new(), nodes: Vec::new(), table_rows: HashMap::new(), lang: None, images: BTreeMap::new(),
         })
     }
 
@@ -478,6 +581,32 @@ impl<'a> Exporter<'a> {
         Ok(SlotMeta { name, align: string("align")?, overflow: string("overflow")?, max_length, descent: dict_number(dict, "descent")?, charset, lines, line_height, pitch, auto_lines })
     }
 
+    fn bar_meta(&self, value: &Value) -> Result<BarMeta> {
+        let Value::Dict(dict) = value else { bail!("bar metadata is not a dictionary: {value:?}") };
+        let name = match dict.get("name") { Ok(Value::Str(s)) => s.as_str().to_string(), other => bail!("bar metadata `name` is not a string: {other:?}") };
+        let (value, max, radius) = (dict_number(dict, "value")?, dict_number(dict, "max")?, dict_number(dict, "radius")?);
+        if !(max > 0.0) { bail!("bar `{name}`: `max` must be positive"); }
+        if radius < 0.0 { bail!("bar `{name}`: `radius` must not be negative"); }
+        Ok(BarMeta { name, value, max, radius })
+    }
+
+    fn image_meta(&self, value: &Value) -> Result<ImageMeta> {
+        let Value::Dict(dict) = value else { bail!("image slot metadata is not a dictionary: {value:?}") };
+        let string = |key: &str| -> Result<String> {
+            match dict.get(key) { Ok(Value::Str(s)) => Ok(s.as_str().to_string()), other => bail!("image slot metadata `{key}` is not a string: {other:?}") }
+        };
+        let alt = match dict.get("alt") { Ok(Value::Str(s)) => Some(s.as_str().to_string()), Ok(Value::None) | Err(_) => None, other => bail!("image slot metadata `alt` is not a string: {other:?}") };
+        Ok(ImageMeta { name: string("name")?, fit: string("fit")?, alt })
+    }
+
+    /// A static image item; its bytes are kept for the document's image files.
+    fn image_item(&mut self, pos: Point, image: &Image, size: Size, node: Option<usize>) -> Result<ir::Item> {
+        let (format, width, height, bytes) = raster_of(image)?;
+        let sha256 = hex(&Sha256::digest(bytes));
+        self.images.entry(sha256.clone()).or_insert_with(|| ImageBytes { format, width, height, bytes: bytes.to_vec() });
+        Ok(ir::Item::Image { x: pt(pos.x), y: pt(pos.y), width: pt(size.x), height: pt(size.y), format: format.to_string(), sha256, node })
+    }
+
     fn rect_of(&self, t: Transform, size: Size) -> Result<Rect> {
         if !is_translation(t) { bail!("a clipped group with a non-translation transform is not supported yet: {t:?}"); }
         let origin = apply(t, Point::zero());
@@ -523,6 +652,14 @@ impl<'a> Exporter<'a> {
                         };
                         if variants > 1 && select.is_none() { bail!("band `{name}` has {variants} variants but no `select`"); }
                         tags.bands.push(BandTag { name, repeat_on_break, page, rect, variants, select, variant, single });
+                    } else if label == self.labels.bar {
+                        let meta = self.bar_meta(value()?)?;
+                        let rect = clipped.ok_or_else(|| anyhow!("bar `{}` is not inside a clipped box", meta.name))?;
+                        tags.bars.push(BarRecord { meta, page, rect, shapes: Vec::new(), node: None });
+                    } else if label == self.labels.image {
+                        let meta = self.image_meta(value()?)?;
+                        let rect = clipped.ok_or_else(|| anyhow!("image slot `{}` is not inside a clipped box", meta.name))?;
+                        tags.images.push(ImageRecord { meta, page, rect, placed: None, node: None });
                     } else if label == self.labels.overlay {
                         let rect = clipped.ok_or_else(|| anyhow!("overlay is not inside a clipped box"))?;
                         tags.overlays.push(OverlayTag { page, rect });
@@ -537,45 +674,90 @@ impl<'a> Exporter<'a> {
         Ok(())
     }
 
-    /// Pass 2: static items of a frame, relative to the frame. Everything inside a slot's clipped box is
-    /// dynamic: its text only informs the slot's style and is otherwise dropped. Membership is by frame
-    /// hierarchy, not geometry, so a run that starts exactly at a slot's edge is never mistaken for slot content.
-    fn export_frame(&mut self, page: usize, frame: &Frame, acc: Transform, slots: &mut [SlotRecord], current: Option<usize>) -> Result<Vec<ir::Item>> {
+    /// The hole a clipped group at `rect` is, if any.
+    fn inside_of(records: &Records, page: usize, rect: &Rect) -> Inside {
+        if let Some(i) = records.slots.iter().position(|s| s.page == page && s.rect.same(rect)) { return Inside::Slot(i); }
+        if let Some(i) = records.bars.iter().position(|b| b.page == page && b.rect.same(rect)) { return Inside::Bar(i); }
+        if let Some(i) = records.images.iter().position(|b| b.page == page && b.rect.same(rect)) { return Inside::Image(i); }
+        Inside::Nothing
+    }
+
+    /// Pass 2: static items of a frame, relative to the frame. Everything inside a hole's clipped box is
+    /// dynamic and is not exported: a slot's text only informs the slot's style, a bar's shape and an image
+    /// slot's image only inform the contract checks. Membership is by frame hierarchy, not geometry, so a run
+    /// that starts exactly at a slot's edge is never mistaken for slot content.
+    fn export_frame(&mut self, page: usize, frame: &Frame, acc: Transform, records: &mut Records, current: Inside) -> Result<Vec<ir::Item>> {
         let mut items = Vec::new();
         for (pos, item) in frame.items() {
             match item {
                 FrameItem::Group(group) => {
                     let t = child_transform(acc, *pos, group.transform);
                     let mut inside = current;
-                    if group.clip.is_some() {
-                        let rect = self.rect_of(t, group.frame.size())?;
-                        if let Some(index) = slots.iter().position(|s| s.page == page && s.rect.same(&rect)) { inside = Some(index); }
+                    if group.clip.is_some() && current == Inside::Nothing {
+                        inside = Self::inside_of(records, page, &self.rect_of(t, group.frame.size())?);
                     }
-                    let inner = self.export_frame(page, &group.frame, t, slots, inside)?;
+                    let inner = self.export_frame(page, &group.frame, t, records, inside)?;
                     items.push(ir::Item::Group { x: pt(pos.x), y: pt(pos.y), transform: matrix(group.transform), clip: group.clip.as_ref().map(curve_ops), items: inner });
                 }
                 FrameItem::Text(text) => {
-                    if let Some(index) = current {
-                        let abs = apply(acc, *pos);
-                        let font = self.font_id(text.font.font())?;
-                        let slot = &mut slots[index];
-                        if slot.style.is_none() { slot.style = Some(TextStyle { font, size: pt(text.size), fill: color(&text.fill)?, pen_x: pt(abs.x) }); }
-                        if !slot.baselines.iter().any(|b| (b - pt(abs.y)).abs() < 1e-6) { slot.baselines.push(pt(abs.y)); }
-                        slot.sample.push_str(&text.text);
-                        let mut pen = pt(abs.x);
-                        for g in &text.glyphs {
-                            slot.glyphs.push((g.id, pen + pt(g.x_offset.at(text.size)), pt(abs.y)));
-                            pen += pt(g.x_advance.at(text.size));
+                    match current {
+                        Inside::Slot(index) => {
+                            let abs = apply(acc, *pos);
+                            let font = self.font_id(text.font.font())?;
+                            let slot = &mut records.slots[index];
+                            if slot.style.is_none() { slot.style = Some(TextStyle { font, size: pt(text.size), fill: color(&text.fill)?, pen_x: pt(abs.x) }); }
+                            if !slot.baselines.iter().any(|b| (b - pt(abs.y)).abs() < 1e-6) { slot.baselines.push(pt(abs.y)); }
+                            slot.sample.push_str(&text.text);
+                            let mut pen = pt(abs.x);
+                            for g in &text.glyphs {
+                                slot.glyphs.push((g.id, pen + pt(g.x_offset.at(text.size)), pt(abs.y)));
+                                pen += pt(g.x_advance.at(text.size));
+                            }
+                            continue;
                         }
-                        continue;
+                        Inside::Bar(i) => bail!("bar `{}` contains text", records.bars[i].meta.name),
+                        Inside::Image(i) => bail!("image slot `{}` contains text", records.images[i].meta.name),
+                        Inside::Nothing => {}
                     }
                     items.push(self.text_item(*pos, text)?);
                 }
-                FrameItem::Shape(s, _) => { let node = self.nearest(self.content_node(), "Figure"); items.push(shape_item(*pos, s, node)?) }
-                FrameItem::Image(image, size, _) => { let node = self.content_node(); items.push(image_item(*pos, image, *size, node)) }
+                FrameItem::Shape(s, _) => {
+                    match current {
+                        Inside::Bar(i) => {
+                            // The bar is its cell's content (a table cell with nothing tagged in it would be dropped).
+                            let node = self.content_node();
+                            records.bars[i].shapes.push(shape_item(apply(acc, *pos), s, None)?);
+                            records.bars[i].node = node;
+                            continue;
+                        }
+                        Inside::Image(i) => bail!("image slot `{}` contains a shape", records.images[i].meta.name),
+                        _ => {}
+                    }
+                    let node = self.nearest(self.content_node(), "Figure");
+                    items.push(shape_item(*pos, s, node)?)
+                }
+                FrameItem::Image(image, size, _) => {
+                    match current {
+                        Inside::Image(i) => {
+                            let node = self.content_node();
+                            let (format, w, h, _) = raster_of(image)?;
+                            let abs = apply(acc, *pos);
+                            let record = &mut records.images[i];
+                            if record.placed.is_some() { bail!("image slot `{}` contains two images", record.meta.name); }
+                            record.placed = Some((Rect { x: pt(abs.x), y: pt(abs.y), w: pt(size.x), h: pt(size.y) }, w, h, format));
+                            record.node = node;
+                            continue;
+                        }
+                        Inside::Bar(i) => bail!("bar `{}` contains an image", records.bars[i].meta.name),
+                        Inside::Slot(i) => bail!("slot `{}` contains an image; use an image slot", records.slots[i].meta.name),
+                        Inside::Nothing => {}
+                    }
+                    let node = self.content_node();
+                    items.push(self.image_item(*pos, image, *size, node)?)
+                }
                 FrameItem::Tag(tag) => {
-                    if let (Some(index), Tag::Start(content, _)) = (current, tag) && content.label() == Some(self.labels.slot) {
-                        slots[index].node = self.content_node();
+                    if let (Inside::Slot(index), Tag::Start(content, _)) = (current, tag) && content.label() == Some(self.labels.slot) {
+                        records.slots[index].node = self.content_node();
                     }
                     self.on_tag(tag);
                 }
@@ -586,20 +768,20 @@ impl<'a> Exporter<'a> {
     }
 
     /// The sample page as a flat list of atoms in absolute coordinates: unclipped translation-only groups
-    /// are flattened; clipped or transformed groups (slots, bands, overlays, boxes) stay whole.
-    fn flatten(&mut self, page: usize, frame: &Frame, acc: Transform, slots: &mut [SlotRecord], bands: &[BandTag], overlays: &[OverlayTag], out: &mut Vec<Atom>) -> Result<()> {
+    /// are flattened; clipped or transformed groups (holes, bands, overlays, boxes) stay whole.
+    fn flatten(&mut self, page: usize, frame: &Frame, acc: Transform, records: &mut Records, bands: &[BandTag], overlays: &[OverlayTag], out: &mut Vec<Atom>) -> Result<()> {
         for (pos, item) in frame.items() {
             match item {
                 FrameItem::Group(group) => {
                     let t = child_transform(acc, *pos, group.transform);
                     if group.clip.is_none() && is_translation(group.transform) {
-                        self.flatten(page, &group.frame, t, slots, bands, overlays, out)?;
+                        self.flatten(page, &group.frame, t, records, bands, overlays, out)?;
                         continue;
                     }
                     let origin = apply(t, Point::zero());
                     let rect = Rect { x: pt(origin.x), y: pt(origin.y), w: pt(group.frame.width()), h: pt(group.frame.height()) };
-                    let current = slots.iter().position(|s| s.page == page && s.rect.same(&rect));
-                    let inner = self.export_frame(page, &group.frame, t, slots, current)?;
+                    let current = Self::inside_of(records, page, &rect);
+                    let inner = self.export_frame(page, &group.frame, t, records, current)?;
                     let kind = if let Some(b) = bands.iter().find(|b| b.page == page && b.rect.same(&rect)) {
                         AtomKind::Band { name: b.name.clone(), repeat_on_break: b.repeat_on_break, variants: b.variants, select: b.select.clone(), variant: b.variant, single: b.single }
                     } else if overlays.iter().any(|o| o.page == page && o.rect.same(&rect)) {
@@ -622,7 +804,7 @@ impl<'a> Exporter<'a> {
                 FrameItem::Image(image, size, _) => {
                     let abs = apply(acc, *pos);
                     let node = self.content_node();
-                    out.push(Atom { rect: Rect { x: pt(abs.x), y: pt(abs.y), w: pt(size.x), h: pt(size.y) }, item: image_item(abs, image, *size, node), kind: AtomKind::Static });
+                    out.push(Atom { rect: Rect { x: pt(abs.x), y: pt(abs.y), w: pt(size.x), h: pt(size.y) }, item: self.image_item(abs, image, *size, node)?, kind: AtomKind::Static });
                 }
                 FrameItem::Tag(tag) => self.on_tag(tag),
                 FrameItem::Link(..) => {}
@@ -674,6 +856,7 @@ impl<'a> Exporter<'a> {
                 baseline: if multi { s.baselines.first() } else { s.baselines.last() }.copied().unwrap_or(baseline),
                 glyphs: s.glyphs.iter().filter(|(_, _, y)| !multi || *y <= bottom).map(|(id, x, y)| ReferenceGlyph { id: *id, x: *x, y: *y }).collect(),
                 font: self.ir_fonts.get(style.font).map(|f| f.source_sha256.clone()).unwrap_or_default(),
+                ops: None, rect: None,
             });
             slots.push(ir::Slot {
                 name: s.meta.name, page: s.page, x: s.rect.x, y: s.rect.y, width: s.rect.w, height: s.rect.h,
@@ -683,6 +866,49 @@ impl<'a> Exporter<'a> {
             });
         }
         Ok((slots, unstyled, reference))
+    }
+
+    /// Bar records to bars plus references. The one shape Typst drew inside the box must be the bar the
+    /// runtime would draw for the sample value, which checks the rounded-rectangle port against Typst on
+    /// every compile (the sample, every reference and every fuzz sample).
+    fn finish_bars(&self, records: Vec<BarRecord>) -> Result<(Vec<ir::Bar>, Vec<ReferenceSlot>)> {
+        let mut bars = Vec::new();
+        let mut reference = Vec::new();
+        for b in records {
+            let name = &b.meta.name;
+            let [shape] = b.shapes.as_slice() else { bail!("bar `{name}`: expected one shape inside the bar's box, found {}", b.shapes.len()) };
+            let ir::Item::Shape { x, y, geometry, fill: Some(fill), stroke: None, .. } = shape else { bail!("bar `{name}`: the shape inside the box is not a plain filled shape") };
+            let ratio = (b.meta.value / b.meta.max).clamp(0.0, 1.0);
+            let expected = ir::geometry::ops_of(&ir::geometry::rounded_rect(ratio * b.rect.w, b.rect.h, b.meta.radius), b.rect.x, b.rect.y);
+            let actual = ir::geometry::ops_of(geometry, *x, *y);
+            if !ir::geometry::same_ops(&expected, &actual, 1e-6) {
+                bail!("bar `{name}`: Typst's shape for value {} of {} is not the bar the runtime would draw (width {:.4} of {:.4}, radius {:.2}):\n  typst   {actual:?}\n  runtime {expected:?}", b.meta.value, b.meta.max, ratio * b.rect.w, b.rect.w, b.meta.radius);
+            }
+            // Trace names carry the hole kind, because a bar may share its data key with a text slot.
+            reference.push(ReferenceSlot { name: format!("{name}#bar"), baseline: 0.0, size: 0.0, glyphs: Vec::new(), font: String::new(), ops: Some(actual), rect: Some([b.rect.x, b.rect.y, ratio * b.rect.w, b.rect.h]) });
+            bars.push(ir::Bar { name: name.clone(), page: b.page, x: b.rect.x, y: b.rect.y, width: b.rect.w, height: b.rect.h, max: b.meta.max, fill: *fill, radius: b.meta.radius, node: b.node, sample: b.meta.value });
+        }
+        Ok((bars, reference))
+    }
+
+    /// Image records to image slots plus references. The sample's image must sit where `fit_image` puts it,
+    /// which checks the port of Typst's image layout on every compile. The caller resets the Figure node's
+    /// alternative text to the template's, because the data supplies its own at runtime.
+    fn finish_images(&self, records: Vec<ImageRecord>) -> Result<(Vec<ir::ImageSlot>, Vec<ReferenceSlot>)> {
+        let mut images = Vec::new();
+        let mut reference = Vec::new();
+        for r in records {
+            let name = &r.meta.name;
+            let Some((placed, px_w, px_h, format)) = r.placed else { bail!("image slot `{name}`: no image inside the box; give it a sample image") };
+            let expected = ir::geometry::fit_image(&r.meta.fit, r.rect.w, r.rect.h, px_w as f64, px_h as f64).map_err(|e| anyhow!("image slot `{name}`: {e}"))?;
+            let actual = [placed.x - r.rect.x, placed.y - r.rect.y, placed.w, placed.h];
+            if expected.iter().zip(&actual).any(|(a, b)| (a - b).abs() > 1e-6) {
+                bail!("image slot `{name}`: Typst placed the {px_w} x {px_h} {format} at {actual:?} in the box, the runtime would place it at {expected:?} (fit {})", r.meta.fit);
+            }
+            reference.push(ReferenceSlot { name: format!("{name}#image"), baseline: 0.0, size: 0.0, glyphs: Vec::new(), font: String::new(), ops: None, rect: Some([placed.x, placed.y, placed.w, placed.h]) });
+            images.push(ir::ImageSlot { name: name.clone(), page: r.page, x: r.rect.x, y: r.rect.y, width: r.rect.w, height: r.rect.h, fit: r.meta.fit, alt: r.meta.alt, node: r.node, sample: format!("{px_w}x{px_h} {format}") });
+        }
+        Ok((images, reference))
     }
 
     fn export(self, doc: &PagedDocument, strict: bool) -> Result<Exported> {
@@ -698,13 +924,23 @@ impl<'a> Exporter<'a> {
     fn export_fixed(mut self, doc: &PagedDocument, mut tags: Tags, title: Option<String>, strict: bool) -> Result<Exported> {
         if !tags.bands.is_empty() { bail!("bands need a `paged` wrapper so the runtime knows the flow area"); }
         let mut pages = Vec::new();
+        let mut records = Records { slots: &mut tags.slots, bars: &mut tags.bars, images: &mut tags.images };
         for (index, page) in doc.pages().iter().enumerate() {
             self.reset_structure();
-            let items = self.export_frame(index, &page.frame, Transform::identity(), &mut tags.slots, None)?;
+            let items = self.export_frame(index, &page.frame, Transform::identity(), &mut records, Inside::Nothing)?;
             pages.push(ir::Page { width: pt(page.frame.width()), height: pt(page.frame.height()), items, nodes: std::mem::take(&mut self.nodes) });
         }
-        let (slots, unstyled, reference) = self.finish_slots(tags.slots, strict)?;
-        Ok(Exported { doc: ir::Document { version: ir::VERSION, title, lang: self.lang.clone(), fonts: self.ir_fonts, pages, slots, flow: None }, unstyled, reference, declared: HashMap::new() })
+        let (slots, unstyled, mut reference) = self.finish_slots(tags.slots, strict)?;
+        let (bars, bar_refs) = self.finish_bars(tags.bars)?;
+        let (images, image_refs) = self.finish_images(tags.images)?;
+        for image in &images { if let Some(n) = image.node { pages[image.page].nodes[n].alt = image.alt.clone(); } }
+        reference.extend(bar_refs);
+        reference.extend(image_refs);
+        let image_files = image_files_of(&self.images);
+        Ok(Exported {
+            doc: ir::Document { version: ir::VERSION, title, lang: self.lang.clone(), fonts: self.ir_fonts, image_files, pages, slots, bars, images, flow: None },
+            unstyled, reference, declared: HashMap::new(), images: self.images,
+        })
     }
 
     /// A flow document: the single sample page segmented into static blocks, repeat regions and overlays.
@@ -717,36 +953,26 @@ impl<'a> Exporter<'a> {
 
         let mut atoms = Vec::new();
         self.reset_structure();
-        self.flatten(0, &page.frame, Transform::identity(), &mut tags.slots, &tags.bands, &tags.overlays, &mut atoms)?;
-        let page_nodes = std::mem::take(&mut self.nodes);
-        let (abs_slots, unstyled, references) = self.finish_slots(tags.slots, strict)?;
+        {
+            let mut records = Records { slots: &mut tags.slots, bars: &mut tags.bars, images: &mut tags.images };
+            self.flatten(0, &page.frame, Transform::identity(), &mut records, &tags.bands, &tags.overlays, &mut atoms)?;
+        }
+        let mut page_nodes = std::mem::take(&mut self.nodes);
+        let (abs_slots, unstyled, slot_refs) = self.finish_slots(tags.slots, strict)?;
+        let (abs_bars, bar_refs) = self.finish_bars(tags.bars)?;
+        let (abs_images, image_refs) = self.finish_images(tags.images)?;
+        for image in &abs_images { if let Some(n) = image.node { page_nodes[n].alt = image.alt.clone(); } }
         atoms.sort_by(|a, b| a.rect.y.partial_cmp(&b.rect.y).unwrap_or(std::cmp::Ordering::Equal));
         let (overlay_atoms, flow_atoms): (Vec<Atom>, Vec<Atom>) = atoms.into_iter().partition(|a| matches!(a.kind, AtomKind::Overlay));
 
-        // Where each absolute slot ends up, for naming the reference and for assignment.
-        enum Owner { Band { name: String, instance: Option<usize> }, Overlay, Flow }
-        let mut owners: Vec<Owner> = abs_slots.iter().map(|_| Owner::Flow).collect();
-        let mut taken = vec![false; abs_slots.len()];
-        let take_inside = |rect: &Rect, taken: &mut Vec<bool>, owners: &mut Vec<Owner>, owner: &dyn Fn() -> Owner| -> Vec<ir::Slot> {
-            let mut out = Vec::new();
-            for (i, slot) in abs_slots.iter().enumerate() {
-                let slot_rect = Rect { x: slot.x, y: slot.y, w: slot.width, h: slot.height };
-                if !taken[i] && rect.encloses(&slot_rect) {
-                    taken[i] = true;
-                    owners[i] = owner();
-                    let mut relative = slot.clone();
-                    relative.page = 0;
-                    relative.x -= rect.x; relative.y -= rect.y; relative.baseline -= rect.y; relative.pen_x -= rect.x;
-                    out.push(relative);
-                }
-            }
-            out
-        };
-        let fragment_of = |atom: &Atom, mut slots: Vec<ir::Slot>, y: f64| -> Result<ir::Fragment> {
+        // Every hole is taken by the band instance, overlay or static block whose rectangle encloses it.
+        let (mut slots, mut bars, mut images) = (Taken::new(abs_slots), Taken::new(abs_bars), Taken::new(abs_images));
+        let mut take_inside = |rect: &Rect, owner: Owner| -> HoleSet { HoleSet { slots: slots.take(rect, &owner), bars: bars.take(rect, &owner), images: images.take(rect, &owner) } };
+        let fragment_of = |atom: &Atom, mut holes: HoleSet, y: f64| -> Result<ir::Fragment> {
             let ir::Item::Group { items, .. } = &atom.item else { bail!("a band or overlay atom is not a group") };
             let mut items = items.clone();
-            let nodes = localize(&mut items, &mut slots, &page_nodes);
-            Ok(ir::Fragment { x: atom.rect.x, y, width: atom.rect.w, height: atom.rect.h, items, slots, nodes })
+            let nodes = localize(&mut items, &mut holes, &page_nodes);
+            Ok(ir::Fragment { x: atom.rect.x, y, width: atom.rect.w, height: atom.rect.h, items, slots: holes.slots, bars: holes.bars, images: holes.images, nodes })
         };
 
         let mut blocks = Vec::new();
@@ -764,15 +990,15 @@ impl<'a> Exporter<'a> {
             let bottom = atom.rect.y;
             if bottom < top - 0.01 { bail!("band `{name}` at y {bottom:.2} overlaps the content before it (ends at {top:.2})"); }
             if !pending.is_empty() || bottom > top + 1e-6 {
-                blocks.push(ir::Block::Static { fragment: static_fragment(&pending, top, bottom - top, page_width, &page_nodes, &mut |rect| take_inside(rect, &mut taken, &mut owners, &|| Owner::Flow)) });
+                blocks.push(static_fragment(&pending, top, bottom - top, page_width, &page_nodes, &mut |rect| take_inside(rect, Owner::Flow)));
                 pending.clear();
             }
             if *single {
                 // A choice block: one instance of a band, picked among its variants by the selector.
                 if bands.iter().any(|b| &b.name == name) { bail!("choice block `{name}` appears twice"); }
-                let slots = take_inside(&atom.rect, &mut taken, &mut owners, &|| Owner::Band { name: name.clone(), instance: None });
-                let count = slots.len();
-                bands.push(ir::Band { name: name.clone(), repeat_on_break: false, fragments: vec![fragment_of(atom, slots, 0.0)?], select: select.clone() });
+                let holes = take_inside(&atom.rect, Owner::Band { name: name.clone(), instance: None });
+                let count = holes.len();
+                bands.push(ir::Band { name: name.clone(), repeat_on_break: false, fragments: vec![fragment_of(atom, holes, 0.0)?], select: select.clone() });
                 declared.insert(name.clone(), Declared { variants: *variants, select: select.clone(), instances: vec![Instance { x: atom.rect.x, w: atom.rect.w, h: atom.rect.h, variant: *variant, slots: count }] });
                 blocks.push(ir::Block::Choice { band: name.clone() });
                 prev_bottom = atom.rect.bottom();
@@ -784,8 +1010,8 @@ impl<'a> Exporter<'a> {
             let mut j = i;
             if *repeat_on_break {
                 if bands.iter().any(|b| &b.name == name) { bail!("header band `{name}` appears twice"); }
-                let slots = take_inside(&atom.rect, &mut taken, &mut owners, &|| Owner::Band { name: name.clone(), instance: None });
-                bands.push(ir::Band { name: name.clone(), repeat_on_break: true, fragments: vec![fragment_of(atom, slots, 0.0)?], select: None });
+                let holes = take_inside(&atom.rect, Owner::Band { name: name.clone(), instance: None });
+                bands.push(ir::Band { name: name.clone(), repeat_on_break: true, fragments: vec![fragment_of(atom, holes, 0.0)?], select: None });
                 header = Some(name.clone());
                 j += 1;
                 let next = flow_atoms.get(j).ok_or_else(|| anyhow!("header band `{name}` is not followed by row bands"))?;
@@ -803,9 +1029,9 @@ impl<'a> Exporter<'a> {
                 let n;
                 if count == 0 {
                     if bands.iter().any(|b| &b.name == row_name) { bail!("band `{row_name}` is used in two repeat regions"); }
-                    let slots = take_inside(&a.rect, &mut taken, &mut owners, &|| Owner::Band { name: row_name.clone(), instance: Some(0) });
-                    n = slots.len();
-                    bands.push(ir::Band { name: row_name.clone(), repeat_on_break: false, fragments: vec![fragment_of(a, slots, 0.0)?], select: row_select.clone() });
+                    let holes = take_inside(&a.rect, Owner::Band { name: row_name.clone(), instance: Some(0) });
+                    n = holes.len();
+                    bands.push(ir::Band { name: row_name.clone(), repeat_on_break: false, fragments: vec![fragment_of(a, holes, 0.0)?], select: row_select.clone() });
                 } else {
                     // With variants, instances may differ in height; `build` checks each against the variants later.
                     if *row_variants == 1 && ((a.rect.h - first.rect.h).abs() > 0.01 || (a.rect.w - first.rect.w).abs() > 0.01 || (a.rect.x - first.rect.x).abs() > 0.01) {
@@ -813,9 +1039,10 @@ impl<'a> Exporter<'a> {
                     }
                     let this_gap = { let g = a.rect.y - flow_atoms[k - 1].rect.bottom(); if g.abs() < 0.01 { 0.0 } else { g } };
                     if count == 1 { gap = this_gap; } else if (this_gap - gap).abs() > 0.01 { bail!("band `{row_name}`: the gap between rows varies ({gap:.2} vs {this_gap:.2})"); }
-                    // Slots of later instances are not exported, only accounted for.
-                    n = take_inside(&a.rect, &mut taken, &mut owners, &|| Owner::Band { name: row_name.clone(), instance: Some(count) }).len();
-                    if *row_variants == 1 && n != bands.last().unwrap().fragments[0].slots.len() { bail!("band `{row_name}`: instance {count} has {n} slots, the first has {}", bands.last().unwrap().fragments[0].slots.len()); }
+                    // Holes of later instances are not exported, only accounted for.
+                    n = take_inside(&a.rect, Owner::Band { name: row_name.clone(), instance: Some(count) }).len();
+                    let exported = hole_count(&bands.last().unwrap().fragments[0]);
+                    if *row_variants == 1 && n != exported { bail!("band `{row_name}`: instance {count} has {n} holes, the first has {exported}"); }
                 }
                 rows.push(Instance { x: a.rect.x, w: a.rect.w, h: a.rect.h, variant: *variant, slots: n });
                 count += 1;
@@ -828,48 +1055,113 @@ impl<'a> Exporter<'a> {
         }
         if !pending.is_empty() {
             let bottom = pending.iter().map(|a| a.rect.bottom()).fold(prev_bottom, f64::max);
-            blocks.push(ir::Block::Static { fragment: static_fragment(&pending, prev_bottom, bottom - prev_bottom, page_width, &page_nodes, &mut |rect| take_inside(rect, &mut taken, &mut owners, &|| Owner::Flow)) });
+            blocks.push(static_fragment(&pending, prev_bottom, bottom - prev_bottom, page_width, &page_nodes, &mut |rect| take_inside(rect, Owner::Flow)));
         }
         let mut overlays = Vec::new();
         for atom in &overlay_atoms {
-            let slots = take_inside(&atom.rect, &mut taken, &mut owners, &|| Owner::Overlay);
-            overlays.push(fragment_of(atom, slots, atom.rect.y)?);
+            let holes = take_inside(&atom.rect, Owner::Overlay);
+            overlays.push(fragment_of(atom, holes, atom.rect.y)?);
         }
-        if let Some(i) = taken.iter().position(|t| !t) { bail!("slot `{}` is not inside any block, band or overlay", abs_slots[i].name); }
+        for (what, left) in [("slot", slots.untaken()), ("bar", bars.untaken()), ("image slot", images.untaken())] {
+            if let Some(name) = left { bail!("{what} `{name}` is not inside any block, band or overlay"); }
+        }
 
-        let reference = references.into_iter().zip(&owners).map(|(mut r, owner)| {
-            r.name = match owner {
+        let named = |r: ReferenceSlot, owner: &Owner| -> ReferenceSlot {
+            let name = match owner {
                 Owner::Band { name, instance: Some(i) } => format!("{name}[{i}].{}", r.name),
                 Owner::Band { name, instance: None } => format!("{name}.{}", r.name),
                 Owner::Overlay => format!("page[0].{}", r.name),
-                Owner::Flow => r.name,
+                Owner::Flow => r.name.clone(),
             };
-            r
-        }).collect();
+            ReferenceSlot { name, ..r }
+        };
+        let reference = slot_refs.into_iter().zip(&slots.owners).chain(bar_refs.into_iter().zip(&bars.owners)).chain(image_refs.into_iter().zip(&images.owners)).map(|(r, o)| named(r, o)).collect();
+        let image_files = image_files_of(&self.images);
         Ok(Exported {
             doc: ir::Document {
-                version: ir::VERSION, title, lang: self.lang.clone(), fonts: self.ir_fonts, pages: Vec::new(), slots: Vec::new(),
+                version: ir::VERSION, title, lang: self.lang.clone(), fonts: self.ir_fonts, image_files, pages: Vec::new(), slots: Vec::new(), bars: Vec::new(), images: Vec::new(),
                 flow: Some(ir::Flow { page_width, page_height, area, blocks, bands, overlays }),
             },
-            unstyled, reference, declared,
+            unstyled, reference, declared, images: self.images,
         })
     }
 }
 
-/// A static block from the atoms between two regions: items shifted so that `top` becomes 0; slots taken
-/// from the vertical range.
-fn static_fragment(atoms: &[&Atom], top: f64, height: f64, width: f64, nodes: &[ir::Node], take: &mut dyn FnMut(&Rect) -> Vec<ir::Slot>) -> ir::Fragment {
-    let mut items: Vec<ir::Item> = atoms.iter().map(|a| { let mut item = a.item.clone(); shift(&mut item, 0.0, -top); item }).collect();
-    // The fragment spans the page width from x = 0, so slot x positions stay absolute.
-    let mut slots = take(&Rect { x: 0.0, y: top, w: 1e9, h: height.max(0.0) });
-    let nodes = localize(&mut items, &mut slots, nodes);
-    ir::Fragment { x: 0.0, y: 0.0, width, height, items, slots, nodes }
+/// Where a hole of the sample page ended up: in a band instance, in an overlay, or in the flow's static blocks.
+#[derive(Clone)]
+enum Owner { Band { name: String, instance: Option<usize> }, Overlay, Flow }
+
+/// The three kinds of hole a fragment can have.
+#[derive(Default)]
+struct HoleSet { slots: Vec<ir::Slot>, bars: Vec<ir::Bar>, images: Vec<ir::ImageSlot> }
+
+impl HoleSet { fn len(&self) -> usize { self.slots.len() + self.bars.len() + self.images.len() } }
+
+fn hole_count(fragment: &ir::Fragment) -> usize { fragment.slots.len() + fragment.bars.len() + fragment.images.len() }
+
+/// A hole in absolute page coordinates that can be made relative to the fragment that takes it.
+trait Hole: Clone {
+    fn rect(&self) -> Rect;
+    fn relocate(&mut self, dx: f64, dy: f64);
+    fn name(&self) -> &str;
 }
 
-struct Exported { doc: ir::Document, unstyled: Vec<String>, reference: Vec<ReferenceSlot>, declared: HashMap<String, Declared> }
+impl Hole for ir::Slot {
+    fn rect(&self) -> Rect { Rect { x: self.x, y: self.y, w: self.width, h: self.height } }
+    fn relocate(&mut self, dx: f64, dy: f64) { self.page = 0; self.x += dx; self.y += dy; self.baseline += dy; self.pen_x += dx; }
+    fn name(&self) -> &str { &self.name }
+}
+
+impl Hole for ir::Bar {
+    fn rect(&self) -> Rect { Rect { x: self.x, y: self.y, w: self.width, h: self.height } }
+    fn relocate(&mut self, dx: f64, dy: f64) { self.page = 0; self.x += dx; self.y += dy; }
+    fn name(&self) -> &str { &self.name }
+}
+
+impl Hole for ir::ImageSlot {
+    fn rect(&self) -> Rect { Rect { x: self.x, y: self.y, w: self.width, h: self.height } }
+    fn relocate(&mut self, dx: f64, dy: f64) { self.page = 0; self.x += dx; self.y += dy; }
+    fn name(&self) -> &str { &self.name }
+}
+
+/// The holes of one kind on the sample page and, per hole, whether and by whom it was taken.
+struct Taken<H> { all: Vec<H>, taken: Vec<bool>, owners: Vec<Owner> }
+
+impl<H: Hole> Taken<H> {
+    fn new(all: Vec<H>) -> Self { let n = all.len(); Self { all, taken: vec![false; n], owners: vec![Owner::Flow; n] } }
+
+    /// The holes inside `rect` that nobody took yet, made relative to its corner.
+    fn take(&mut self, rect: &Rect, owner: &Owner) -> Vec<H> {
+        let mut out = Vec::new();
+        for (i, hole) in self.all.iter().enumerate() {
+            if !self.taken[i] && rect.encloses(&hole.rect()) {
+                self.taken[i] = true;
+                self.owners[i] = owner.clone();
+                let mut relative = hole.clone();
+                relative.relocate(-rect.x, -rect.y);
+                out.push(relative);
+            }
+        }
+        out
+    }
+
+    fn untaken(&self) -> Option<&str> { self.taken.iter().position(|t| !t).map(|i| self.all[i].name()) }
+}
+
+/// A static block from the atoms between two regions: items shifted so that `top` becomes 0; holes taken
+/// from the vertical range.
+fn static_fragment(atoms: &[&Atom], top: f64, height: f64, width: f64, nodes: &[ir::Node], take: &mut dyn FnMut(&Rect) -> HoleSet) -> ir::Block {
+    let mut items: Vec<ir::Item> = atoms.iter().map(|a| { let mut item = a.item.clone(); shift(&mut item, 0.0, -top); item }).collect();
+    // The fragment spans the page width from x = 0, so hole x positions stay absolute.
+    let mut holes = take(&Rect { x: 0.0, y: top, w: 1e9, h: height.max(0.0) });
+    let nodes = localize(&mut items, &mut holes, nodes);
+    ir::Block::Static { fragment: ir::Fragment { x: 0.0, y: 0.0, width, height, items, slots: holes.slots, bars: holes.bars, images: holes.images, nodes } }
+}
+
+struct Exported { doc: ir::Document, unstyled: Vec<String>, reference: Vec<ReferenceSlot>, declared: HashMap<String, Declared>, images: BTreeMap<String, ImageBytes> }
 
 /// What the sample said about a band with variants: how many, how to pick, and each sample instance's size,
-/// declared variant (`None` when only the layout can tell) and slot count, for `build` to check against the
+/// declared variant (`None` when only the layout can tell) and hole count, for `build` to check against the
 /// variant layouts.
 struct Declared { variants: u32, select: Option<ir::Select>, instances: Vec<Instance> }
 struct Instance { x: f64, w: f64, h: f64, variant: Option<u32>, slots: usize }
@@ -1011,13 +1303,15 @@ const CHARSET: &str = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz     
 /// arrays of 1 to 2N rows cloned from the sample rows and mutated.
 fn mutate(value: &mut serde_json::Value, rng: &mut Rng) {
     match value {
+        serde_json::Value::String(s) if s.starts_with("data:image/") => *s = random_png_data_url(rng),
         serde_json::Value::String(s) => {
             let max = (s.chars().count().max(8) * 2) as u64;
             let len = rng.below(max + 1) as usize;
             let set: Vec<char> = CHARSET.chars().collect();
             *s = (0..len).map(|_| set[rng.below(set.len() as u64) as usize]).collect();
         }
-        serde_json::Value::Number(_) => *value = serde_json::Value::from(rng.below(1000)),
+        // Half the numbers stay in a bar's usual range so that bars get every width.
+        serde_json::Value::Number(_) => *value = serde_json::Value::from(if rng.below(2) == 0 { rng.below(101) } else { rng.below(1000) }),
         serde_json::Value::Bool(b) => *b = !*b,
         serde_json::Value::Array(items) => {
             if items.is_empty() { return; }
@@ -1029,6 +1323,60 @@ fn mutate(value: &mut serde_json::Value, rng: &mut Rng) {
         serde_json::Value::Object(map) => map.values_mut().for_each(|v| mutate(v, rng)),
         serde_json::Value::Null => {}
     }
+}
+
+/// A random PNG of 1 to 64 by 1 to 64 pixels, grey, RGB or RGBA, so that image slots are fuzzed with images of
+/// every aspect ratio Typst then lays out.
+fn random_png_data_url(rng: &mut Rng) -> String {
+    let (width, height) = (1 + rng.below(64) as u32, 1 + rng.below(64) as u32);
+    let color_type = [0u8, 2, 6][rng.below(3) as usize];
+    let channels = match color_type { 0 => 1, 2 => 3, _ => 4 };
+    let mut raw = Vec::with_capacity((1 + width as usize * channels) * height as usize);
+    for _ in 0..height {
+        raw.push(0); // filter: none
+        for _ in 0..width as usize * channels { raw.push(rng.below(256) as u8); }
+    }
+    format!("data:image/png;base64,{}", base64_encode(&encode_png(width, height, color_type, &raw)))
+}
+
+/// A PNG with stored (uncompressed) deflate blocks: enough for Typst to decode.
+fn encode_png(width: u32, height: u32, color_type: u8, raw: &[u8]) -> Vec<u8> {
+    fn crc32(bytes: &[u8]) -> u32 {
+        let mut crc = 0xFFFF_FFFFu32;
+        for &b in bytes {
+            crc ^= b as u32;
+            for _ in 0..8 { crc = if crc & 1 == 1 { 0xEDB8_8320 ^ (crc >> 1) } else { crc >> 1 }; }
+        }
+        !crc
+    }
+    fn chunk(out: &mut Vec<u8>, kind: &[u8; 4], data: &[u8]) {
+        out.extend_from_slice(&(data.len() as u32).to_be_bytes());
+        let mut body = kind.to_vec();
+        body.extend_from_slice(data);
+        out.extend_from_slice(&body);
+        out.extend_from_slice(&crc32(&body).to_be_bytes());
+    }
+    let mut zlib = vec![0x78, 0x01];
+    let blocks: Vec<&[u8]> = raw.chunks(65535).collect();
+    for (i, block) in blocks.iter().enumerate() {
+        zlib.push(if i + 1 == blocks.len() { 1 } else { 0 });
+        zlib.extend_from_slice(&(block.len() as u16).to_le_bytes());
+        zlib.extend_from_slice(&(!(block.len() as u16)).to_le_bytes());
+        zlib.extend_from_slice(block);
+    }
+    if blocks.is_empty() { zlib.extend_from_slice(&[1, 0, 0, 0xFF, 0xFF]); }
+    let (mut a, mut b) = (1u32, 0u32);
+    for &byte in raw { a = (a + byte as u32) % 65521; b = (b + a) % 65521; }
+    zlib.extend_from_slice(&((b << 16) | a).to_be_bytes());
+    let mut out = vec![0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
+    let mut ihdr = Vec::new();
+    ihdr.extend_from_slice(&width.to_be_bytes());
+    ihdr.extend_from_slice(&height.to_be_bytes());
+    ihdr.extend_from_slice(&[8, color_type, 0, 0, 0]);
+    chunk(&mut out, b"IHDR", &ihdr);
+    chunk(&mut out, b"IDAT", &zlib);
+    chunk(&mut out, b"IEND", &[]);
+    out
 }
 
 /// The layout contract: everything except what the data is allowed to change. Samples, pen positions and
@@ -1151,6 +1499,7 @@ fn build(fixture: &Path, data: &[u8], fonts: &[LoadedFont], strict: bool) -> Res
             let mut fragment = band.fragments[0].clone();
             adopt_fonts(&mut fragment, &forced.doc.fonts, &mut exported.doc.fonts);
             fragments.push(fragment);
+            for (sha, image) in forced.images { exported.images.entry(sha).or_insert(image); }
         }
         let declared = &exported.declared[&name];
         let heights: Vec<String> = fragments.iter().map(|f| format!("{:.2}", f.height)).collect();
@@ -1171,11 +1520,12 @@ fn build(fixture: &Path, data: &[u8], fonts: &[LoadedFont], strict: bool) -> Res
             if (f.height - inst.h).abs() > 0.01 || (f.width - inst.w).abs() > 0.01 || (f.x - inst.x).abs() > 0.01 {
                 bail!("band `{name}`: instance {i} ({:.2} x {:.2} at x {:.2}) is not variant {} ({:.2} x {:.2} at x {:.2})", inst.w, inst.h, inst.x, v + 1, f.width, f.height, f.x);
             }
-            if inst.slots != f.slots.len() { bail!("band `{name}`: instance {i} has {} slots, variant {} has {}", inst.slots, v + 1, f.slots.len()); }
+            if inst.slots != hole_count(f) { bail!("band `{name}`: instance {i} has {} holes, variant {} has {}", inst.slots, v + 1, hole_count(f)); }
         }
         let band = exported.doc.flow.as_mut().and_then(|f| f.bands.iter_mut().find(|b| b.name == name)).expect("declared band exists");
         band.fragments = fragments;
     }
+    exported.doc.image_files = image_files_of(&exported.images);
     Ok((doc, exported))
 }
 
@@ -1230,20 +1580,31 @@ fn describe_slot(slot: &ir::Slot, indent: &str) {
         slot.name, slot.x, slot.y, slot.width, slot.height, slot.baseline, slot.font, slot.size, slot.align, slot.sample);
 }
 
+fn describe_holes(slots: &[ir::Slot], bars: &[ir::Bar], images: &[ir::ImageSlot], indent: &str) {
+    for slot in slots { describe_slot(slot, indent); }
+    for bar in bars {
+        println!("{indent}bar  {:<14} rect ({:.2}, {:.2}) {:.2} x {:.2}  max {} radius {:.2}  sample {}", bar.name, bar.x, bar.y, bar.width, bar.height, bar.max, bar.radius, bar.sample);
+    }
+    for image in images {
+        println!("{indent}image {:<13} rect ({:.2}, {:.2}) {:.2} x {:.2}  fit {} alt {:?}  sample {}", image.name, image.x, image.y, image.width, image.height, image.fit, image.alt, image.sample);
+    }
+}
+
 fn describe(exported: &ir::Document) {
+    for file in &exported.image_files { println!("  image file {}: {} x {} {}", file.file, file.width, file.height, file.format); }
     for (i, page) in exported.pages.iter().enumerate() {
         let (t, s, g) = count(&page.items);
         println!("  page {i}: {:.1} x {:.1} pt, {t} static text runs, {s} shapes, {g} groups, nodes [{}]", page.width, page.height, roles(&page.nodes));
     }
-    for slot in &exported.slots { describe_slot(slot, "  "); }
+    describe_holes(&exported.slots, &exported.bars, &exported.images, "  ");
     if let Some(flow) = &exported.flow {
         println!("  flow: page {:.1} x {:.1} pt, area x {:.1} y {:.1} w {:.1} h {:.1}", flow.page_width, flow.page_height, flow.area.x, flow.area.y, flow.area.width, flow.area.height);
         for block in &flow.blocks {
             match block {
                 ir::Block::Static { fragment } => {
                     let (t, s, g) = count(&fragment.items);
-                    println!("  static block: height {:.2}, {t} text runs, {s} shapes, {g} groups, {} slot(s), nodes [{}]", fragment.height, fragment.slots.len(), roles(&fragment.nodes));
-                    for slot in &fragment.slots { describe_slot(slot, "    "); }
+                    println!("  static block: height {:.2}, {t} text runs, {s} shapes, {g} groups, {} hole(s), nodes [{}]", fragment.height, hole_count(fragment), roles(&fragment.nodes));
+                    describe_holes(&fragment.slots, &fragment.bars, &fragment.images, "    ");
                 }
                 ir::Block::Repeat { band, header, header_gap, gap, sample_rows } => {
                     println!("  repeat `{band}`: header {header:?} (gap after {header_gap:.2}), row gap {gap:.2}, {sample_rows} sample row(s)");
@@ -1255,13 +1616,13 @@ fn describe(exported: &ir::Document) {
             for (v, fragment) in band.fragments.iter().enumerate() {
                 let (t, s, g) = count(&fragment.items);
                 let which = if band.fragments.len() > 1 { format!(" variant {} of {} ({:?})", v + 1, band.fragments.len(), band.select) } else { String::new() };
-                println!("  band `{}`{}{which}: x {:.2} w {:.2} h {:.2}, {t} text runs, {s} shapes, {g} groups, {} slot(s), nodes [{}]", band.name, if band.repeat_on_break { " (repeat on break)" } else { "" }, fragment.x, fragment.width, fragment.height, fragment.slots.len(), roles(&fragment.nodes));
-                for slot in &fragment.slots { describe_slot(slot, "    "); }
+                println!("  band `{}`{}{which}: x {:.2} w {:.2} h {:.2}, {t} text runs, {s} shapes, {g} groups, {} hole(s), nodes [{}]", band.name, if band.repeat_on_break { " (repeat on break)" } else { "" }, fragment.x, fragment.width, fragment.height, hole_count(fragment), roles(&fragment.nodes));
+                describe_holes(&fragment.slots, &fragment.bars, &fragment.images, "    ");
             }
         }
         for overlay in &flow.overlays {
-            println!("  overlay: ({:.2}, {:.2}) {:.2} x {:.2}, {} slot(s)", overlay.x, overlay.y, overlay.width, overlay.height, overlay.slots.len());
-            for slot in &overlay.slots { describe_slot(slot, "    "); }
+            println!("  overlay: ({:.2}, {:.2}) {:.2} x {:.2}, {} hole(s)", overlay.x, overlay.y, overlay.width, overlay.height, hole_count(overlay));
+            describe_holes(&overlay.slots, &overlay.bars, &overlay.images, "    ");
         }
     }
 }
@@ -1280,7 +1641,7 @@ fn run() -> Result<()> {
     let data = fs::read(&args.data).with_context(|| format!("reading {}", args.data.display()))?;
 
     let started = std::time::Instant::now();
-    let (doc, Exported { doc: mut exported, .. }) = build(&args.fixture, &data, &fonts, true)?;
+    let (doc, Exported { doc: mut exported, images, .. }) = build(&args.fixture, &data, &fonts, true)?;
     let compiled_in = started.elapsed();
     let subset_started = std::time::Instant::now();
     let subsets = subset_fonts(&mut exported, &fonts)?;
@@ -1292,6 +1653,9 @@ fn run() -> Result<()> {
     let font_dir = args.out.join("fonts");
     fs::create_dir_all(&font_dir)?;
     for subset in &subsets { fs::write(font_dir.join(&subset.file), &subset.bytes)?; }
+    let image_dir = args.out.join("images");
+    if !images.is_empty() { fs::create_dir_all(&image_dir)?; }
+    for file in &exported.image_files { fs::write(image_dir.join(&file.file), &images[&file.sha256].bytes)?; }
     println!("compiled and exported in {compiled_in:.1?}: {} font(s) subset in {subset_in:.1?}, baseline PDF {} bytes, doc.json {} bytes, {}",
         exported.fonts.len(), pdf.len(), doc_json.len(), if exported.flow.is_some() { "flow document" } else { "fixed pages" });
     for (font, subset) in exported.fonts.iter().zip(&subsets) {
