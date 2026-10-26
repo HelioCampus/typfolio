@@ -44,7 +44,7 @@ Commits, oldest first:
 |---|---|
 | `PLAN.md` | Principle, architecture, milestones, findings, measurements, re-evaluations. Read it first. |
 | `GAPS.md` | The one inventory of what paramdoc cannot do yet, for application developers: status (refused at export, refused at fill, silent, missing, rule), workaround, fix and cost. Add every new gap there; the open-items list below is only the order. |
-| `check.sh` | The whole proof below as one script: build, exports with fuzzing, checked-in documents against a fresh export, both runtimes against Typst and each other, pixels, text, structure, veraPDF, and with `DEMO_URL` set the demo page. 136 checks, a few minutes. |
+| `check.sh` | The whole proof below as one script: build, exports with fuzzing, checked-in documents against a fresh export, both runtimes against Typst and each other, pixels, text, structure, veraPDF, and with `DEMO_URL` set the demo page. 157 checks, a few minutes. |
 | `export-documents.sh` | Exports a fixture and copies what a browser runtime needs, `doc.json` and the subset fonts, into `documents/<fixture>/`. |
 | `documents/report/` | The report fixture exported, checked in (152 kB) because the demo page cannot run the exporter at build time. Regenerate after changing the fixture, the dialect or the exporter. |
 | `Cargo.toml`, `Cargo.lock`, `.cargo/config.toml` | Rust workspace; build output goes to `../../.build/paramdoc-target` (gitignored), never in-tree. |
@@ -52,14 +52,14 @@ Commits, oldest first:
 | `export/` | `paramdoc-export`: links Typst 0.15.1 as a library (crates.io), compiles a fixture with sample data, walks the frames, exports the document, subsets fonts, dumps Typst's layout as a reference, fuzzes the data and diffs the contract. |
 | `runtime/` | `paramdoc-runtime`: Rust library + CLI (`fill`, `bench`) + C ABI (`paramdoc_open/render/close`, `paramdoc_fill`) for the wasm32 cdylib build. Depends on pdf-writer, flate2, serde_json, sha2 only. |
 | `ts/runtime.ts`, `ts/cli.ts` | The same runtime in dependency-free erasable TypeScript; Node 22 runs it with `--experimental-strip-types`; Vite bundles it with the demo's worker into 37 kB minified, 14 kB gzipped (16 kB before images, bars and links). |
-| `fixtures/*/` | Templates in the slot dialect, each with `paramdoc.typ` (the dialect helper, identical copies), `main.typ`, `data.json`: `certificate` (fixed page), `policies` (overflow policies), `leak` (deliberately broken, must fail the check), `transcript` (flow: table bands, 42-row `data-long.json`), `report` (the worker-batch benchmark's report in the dialect), `wrap` and `wrapfuzz` (wrapping slots, one data case per breaking rule, random texts), `figures` (image slots), `links` (static links and link slots, 40-row `data-long.json`), `charset` (a declared Turkish, Greek and Cyrillic repertoire under `lang: "tr"`, random texts), and the ones that must fail the export: `linkbad` (an internal link), `charsetbad` (an Arabic letter in a charset), `stylebad` (a show rule recolouring part of a slot), `rotatedlink`, `smooth` (`scaling: "smooth"`), `leading` (too little leading for a clipping slot). |
+| `fixtures/*/` | Templates in the slot dialect, each with `paramdoc.typ` (the dialect helper, identical copies), `main.typ`, `data.json`: `certificate` (fixed page), `policies` (overflow policies), `leak` (deliberately broken, must fail the check), `transcript` (flow: table bands, 42-row `data-long.json`), `report` (the worker-batch benchmark's report in the dialect), `wrap` and `wrapfuzz` (wrapping slots, one data case per breaking rule, random texts), `justify` (the `wrap` template with every wrapping slot justified, the same data cases), `figures` (image slots), `links` (static links and link slots, 40-row `data-long.json`), `charset` (a declared Turkish, Greek and Cyrillic repertoire under `lang: "tr"`, random texts), and the ones that must fail the export: `linkbad` (an internal link), `charsetbad` (an Arabic letter in a charset), `stylebad` (a show rule recolouring part of a slot), `rotatedlink`, `smooth` (`scaling: "smooth"`), `leading` (too little leading for a clipping slot). |
 | `notes/wasm-size-report.md` | Where the 24 MB compiler's bytes go (crate by crate, data blobs, dependency paths). |
 | `notes/bench/` | Scripts: `gen-inputs.mjs` (1000 inputs from the repo's `data.ts`), `bench-wasm.mjs` (Rust wasm in Node), `bench-browser.mjs` (drives the repo's `/performance` page headlessly), `bench-ts.html` + `bench-ts-browser.mjs` (TypeScript runtime in Chromium), `inspect.mjs` (structure via the repo's `inspectPdf`), `ppmdiff.mjs` (pixel diff of two PPMs, used by `check.sh`), `write-all.mjs` (every benchmark input as a PDF, for veraPDF over the set). |
 
 ## How to prove it still works (do this first after any change)
 
 ```sh
-cd experiments/paramdoc && ./check.sh      # 136 checks, a few minutes after the first build; FUZZ=20 ./check.sh is quicker
+cd experiments/paramdoc && ./check.sh      # 157 checks, a few minutes after the first build; FUZZ=20 ./check.sh is quicker
 DEMO_URL=http://127.0.0.1:4190 ./check.sh  # also drives the performance page of a running pretext-hybrid dev server
 ```
 
@@ -151,7 +151,11 @@ punctuation to Typst), no stroked text, no colour or variable fonts, integers an
 fills each slot with its whole repertoire through the real template (the repertoire proof) and checks every
 glyph of every compile against the font's character map and advances, so a feature, language or style rule that
 would change a glyph is refused, not approximated. Inside slots the dialect also pins `dir`, `tracking`,
-`spacing`, `stroke` and `cjk-latin-spacing`.
+`spacing`, `stroke` and `cjk-latin-spacing`. A **justified slot** (since 2026-10-26, M11) is a wrapping slot
+with `justify: true`: the same breaks, and every line but the last and lines before a hard break stretch their
+kept spaces as Typst's `commit` does (by up to half a space each, then an equal share of what is left; an
+overfull line shrinks them by up to a third, justified or not); a line without a space keeps its width and the
+slot's alignment, and an ellipsized line is never stretched.
 
 ## The demo page
 
@@ -214,8 +218,8 @@ Web addresses and clickable links are done (2026-10-26): wrapping slots break ad
 both runtimes as PDF/UA link annotations inside Link elements, static ones from the template and data-driven ones
 through link slots (`slot(name, (text:, href:))`), with rectangles equal to typst-pdf's. See
 `docs/2026-10-26-addresses-and-links.md`. Refusals are done too (M12, 2026-10-26, item 6 below and
-`docs/2026-10-26-refusals.md`). Next is the justification half of that item (item 4 below; `PLAN.md`'s M11
-section has the plan, checked against typst-layout 0.15.1).
+`docs/2026-10-26-refusals.md`), and so are justified wrapping slots (M11, 2026-10-26, item 4 below and
+`docs/2026-10-26-justified-slots.md`).
 
 1. **A Worker wrapper** for the TypeScript runtime as something reusable: the demo page has one (`paramdoc.worker.ts`
    and the pool in `batch.ts`), written for that page; moving it under `ts/` with a small API would let other pages
@@ -225,16 +229,12 @@ section has the plan, checked against typst-layout 0.15.1).
    repository's maintainers before writing it.
 3. The Rust runtime still deflates every stream per document, which is why it is slower than the TypeScript
    one; writing small streams uncompressed and caching the font streams would even them out.
-4. **Justified wrapping slots.** Every template in this repository justifies its paragraphs; wrapping slots are
-   ragged right because justification means porting Typst's optimized breaker (`linebreak_optimized`: cost
-   `(1 + badness + penalty)²` per line with `badness = 100·|ratio|³`, runt and hyphen penalties) and the
-   `commit` arithmetic that stretches spaces by up to half their width and shrinks by a third. Looked at on
-   2026-10-25: the JavaScript library `@chenglou/pretext` (already a devDependency of the pretext-hybrid demo)
-   does not help; it is a greedy wrapper with no justification API, its Knuth–Plass lives only in demo code with
-   a cost unlike Typst's, and it measures through canvas. Port Typst's own arithmetic into both runtimes, keep
-   hyphenation off inside slots, and add `justify: true` fixtures to the oracle. `PLAN.md`'s M11 section has the
-   plan with the exact typst-layout 0.15.1 arithmetic: with `linebreaks: "simple"` and `hyphenate: false` pinned,
-   justification is only the space-stretching step; the breaks do not move.
+4. **Justified wrapping slots**: done (M11, 2026-10-26). `slot(..., justify: true)`; the breaks do not move
+   (the simple breaker and `hyphenate: false` stay pinned), the runtimes port the space-stretching step of
+   Typst's `commit`. Web quality, not book quality: the optimized breaker (G3) and hyphenation (G2, off by
+   decision) are what a justified paragraph outside a slot still has over a slot. Looked at on 2026-10-25: the
+   JavaScript library `@chenglou/pretext` does not help (a greedy wrapper, no justification API, canvas
+   measurement).
 5. **SVG images**, the rest of the images-and-links item (links are done, 2026-10-26: still refused are internal
    destinations, links in overlays and repeated headers, and rotated link text gets a bounding box).
    SVG images are refused by the exporter (the runtimes have no SVG renderer; the shared header of

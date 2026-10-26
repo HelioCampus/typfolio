@@ -363,7 +363,8 @@ fn linebreak_link(link: &[char], f: &mut dyn FnMut(usize)) {
 
 /// A line of a wrapping slot: `layout_end` excludes the trailing whitespace that does not count for the width;
 /// `shaping_end` includes it (Typst draws those glyphs at zero advance).
-struct BrokenLine { start: usize, layout_end: usize, shaping_end: usize, width: f64 }
+/// `mandatory`: the line ends at a hard break or at the end of the text, so it is never justified.
+struct BrokenLine { start: usize, layout_end: usize, shaping_end: usize, width: f64, mandatory: bool }
 /// A line as drawn: the first `kept` glyphs count for the width, the rest are trimmed trailing whitespace.
 struct LineRun { ids: Vec<u16>, advances: Vec<f64>, text: String, width: f64, kept: usize }
 
@@ -378,7 +379,7 @@ fn break_lines(chars: &[char], width_of: &dyn Fn(usize, usize) -> f64, fits: &dy
         } else {
             while layout_end > start && (chars[layout_end - 1].is_whitespace() || is_default_ignorable(chars[layout_end - 1])) { layout_end -= 1; }
         }
-        BrokenLine { start, layout_end, shaping_end, width: width_of(start, layout_end) }
+        BrokenLine { start, layout_end, shaping_end, width: width_of(start, layout_end), mandatory }
     };
     let mut lines = Vec::new();
     let mut start = 0;
@@ -407,29 +408,45 @@ fn fill_lines(slot: &ir::Slot, text: &str, href: Href, font: &LoadedFont, trace_
     let ids: Vec<u16> = chars.iter().map(|&c| if is_mandatory_break(c) { Ok(0) } else { glyph_of(c) }).collect::<Result<_>>()?;
     let width_of = |from: usize, to: usize| -> f64 { ids[from..to].iter().map(|&id| font.advance(id) * size).sum() };
     let fits = |width: f64| slot.width + 1e-4 >= width; // Typst's `Abs::fits`
-    let run = |cs: &[char], kept: usize| -> Result<LineRun> {
+    // Typst's `commit` (typst-layout 0.15.1 `line.rs`) with the default `par.justification-limits`: a kept space
+    // may shrink by a third of its advance (min(a / 3, 0.75 a)) and stretch by half of it; nothing else adjusts.
+    // `remaining < 0`: the line does not fit and its spaces shrink (ragged lines too), by `ratio` of their
+    // shrinkability, down to -1. Otherwise a justified line stretches its spaces by `ratio` of their
+    // stretchability, up to 1, and shares what is still left equally among them (`extra`); a line without a space
+    // keeps its width and is aligned as the slot says.
+    let run = |cs: &[char], kept: usize, justify: bool| -> Result<LineRun> {
         let ids: Vec<u16> = cs.iter().map(|&c| glyph_of(c)).collect::<Result<_>>()?;
         let mut advances: Vec<f64> = ids.iter().enumerate().map(|(i, &id)| if i < kept { font.advance(id) * size } else { 0.0 }).collect();
         let mut width: f64 = advances.iter().sum();
-        if !fits(width) {
-            // Typst shrinks the spaces of a line that does not fit by up to a third of their width
-            // (`par.justification-limits`, spacing min 2/3) before letting it overflow; ragged lines too.
-            let shrinkable: Vec<f64> = advances.iter().enumerate().map(|(i, &a)| if i < kept && is_space_glyph(cs[i]) { (a / 3.0).min(a * 0.75) } else { 0.0 }).collect();
-            let shrinkability: f64 = shrinkable.iter().sum();
-            if shrinkability > 0.0 {
-                let ratio = ((slot.width - width) / shrinkability).max(-1.0);
-                for (advance, shrink) in advances.iter_mut().zip(&shrinkable) { *advance += ratio * shrink; }
-                width = advances.iter().sum();
-            }
+        let spaces: Vec<bool> = cs.iter().enumerate().map(|(i, &c)| i < kept && is_space_glyph(c)).collect();
+        let remaining = slot.width - width;
+        let shrinkable: Vec<f64> = advances.iter().zip(&spaces).map(|(&a, &s)| if s { (a / 3.0).min(a * 0.75) } else { 0.0 }).collect();
+        let shrinkability: f64 = shrinkable.iter().sum();
+        if remaining < 0.0 && shrinkability > 0.0 {
+            let ratio = (remaining / shrinkability).max(-1.0);
+            for (advance, shrink) in advances.iter_mut().zip(&shrinkable) { *advance += ratio * shrink; }
+            width = advances.iter().sum();
+        } else if justify {
+            let stretchable: Vec<f64> = advances.iter().zip(&spaces).map(|(&a, &s)| if s { a * 0.5 } else { 0.0 }).collect();
+            let stretchability: f64 = stretchable.iter().sum();
+            let (mut ratio, mut left) = (0.0, remaining);
+            if stretchability > 0.0 { ratio = (remaining / stretchability).min(1.0); left = (remaining - stretchability).max(0.0); }
+            let justifiables = spaces.iter().filter(|&&s| s).count();
+            let extra = if justifiables > 0 && left > 0.0 { left / justifiables as f64 } else { 0.0 };
+            for ((advance, stretch), &space) in advances.iter_mut().zip(&stretchable).zip(&spaces) { *advance += ratio * stretch + if space { extra } else { 0.0 }; }
+            width = advances.iter().sum();
         }
         Ok(LineRun { ids, advances, text: cs.iter().collect(), width, kept })
     };
-    let render = |l: &BrokenLine| run(&chars[l.start..l.shaping_end], l.layout_end - l.start);
+    // Every line but the last and lines before a hard break are justified (`line.rs`: `config.justify &&
+    // breakpoint != Mandatory`; the end of the text is a mandatory break too).
+    let render = |l: &BrokenLine| run(&chars[l.start..l.shaping_end], l.layout_end - l.start, slot.justify && !l.mandatory);
     let ellipsize = |l: &BrokenLine| -> Result<LineRun> {
         let ellipsis: Vec<char> = if font.glyph('…').is_some() { vec!['…'] } else { vec!['.', '.', '.'] };
         let mut kept: Vec<char> = chars[l.start..l.layout_end].to_vec();
         let trim = |kept: &mut Vec<char>| while kept.last().is_some_and(|c| c.is_whitespace()) { kept.pop(); };
-        let shape = |kept: &[char]| -> Result<LineRun> { let cs: Vec<char> = kept.iter().chain(&ellipsis).copied().collect(); run(&cs, cs.len()) };
+        // The ellipsized line is the runtime's own and the last one shown: never stretched.
+        let shape = |kept: &[char]| -> Result<LineRun> { let cs: Vec<char> = kept.iter().chain(&ellipsis).copied().collect(); run(&cs, cs.len(), false) };
         trim(&mut kept);
         let mut shown = shape(&kept)?;
         while !fits(shown.width) && !kept.is_empty() { kept.pop(); trim(&mut kept); shown = shape(&kept)?; }

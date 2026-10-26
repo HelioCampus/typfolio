@@ -155,7 +155,11 @@ fuzz 0 leaks.
 Result (2026-10-26): done, see the status log and `docs/2026-10-26-addresses-and-links.md`. Justification, the
 other half of the fourth expressiveness item, is M11 below.
 
-### M11: justified wrapping slots (plan, not built)
+### M11: justified wrapping slots (built 2026-10-26)
+
+Result (2026-10-26): done, see the status log and `docs/2026-10-26-justified-slots.md`. Built as planned below,
+after M12; the U+2028 case fell away (the character is outside M12's whitelist) and the shaping check of M12
+allows a justified slot's spaces any width.
 
 Written 2026-10-25 in a fork of the working session and checked line by line against typst-layout 0.15.1 on
 2026-10-26; it holds. The one rule that shapes it: the runtime never does anything a Typst compile of the
@@ -371,6 +375,20 @@ Defaults: fonts from `../../fixtures/fonts`, output under `../../.build/paramdoc
 
 ## Status log
 
+- **M11 justified wrapping slots (2026-10-26).** `slot(..., justify: true)` makes a wrapping slot justified:
+  the dialect sets `par(justify: justify)` with the simple breaker and hyphenation still pinned, so the breaks
+  do not move; both runtimes port Typst's `commit` (typst-layout 0.15.1 `line.rs`): an overfull line shrinks
+  its kept spaces by up to a third (as before, now under Typst's exact `remaining < 0` condition), a justified
+  line (every line but the last and lines before a hard break) stretches them by up to half and shares the
+  rest equally, a line without a space keeps its width and alignment; the ellipsized line is never stretched.
+  IR v9: `Slot.justify`. Exporter: the metadata flag passed through, the M12 shaping check allows a justified
+  slot's spaces any width. Fixtures: `justify` (the `wrap` template with every wrapping slot justified and its
+  eight data cases), `wrapfuzz` with `wide` and `right` justified, `charset` with `narrow` justified: every
+  case, 40 random texts of the default repertoire and 20 of the Turkish, Greek and Cyrillic one identical to
+  Typst in glyphs and pixels, both runtimes, on the first run. `check.sh` 157 checks. Sizes: wasm 691 kB
+  raw / 243 kB gzip (+1.6 kB / +0.6 kB over M12), worker bundle 37,080 B / 14,319 B gzip (+237 B / +116 B
+  over M12's 36,843 / 14,203). Open: hyphenation stays off (G2), the optimized breaker (G3). Notes in
+  `docs/2026-10-26-justified-slots.md`.
 - **M12 refusals (2026-10-26).** Unsupported input stops with a message instead of laying out differently; the
   TypeScript runtime stays light. Exporter: a character whitelist for `charset` (the default set, Latin Extended,
   Greek, Cyrillic, a few punctuation and currency ranges; everything else refused with the reason); a declared

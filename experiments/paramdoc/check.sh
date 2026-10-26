@@ -19,7 +19,7 @@ cd "$(dirname "$0")"
 FUZZ="${FUZZ:-100}"
 SAMPLES=$(( FUZZ < 40 ? FUZZ : 40 ))
 B=../../.build/paramdoc
-FIXTURES="certificate policies transcript report wrap figures links"
+FIXTURES="certificate policies transcript report wrap justify figures links"
 PASS=0; FAIL=0; SKIP=0
 ok()   { PASS=$((PASS + 1)); printf '  ok    %s\n' "$1"; }
 fail() { FAIL=$((FAIL + 1)); printf '  FAIL  %s\n' "$1"; }

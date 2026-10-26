@@ -19,7 +19,7 @@
 
 #slot("wide", data.wide, width: 100%, lines: 4, overflow: "clip", max-length: 1000, charset: repertoire)
 #v(3mm)
-#slot("narrow", data.narrow, width: 40mm, lines: 6, overflow: "clip", max-length: 1000, size: 9pt, charset: repertoire)
+#slot("narrow", data.narrow, width: 40mm, lines: 6, overflow: "clip", max-length: 1000, size: 9pt, charset: repertoire, justify: true)
 #v(3mm)
 #slot("centered", data.centered, width: 120mm, lines: 3, align: center, overflow: "clip", max-length: 1000, size: 12pt, charset: repertoire)
 #v(3mm)

@@ -6,7 +6,7 @@
 
 use serde::{Deserialize, Serialize};
 
-pub const VERSION: u32 = 8;
+pub const VERSION: u32 = 9;
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct Document {
@@ -267,6 +267,10 @@ pub struct Slot {
     pub max_length: Option<u32>,
     /// The sample value the exporter saw; not part of the layout contract.
     pub sample: String,
+    /// A wrapping slot whose lines are justified: every line but the last and lines before a hard break stretch
+    /// their spaces to the slot's width, as Typst does with the simple breaker (M11).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub justify: bool,
     /// The structure node the slot's text belongs to; `None` marks an artifact.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub node: Option<usize>,

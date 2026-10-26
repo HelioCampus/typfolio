@@ -400,7 +400,7 @@ fn localize(items: &mut [ir::Item], holes: &mut HoleSet, nodes: &[ir::Node]) -> 
 // ---------------------------------------------------------------------------------------------------------
 // Tags found in the frames
 
-struct SlotMeta { name: String, align: String, overflow: String, max_length: Option<u32>, descent: f64, charset: Option<String>, lines: u32, line_height: f64, pitch: f64, auto_lines: Option<u32>, link: bool }
+struct SlotMeta { name: String, align: String, overflow: String, max_length: Option<u32>, descent: f64, charset: Option<String>, lines: u32, line_height: f64, pitch: f64, auto_lines: Option<u32>, link: bool, justify: bool }
 struct TextStyle { font: usize, size: f64, fill: ir::Color, pen_x: f64 }
 /// `runs` are the sample's text items (x, baseline y, width); `links` Typst's link rectangles in the box and `url`
 /// their destination, for a link slot.
@@ -631,7 +631,7 @@ impl<'a> Exporter<'a> {
         }
         if lines > 1 && !(line_height > 0.0 && pitch > 0.0) { bail!("slot `{name}`: a wrapping slot needs `line-height` and `pitch` in its metadata"); }
         let auto_lines = match dict.get("auto-lines") { Ok(Value::Int(n)) if *n >= 1 => Some(*n as u32), Err(_) => None, other => bail!("slot `{name}`: `auto-lines` is not a positive integer: {other:?}") };
-        Ok(SlotMeta { name, align: string("align")?, overflow: string("overflow")?, max_length, descent: dict_number(dict, "descent")?, charset, lines, line_height, pitch, auto_lines, link: matches!(dict.get("link"), Ok(Value::Bool(true))) })
+        Ok(SlotMeta { name, align: string("align")?, overflow: string("overflow")?, max_length, descent: dict_number(dict, "descent")?, charset, lines, line_height, pitch, auto_lines, link: matches!(dict.get("link"), Ok(Value::Bool(true))), justify: matches!(dict.get("justify"), Ok(Value::Bool(true))) })
     }
 
     fn bar_meta(&self, value: &Value) -> Result<BarMeta> {
@@ -820,8 +820,9 @@ impl<'a> Exporter<'a> {
                                 let (adv, dx, dy) = (pt(g.x_advance.at(text.size)), pt(g.x_offset.at(text.size)), pt(g.y_offset.at(text.size)));
                                 // A space may be narrower: trailing whitespace stays in the run at zero advance (Typst trims
                                 // it for layout) and an overfull line shrinks its spaces by up to a third; the runtimes do
-                                // both. Wider than the font's advance is a stretch (justification, `spacing`), not ported.
-                                let narrowed = c.is_whitespace() && adv >= -1e-9 && adv <= advance + 1e-6;
+                                // both. Wider than the font's advance is a stretch, which only a justified slot may show
+                                // (M11; `spacing` is pinned in the dialect).
+                                let narrowed = c.is_whitespace() && adv >= -1e-9 && (adv <= advance + 1e-6 || slot.meta.justify);
                                 if ((adv - advance).abs() > 1e-6 && !narrowed) || dx.abs() > 1e-9 || dy.abs() > 1e-9 {
                                     bail!("slot `{name}`: Typst advanced {c:?} by {adv:.4} pt (offset {dx:.4}, {dy:.4}) where the font's advance is {advance:.4}; tracking, spacing, kerning or a feature the runtimes cannot reproduce");
                                 }
@@ -1061,7 +1062,7 @@ impl<'a> Exporter<'a> {
                 name: s.meta.name, page: s.page, x: s.rect.x, y: s.rect.y, width: s.rect.w, height: s.rect.h,
                 baseline, descent: s.meta.descent, pen_x: style.pen_x, font: style.font, size: style.size, fill: style.fill,
                 align: s.meta.align, overflow: s.meta.overflow, max_length: s.meta.max_length, sample: s.sample, node: s.node,
-                charset: s.meta.charset, lines: s.meta.lines, pitch: s.meta.pitch, auto_lines: s.meta.auto_lines, link,
+                charset: s.meta.charset, lines: s.meta.lines, pitch: s.meta.pitch, auto_lines: s.meta.auto_lines, link, justify: s.meta.justify,
             });
         }
         Ok((slots, unstyled, reference, link_refs))
@@ -1924,7 +1925,7 @@ fn roles(nodes: &[ir::Node]) -> String {
 }
 
 fn describe_slot(slot: &ir::Slot, indent: &str) {
-    let mut wrap = if slot.lines > 1 { format!(" lines {} pitch {:.2}", slot.lines, slot.pitch) } else { String::new() };
+    let mut wrap = if slot.lines > 1 { format!(" lines {} pitch {:.2}{}", slot.lines, slot.pitch, if slot.justify { " justified" } else { "" }) } else { String::new() };
     if let Some(l) = slot.link { wrap += &format!(" link {:.2}+{:.2}", l.above, l.below); }
     println!("{indent}slot {:<14} rect ({:.2}, {:.2}) {:.2} x {:.2}  baseline y {:.2}  font #{} {:.1}pt  align {:<6}{wrap} sample {:?}",
         slot.name, slot.x, slot.y, slot.width, slot.height, slot.baseline, slot.font, slot.size, slot.align, slot.sample);

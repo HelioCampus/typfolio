@@ -4,7 +4,7 @@ The one inventory of what paramdoc cannot do yet, written for someone building a
 cannot express, what happens if you try, the workaround, and what a fix would take. `HANDOVER.md` keeps the
 *order* in which the next pieces should be built; this file keeps the *list*. When a note's "Open" section is
 written, add its items here; when a gap closes, move it to the table at the end with the date and the note.
-Last reconciled 2026-10-26, after M12 (refusals: `docs/2026-10-26-refusals.md`).
+Last reconciled 2026-10-26, after M11 (justified slots: `docs/2026-10-26-justified-slots.md`).
 
 **Status words.** *refused at export*: the exporter stops with a message naming the element, before anything
 ships. *refused at fill*: the runtime stops with a message naming the slot; the document was exportable but this
@@ -14,18 +14,15 @@ with the reason.
 
 ## Text in slots
 
-- **G1 Justified text in wrapping slots.** Status: missing. Today: every wrapping slot is ragged right, inside
-  paragraphs the template justifies. Workaround: none beyond accepting ragged slots. Fix: `PLAN.md`, M11
-  (checked against typst-layout 0.15.1): keep the simple breaker and hyphenation off, port only the
-  space-stretching step; small, both runtimes. Next in the queue.
 - **G2 Hyphenation.** Status: rule (decided 2026-10-26). Not supported unless it comes without pattern tables
   (tens of kB per language) and without a port of Typst's hyphenation step into both runtimes; `hyphenate:
   false` stays pinned, and narrow justified columns will show loose lines. What stays possible and cheap: soft
   hyphens supplied by the data (U+00AD), once the runtimes draw the dash Typst draws at such a break (G44;
   `PLAN.md`, M12).
-- **G3 Optimized line breaking.** Status: missing. Slots use Typst's simple (greedy) breaker; Typst's default for
-  justified paragraphs is the optimized one, so a justified slot will break like a browser, not like the
-  paragraph around it. Fix: port `linebreak_optimized` and its cost function; medium.
+- **G3 Optimized line breaking.** Status: missing. Slots use Typst's simple (greedy) breaker, justified ones too
+  (since M11, `justify: true`); Typst's default for justified paragraphs is the optimized one, so a justified
+  slot breaks like a browser, not like the paragraph around it. Fix: port `linebreak_optimized` and its cost
+  function; medium.
 - **G4 Scripts that need shaping.** Status: refused at export (since M12). The runtimes map one character to one
   glyph through the font's character map, which holds for Latin, Greek and Cyrillic with kerning and ligatures
   off and fails for Arabic, Hebrew, Devanagari, Thai (a shaper) and for Chinese and Japanese (other break
@@ -191,6 +188,7 @@ with the reason.
 | Bars (parametric geometry) and image slots, static raster images | 2026-10-25 | `docs/2026-10-25-geometry-and-images.md` |
 | Web addresses in wrapping slots (Typst's link breaking) | 2026-10-26 | `docs/2026-10-26-addresses-and-links.md` |
 | Clickable links: static links and link slots as PDF/UA annotations | 2026-10-26 | `docs/2026-10-26-addresses-and-links.md` |
+| G1 Justified text in wrapping slots (`justify: true`; the space-stretching step of Typst's `commit`, breaks unchanged) | 2026-10-26 | `docs/2026-10-26-justified-slots.md` |
 | G48 Shaper features, tracking, spacing and language in slots: pinned in the dialect, every glyph of every compile checked against the character map and the font's advances, the whole repertoire shaped through the template on export | 2026-10-26 | `docs/2026-10-26-refusals.md` |
 | G50 The exporter warned where it should refuse (a single-line sample that wrapped, baselines off the contract or the grid, a sample taller than its box) | 2026-10-26 | `docs/2026-10-26-refusals.md` |
 | A declared `charset` beyond the default: Turkish, Greek and Cyrillic under `lang: "tr"`, random texts and pixels identical to Typst (`fixtures/charset`) | 2026-10-26 | `docs/2026-10-26-refusals.md` |

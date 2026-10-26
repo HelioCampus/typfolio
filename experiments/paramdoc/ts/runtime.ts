@@ -7,7 +7,7 @@
 // because CompressionStream costs milliseconds per call in browsers. Erasable TypeScript only, so Node can run it
 // with `--experimental-strip-types` and a bundler can ship it to a browser unchanged.
 
-export const IR_VERSION = 8;
+export const IR_VERSION = 9;
 
 // ---------------------------------------------------------------------------------------------------------
 // IR (mirrors ../ir/src/lib.rs; serde writes `None` as null unless skipped)
@@ -33,6 +33,9 @@ export interface Slot {
   sample: string; node?: number;
   /** Set for a link slot: where each line's clickable rectangle sits around its baseline (points above and below). */
   link?: SlotLink | null;
+  /** A wrapping slot whose lines are justified: every line but the last and lines before a hard break stretch their
+   *  spaces to the slot's width, as Typst does with the simple breaker (M11). */
+  justify?: boolean;
 }
 export interface SlotLink { above: number; below: number }
 /** A clickable link in the static content: Typst's rectangles for one link element (one per line), the URL, Typst's
@@ -416,7 +419,8 @@ function linebreakLink(link: string[], f: (end: number) => void): void {
 
 /** A line of a wrapping slot: `layoutEnd` excludes the trailing whitespace that does not count for the width;
  *  `shapingEnd` includes it (Typst draws those glyphs at zero advance). */
-interface BrokenLine { start: number; layoutEnd: number; shapingEnd: number; width: number }
+/** `mandatory`: the line ends at a hard break or at the end of the text, so it is never justified. */
+interface BrokenLine { start: number; layoutEnd: number; shapingEnd: number; width: number; mandatory: boolean }
 /** A line as drawn: the first `kept` glyphs count for the width, the rest are trimmed trailing whitespace at zero advance. */
 interface LineRun { ids: number[]; advances: number[]; text: string; width: number; kept: number }
 const isSpaceGlyph = (c: string): boolean => c === ' ' || c === '\u00a0' || c === '\u3000';
@@ -428,7 +432,7 @@ function breakLines(chars: string[], widthOf: (from: number, to: number) => numb
     let shapingEnd = end, layoutEnd = end;
     if (mandatory) { while (shapingEnd > start && isMandatoryBreak(chars[shapingEnd - 1]!)) shapingEnd--; layoutEnd = shapingEnd; }
     else while (layoutEnd > start && (isWhitespace(chars[layoutEnd - 1]!) || isDefaultIgnorable(chars[layoutEnd - 1]!))) layoutEnd--;
-    return { start, layoutEnd, shapingEnd, width: widthOf(start, layoutEnd) };
+    return { start, layoutEnd, shapingEnd, width: widthOf(start, layoutEnd), mandatory };
   };
   const lines: BrokenLine[] = [];
   let start = 0;
@@ -453,30 +457,47 @@ function fillLines(slot: Slot, text: string, href: Href, font: Font, traceName: 
   const idAt = (i: number): number => (ids[i] ??= glyphOf(chars[i]!));
   const widthOf = (from: number, to: number): number => { let w = 0; for (let i = from; i < to; i++) w += font.advance(idAt(i)) * size; return w; };
   const fits = (width: number): boolean => slot.width + 1e-4 >= width; // Typst's `Abs::fits`
-  const run = (cs: string[], kept: number): LineRun => {
+  // Typst's `commit` (typst-layout 0.15.1 `line.rs`) with the default `par.justification-limits`: a kept space may
+  // shrink by a third of its advance (min(a / 3, 0.75 a)) and stretch by half of it; nothing else adjusts.
+  // `remaining < 0`: the line does not fit and its spaces shrink (ragged lines too), by `ratio` of their
+  // shrinkability, down to -1. Otherwise a justified line stretches its spaces by `ratio` of their stretchability,
+  // up to 1, and shares what is still left equally among them (`extra`); a line without a space keeps its width and
+  // is aligned as the slot says. Same arithmetic as the Rust runtime's `run`.
+  const sum = (xs: number[]): number => xs.reduce((w, a) => w + a, 0);
+  const run = (cs: string[], kept: number, justify: boolean): LineRun => {
     const ids = cs.map(glyphOf);
     const advances = ids.map((id, i) => (i < kept ? font.advance(id) * size : 0));
-    let width = advances.reduce((w, a) => w + a, 0);
-    if (!fits(width)) {
-      // Typst shrinks the spaces of a line that does not fit by up to a third of their width (`par.justification-limits`,
-      // spacing min 2/3) before letting it overflow; it does so for ragged lines too.
-      const shrinkable = advances.map((a, i) => (i < kept && isSpaceGlyph(cs[i]!) ? Math.min(a / 3, a * 0.75) : 0));
-      const shrinkability = shrinkable.reduce((w, a) => w + a, 0);
-      if (shrinkability > 0) {
-        const ratio = Math.max((slot.width - width) / shrinkability, -1);
-        for (let i = 0; i < advances.length; i++) advances[i]! += ratio * shrinkable[i]!;
-        width = advances.reduce((w, a) => w + a, 0);
-      }
+    let width = sum(advances);
+    const spaces = cs.map((c, i) => i < kept && isSpaceGlyph(c));
+    const remaining = slot.width - width;
+    const shrinkable = advances.map((a, i) => (spaces[i] ? Math.min(a / 3, a * 0.75) : 0));
+    const shrinkability = sum(shrinkable);
+    if (remaining < 0 && shrinkability > 0) {
+      const ratio = Math.max(remaining / shrinkability, -1);
+      for (let i = 0; i < advances.length; i++) advances[i]! += ratio * shrinkable[i]!;
+      width = sum(advances);
+    } else if (justify) {
+      const stretchable = advances.map((a, i) => (spaces[i] ? a * 0.5 : 0));
+      const stretchability = sum(stretchable);
+      let ratio = 0, left = remaining;
+      if (stretchability > 0) { ratio = Math.min(remaining / stretchability, 1); left = Math.max(remaining - stretchability, 0); }
+      const justifiables = spaces.filter(s => s).length;
+      const extra = justifiables > 0 && left > 0 ? left / justifiables : 0;
+      for (let i = 0; i < advances.length; i++) advances[i]! += ratio * stretchable[i]! + (spaces[i] ? extra : 0);
+      width = sum(advances);
     }
     return { ids, advances, text: cs.join(''), width, kept };
   };
-  const render = (l: BrokenLine): LineRun => run(chars.slice(l.start, l.shapingEnd), l.layoutEnd - l.start);
+  // Every line but the last and lines before a hard break are justified (`line.rs`: `config.justify && breakpoint !=
+  // Mandatory`; the end of the text is a mandatory break too).
+  const render = (l: BrokenLine): LineRun => run(chars.slice(l.start, l.shapingEnd), l.layoutEnd - l.start, slot.justify === true && !l.mandatory);
   const ellipsize = (l: BrokenLine): LineRun => {
     const ellipsis = [...(font.glyph('…') !== undefined ? '…' : '...')];
     const kept = chars.slice(l.start, l.layoutEnd);
     const trimmed = (): string[] => { while (kept.length && isWhitespace(kept[kept.length - 1]!)) kept.pop(); return kept; };
-    let shown = run([...trimmed(), ...ellipsis], kept.length + ellipsis.length);
-    while (!fits(shown.width) && kept.length) { kept.pop(); shown = run([...trimmed(), ...ellipsis], kept.length + ellipsis.length); }
+    // The ellipsized line is the runtime's own and the last one shown: never stretched.
+    let shown = run([...trimmed(), ...ellipsis], kept.length + ellipsis.length, false);
+    while (!fits(shown.width) && kept.length) { kept.pop(); shown = run([...trimmed(), ...ellipsis], kept.length + ellipsis.length, false); }
     return shown;
   };
 

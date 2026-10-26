@@ -23,8 +23,10 @@
   overflow: "error",  // error | clip | shrink | ellipsis: what the runtime does when the text does not fit
   max-length: none,   // the schema's maxLength, informative for now
   charset: none,      // the characters the slot may contain; none means the exporter's default repertoire
-  lines: 1,           // more than 1: a wrapping slot of exactly this many ragged-right lines, aligned to the top;
+  lines: 1,           // more than 1: a wrapping slot of exactly this many lines, aligned to the top;
                       // `auto`: as many as the text needs, inside a band with `variants` (one layout per count)
+  justify: false,     // a wrapping slot stretches the spaces of every line but the last and lines before a hard
+                      // break, as Typst's `par(justify: true)` does with the simple breaker; single lines ignore it
   ..text-args,        // text arguments applied inside the slot: size, weight, style, fill
 ) = text(..text-args.named(), context {
   let d = descent.to-absolute()
@@ -36,7 +38,7 @@
   let shown = if type(value) == dictionary { value.text } else { value }
   let shown = if type(shown) in (str, content) { shown } else { str(shown) }
   let body = if href == none { shown } else { link(href, shown) }
-  let meta = (name: name, align: repr(align), overflow: overflow, max-length: max-length, charset: charset, descent: d.pt(), link: href != none)
+  let meta = (name: name, align: repr(align), overflow: overflow, max-length: max-length, charset: charset, descent: d.pt(), link: href != none, justify: justify)
   let line-height = measure({ set text(bottom-edge: "baseline"); [x] }).height
   let leading = par.leading.to-absolute()
   let pitch = line-height + leading
@@ -51,7 +53,7 @@
   // the first baseline sits one line height below the box top.
   let wrapping(n, meta) = box(width: width, height: n * line-height + (n - 1) * leading + d, clip: true, inset: (bottom: d))[
     #metadata(meta + (lines: n, line-height: line-height.pt(), pitch: pitch.pt())) <paramdoc-slot>
-    #set par(justify: false, linebreaks: "simple", first-line-indent: 0pt, hanging-indent: 0pt)
+    #set par(justify: justify, linebreaks: "simple", first-line-indent: 0pt, hanging-indent: 0pt)
     #set text(hyphenate: false, kerning: false, ligatures: false, features: (calt: 0), overhang: false, bottom-edge: "baseline", dir: ltr, tracking: 0pt, spacing: 100%, stroke: none, cjk-latin-spacing: none)
     #std.align(align + top, body)
   ]
@@ -65,7 +67,7 @@
       let forced = forced-variant(band.name)
       let n = if forced != none { forced } else {
         let h = measure(box(width: w, {
-          set par(justify: false, linebreaks: "simple", first-line-indent: 0pt, hanging-indent: 0pt)
+          set par(justify: justify, linebreaks: "simple", first-line-indent: 0pt, hanging-indent: 0pt)
           set text(hyphenate: false, kerning: false, ligatures: false, features: (calt: 0), overhang: false, bottom-edge: "baseline", dir: ltr, tracking: 0pt, spacing: 100%, stroke: none, cjk-latin-spacing: none)
           body
         })).height
