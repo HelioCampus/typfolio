@@ -223,6 +223,112 @@ Exit: justified `wrap` cases and random `wrapfuzz` texts match Typst glyph for g
 runtimes; status-log entry, `HANDOVER.md` item 4 and contract paragraph, `GAPS.md` G1 to the Closed table, a
 `docs/2026-MM-DD-justified-slots.md` note.
 
+### M12: refuse what the runtimes cannot reproduce (built 2026-10-26)
+
+Result (2026-10-26): done, see the status log and `docs/2026-10-26-refusals.md`. The plan below is as it was
+built, with two findings it did not foresee: Typst keeps trailing spaces in a run at zero advance and shrinks
+spaces on overfull lines (the shaping check allows a space any advance up to the font's), and the middle dot is
+CJK punctuation to Typst (refused, G51).
+
+Decided 2026-10-26, first written in a fork of the working session (`HANDOVER-refuse.md`, since folded in here)
+and reworked after an audit of the exporter and both runtimes. The runtimes will not grow to cover everything:
+what would make the TypeScript runtime heavy (a shaper, bidi, hyphenation patterns, Unicode tables, an SVG
+renderer) stays out until a better route exists. Until then, unsupported input stops with a message. It is
+never laid out differently from Typst, because the compiler is the fallback for that document.
+
+- **The rule: two gates, one proof.** At export, the template is checked against what the runtimes are proven
+  on; what it declares and they cannot reproduce is refused with the element, the reason and the fix, like the
+  other export refusals. At fill, the data is checked only by lookups the runtime makes anyway (the character
+  map, the value's shape, an image header); no new tables, no normalisation. A *whitelist* names the candidates
+  (scripts the one-character-one-glyph model can hold); the *proof* (Typst's own layout of the constrained
+  template, compared glyph for glyph) admits them. What is not proven is refused. Budget: the TypeScript runtime
+  stays near 14 kB gzipped; anything needing per-language or per-script data is out of this milestone.
+- **Hyphenation** (G2) is not supported unless it comes without pattern tables and without a port of Typst's
+  hyphenation step; `hyphenate: false` stays pinned, narrow justified columns will show loose lines. The cheap
+  half, soft hyphens supplied by the data, is listed under G44 for later: at a line ending on U+00AD Typst
+  appends the font's `-` glyph (typst-layout 0.15.1 `line.rs:141`, `shaping.rs:610`); until that is ported the
+  character is refused.
+- **What the audit found** beyond the fork's five holes (a declared `charset` is not checked; a repertoire
+  character the font lacks is dropped silently in `subset_fonts`; U+00AD is in the default repertoire and
+  breaks without the dash; precomposed-only is an unstated rule; shaper features beyond the pinned ones are
+  unproven): `TextItem.stroke` is ignored in `text_item` and in slots, so stroked text draws filled (G45);
+  colour fonts (COLR, CBDT, sbix, SVG tables) and variation axes are never checked, the runtimes draw the
+  outline at the default instance (G46); a slot keeps the style of its first run, so a `show` rule that recolours
+  or resizes part of the sample is silently flattened (G47); nothing checks that the sample's glyphs are the
+  character map's with the font's advances, which is the one assumption every runtime lookup makes, so `tnum`,
+  `smcp`, `locl`, `tracking` and `spacing` from the template pass unseen (G48); numbers are rendered by the
+  runtimes' own formatting where Typst used `str()`, proven for integers only (G49); four `finish_slots` checks
+  print a warning where the rule says refuse (G50); and the fuzz alphabet `CHARSET` is a subset of the default
+  repertoire: no accented letter, no NBSP, none of `#&*<=>@[]^_{|}~` has ever been compared with Typst.
+- **Step 1, characters at export.** Next to `DEFAULT_REPERTOIRE` (`export/src/main.rs`, the subsetting
+  section), one function that says why a character is not supported, run over every slot's repertoire where
+  `SlotMeta.charset` is read or in `finish_slots`. Admitted candidates: the default repertoire minus U+00AD;
+  Latin Extended-A, -B and Additional (U+0100–024F, U+1E00–1EFF); Greek and Coptic (U+0370–03FF minus the
+  combining range); Cyrillic and its Supplement (U+0400–052F minus U+0483–0489); the General Punctuation
+  entries `lb_class` knows; Currency Symbols (U+20A0–20CF); the symbols the default set has. Refused with the
+  reason: *needs a shaper* (U+0590–08FF, U+0900–0DFF, U+0E00–0FFF, U+1000–109F, U+1780–17FF), *East Asian line
+  breaking* (U+2E80–9FFF, U+A000–A4CF, U+AC00–D7AF, U+F900–FAFF, U+FF00–FFEF, U+20000 and up), *combining
+  mark*, *format or bidi control* (U+200C–200F, U+202A–202E, U+2066–2069, U+061C, U+FEFF), *variation
+  selector*, *private use, surrogate or noncharacter*, *emoji* (U+1F000 and up), *soft hyphen* (until G44), and
+  the catch-all *not in the supported scripts*. In `subset_fonts`, a repertoire character without a glyph in the
+  font is an error naming the font (today it is dropped, and the fill later says "not in the repertoire", which
+  is false). For every admitted character whose UAX #14 class is not `AL`, the entry goes into `lb_class` and
+  `lbClass`, kept identical. In both runtimes, U+00AD in data gets its own message ("soft hyphens are not
+  supported; strip them") in front of the generic repertoire one, since pasted web text carries them. Cost: a
+  few range comparisons per character once per export, ~80 lines; two lines per runtime.
+- **Step 2, the sample proves the shaping** (deterministic, always on). In `export_frame`'s slot branch, every
+  glyph of a slot run must be the character map's glyph for the character its `range` covers, with the font's
+  horizontal advance at the run's size and `x_offset` and `y_offset` of zero; every run of a slot must share
+  the font, size and fill of the first. Refuse otherwise: "slot X: Typst drew glyph N for 'c' where the font's
+  character map gives M (a font feature, language, tracking, spacing or style rule the runtime cannot
+  reproduce)". `TextItem.stroke` is refused everywhere ("stroked text is not supported"). A font used by any text
+  is refused at export when its face has a COLR, CBDT, sbix or SVG table or an `fvar` table (ttf-parser
+  `tables()`), naming the font and the table. The four warnings in `finish_slots` (a single-line sample that
+  wrapped, a baseline off the contract, a baseline off the line grid, a sample taller than its box) become
+  refusals under `strict`. Cost: ~60 lines, one place, no runtime change. This closes G45–G48 and G50 for the
+  sample's characters; step 3 covers the rest of the repertoire.
+- **Step 3, the repertoire proves the breaking.** `--fuzz-references` draws its texts from each slot's own
+  repertoire (spaces kept frequent) instead of `CHARSET`, so random texts of every admitted character are
+  compared with Typst under the template's font and `lang`. Run it over the default repertoire first and expect
+  it to find U+00AD (step 1 removes it) and nothing else; then a `charset` fixture declaring Turkish, Greek and
+  Cyrillic letters with `lang: "tr"`, since a font with a `locl` rule is exactly what must be caught, fuzzed and
+  pixel-identical. Deterministic upgrade when there is time: shape the whole repertoire once through Typst in
+  each slot's style (one small compile per font, size and language; the exporter compiles in process) and
+  compare with the subset's character map and advances, so characters no sample contains are proven too; about
+  a hundred lines. Cost of the fuzz change: ~20 lines and a fixture.
+- **Step 4, pins in the dialect.** Inside `single` and `wrapping` and the `lines: auto` measurement block, add
+  `dir: ltr`, `tracking: 0pt`, `spacing: 100%`, `stroke: none` and `cjk-latin-spacing: none` to the pinned
+  `set text`, so a template's own `set` rules cannot reach a slot's text (nine identical copies; `md5 -q
+  fixtures/*/paramdoc.typ | sort -u | wc -l` prints 1). `fallback` stays: a missing glyph is caught by step 1.
+- **Step 5, values.** A number that is not an integer is refused at fill in both runtimes ("format it as a
+  string: Typst's `str()` and the runtime's number formatting are not the same function"); integers and
+  booleans stay, the fuzz already proves them. Two lines per runtime.
+- **Step 6, images and links.** A JPEG whose EXIF orientation tag is not 1 is refused at fill (APP1 segment,
+  TIFF header, IFD0 tag 0x0112; ~30 lines per runtime, G19). `image(scaling: "smooth")` is refused at export
+  (one line, G20). A static link under a rotation or skew is refused at export in `link_rect` (one line, G13). A
+  link slot with the `shrink` policy gets its rectangle scaled with the text, a fix rather than a refusal (one
+  line per runtime, G15).
+- **Step 7, geometry.** G9: refuse at export, for a wrapping slot that clips or ellipsizes, when the tallest
+  glyph top of the slot's repertoire (ttf-parser bounding boxes, at the slot's size) exceeds `pitch − descent`,
+  because Typst's clipped box would then show the top of the first dropped line and the runtime would not;
+  message names `par.leading` and the slot's descent. G10: make the `lines: auto` count tie-proof in the
+  dialect and the runtimes, or refuse at export a sample whose measured height lands within 1e-3 pt of a tie.
+- **Step 8, write it down.** The contract paragraph in `HANDOVER.md`: supported scripts (Latin, Greek,
+  Cyrillic, precomposed, left to right), one style per slot, no hyphenation, soft hyphens refused, everything
+  else refused at export with the reason. `GAPS.md`: G4, G9, G13, G19, G20, G44–G50 to their new status, G2
+  stays a rule. Fixtures: `charsetbad` (must fail the export: a slot declaring an Arabic letter, a Chinese
+  character, a combining mark, a bidi control and a character the font lacks; a stroked text; a `show` rule that
+  recolours part of a slot) and `charset` (step 3), both in `check.sh` next to `leak` and `linkbad`. A
+  `docs/2026-MM-DD-refusals.md` note at the repository root with the decisions and the numbers.
+- **Out of scope.** A shaper, bidi, East Asian text (a Rust-runtime consolidation and a product decision, G4),
+  pattern hyphenation (G2), the soft-hyphen dash port (G44, half a day when someone needs it), normalisation
+  inside the runtimes, SVG (G17), and refusing at fill what the export already refused: the IR version gate is
+  enough, there is one exporter.
+
+Exit: `./check.sh` green with the two new fixtures; the default repertoire fuzzed against Typst; every *silent*
+entry of the Text, Links and Images sections of `GAPS.md` closed, refused or reduced to a documented cosmetic
+rule; status-log entry, `HANDOVER.md` item 6 and the contract paragraph, the note. Then M11.
+
 ## Running
 
 ```sh
@@ -265,6 +371,30 @@ Defaults: fonts from `../../fixtures/fonts`, output under `../../.build/paramdoc
 
 ## Status log
 
+- **M12 refusals (2026-10-26).** Unsupported input stops with a message instead of laying out differently; the
+  TypeScript runtime stays light. Exporter: a character whitelist for `charset` (the default set, Latin Extended,
+  Greek, Cyrillic, a few punctuation and currency ranges; everything else refused with the reason); a declared
+  character the font lacks is an error; every glyph of every compile (sample, references, fuzz) must be the
+  character map's for one character, at the font's advance with no offset, a space allowed any advance up to
+  the font's (Typst trims trailing spaces to zero and shrinks spaces on overfull lines, which the runtimes
+  port); one font, size and colour per slot; stroked text, colour and variable fonts, `scaling: "smooth"` and
+  rotated links refused; the four `finish_slots` warnings are refusals, plus a `lines: auto` tie check; the
+  leading-versus-descent check for clipping slots (G9). The *repertoire proof*: on every export each text slot
+  is filled with its whole repertoire through the real template (one extra compile) and every character must
+  come out shaped as the runtimes would shape it. The fuzz draws from each slot's own repertoire. Dialect: `dir`,
+  `tracking`, `spacing`, `stroke` and `cjk-latin-spacing` pinned inside slots. Runtimes: soft hyphens refused
+  with their own message, non-integer numbers refused, JPEGs with an EXIF orientation refused, a shrunk link
+  slot's rectangle shrinks with the text. Found by the new proof: the middle dot is CJK punctuation to Typst
+  (G51, refused). Fixtures: `charset` (Turkish, Greek, Cyrillic under `lang: "tr"`, 40 random texts and the
+  sample identical to Typst in glyphs and pixels, both runtimes), `charsetbad`, `stylebad`, `rotatedlink`,
+  `smooth`, `leading` (must fail), `figures/data-exif-error.json` and `certificate/data-float-error.json`
+  (refused by both runtimes); `wrapfuzz` now draws from the whole default repertoire. `check.sh` 136
+  checks. Sizes: wasm 690 kB raw / 243 kB gzip, worker bundle 37 kB / 14 kB gzip. Open: the soft-hyphen dash (G44) and the middle dot (G51)
+  ports, both small; then M11. Notes in `docs/2026-10-26-refusals.md`.
+- **Replan (2026-10-26).** Refusals before features: the runtimes will not cover what would make the TypeScript
+  runtime heavy, and until a better route exists unsupported input must stop with a message rather than lay out
+  differently. An audit of the exporter and both runtimes found six more silent paths (`GAPS.md` G45–G50) next
+  to the fork's five; the plan is M12 above, built the same day (entry above).
 - **M10 web addresses and clickable links (2026-10-26).** Both runtimes port the link case of Typst's
   `breakpoints()` (`link_prefix`, `linebreak_link`): the trigger is positional (`://` before or `www.` after the
   previous opportunity), the address is the ASCII run typst-syntax eats minus trailing prose punctuation, breaks

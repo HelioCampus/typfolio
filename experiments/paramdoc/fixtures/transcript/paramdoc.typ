@@ -3,7 +3,8 @@
 // identically for every valid input; the exporter checks that by fuzzing the data and diffing the frames.
 // Lengths in `em` are relative to the slot's own text size (after `text-args`).
 // Inside a slot, kerning, ligatures and contextual alternates (`calt`: Libertinus swaps in a short f before i) are
-// off, so the runtime can place glyphs from advance widths alone.
+// off, so the runtime can place glyphs from advance widths alone; direction, tracking, spacing, stroke and
+// CJK-Latin spacing are pinned too, so a template's own `set text` rules cannot reach a slot's text (M12).
 // The band a slot sits in (set by `band`, below) and the variant a compile forces, for `lines: auto` slots.
 #let band-state = state("paramdoc-band", none)
 #let forced-variant(name) = {
@@ -42,7 +43,7 @@
   // One line: the box baseline is pinned (`at: bottom`, shifted up by the descent) so content cannot move the line.
   let single(meta) = box(width: width, height: height, clip: true, inset: (bottom: d), baseline: (at: bottom, shift: d))[
     #metadata(meta) <paramdoc-slot>
-    #set text(kerning: false, ligatures: false, features: (calt: 0), overhang: false, bottom-edge: "baseline")
+    #set text(kerning: false, ligatures: false, features: (calt: 0), overhang: false, bottom-edge: "baseline", dir: ltr, tracking: 0pt, spacing: 100%, stroke: none, cjk-latin-spacing: none)
     #std.align(align + bottom, body)
   ]
   // Several lines: they break as Typst's simple breaker does, without hyphenation or justification, so the
@@ -51,7 +52,7 @@
   let wrapping(n, meta) = box(width: width, height: n * line-height + (n - 1) * leading + d, clip: true, inset: (bottom: d))[
     #metadata(meta + (lines: n, line-height: line-height.pt(), pitch: pitch.pt())) <paramdoc-slot>
     #set par(justify: false, linebreaks: "simple", first-line-indent: 0pt, hanging-indent: 0pt)
-    #set text(hyphenate: false, kerning: false, ligatures: false, features: (calt: 0), overhang: false, bottom-edge: "baseline")
+    #set text(hyphenate: false, kerning: false, ligatures: false, features: (calt: 0), overhang: false, bottom-edge: "baseline", dir: ltr, tracking: 0pt, spacing: 100%, stroke: none, cjk-latin-spacing: none)
     #std.align(align + top, body)
   ]
   if lines == 1 { single(meta) } else if lines != auto { wrapping(lines, meta) } else {
@@ -65,7 +66,7 @@
       let n = if forced != none { forced } else {
         let h = measure(box(width: w, {
           set par(justify: false, linebreaks: "simple", first-line-indent: 0pt, hanging-indent: 0pt)
-          set text(hyphenate: false, kerning: false, ligatures: false, features: (calt: 0), overhang: false, bottom-edge: "baseline")
+          set text(hyphenate: false, kerning: false, ligatures: false, features: (calt: 0), overhang: false, bottom-edge: "baseline", dir: ltr, tracking: 0pt, spacing: 100%, stroke: none, cjk-latin-spacing: none)
           body
         })).height
         calc.clamp(int(calc.round((h - line-height) / pitch)) + 1, 1, band.variants)

@@ -92,10 +92,18 @@ pub struct ReferenceSlot {
     #[serde(default, skip_serializing_if = "Option::is_none")] pub rects: Option<Vec<[f64; 4]>>,
 }
 
+/// The glyph of a character in the slot's repertoire, or the refusal naming it.
+fn glyph_or_refuse(font: &LoadedFont, c: char, trace_name: &str) -> Result<u16> {
+    if c == '\u{ad}' { bail!("slot `{trace_name}`: soft hyphens (U+00AD) are not supported; strip them from the text"); }
+    font.glyph(c).ok_or_else(|| anyhow!("slot `{trace_name}`: {c:?} (U+{:04X}) is not in the slot's repertoire; declare it with `charset:` in the template", c as u32))
+}
+
 fn text_of(value: &serde_json::Value) -> Result<String> {
     Ok(match value {
         serde_json::Value::String(s) => s.clone(),
-        serde_json::Value::Number(n) => n.to_string(),
+        // Typst's `str()` and this formatting agree on integers, not on every float (`1e21`, `1e-7`).
+        serde_json::Value::Number(n) if n.is_i64() || n.is_u64() => n.to_string(),
+        serde_json::Value::Number(n) => bail!("{n} is not an integer; format numbers with a fraction as strings in the application"),
         serde_json::Value::Bool(b) => b.to_string(),
         // A link slot's value: `{ text, href }`.
         serde_json::Value::Object(map) if map.contains_key("text") => text_of(&map["text"])?,
@@ -116,12 +124,13 @@ type Href = Option<(String, Option<String>)>;
 /// The clickable rectangles of a link slot: each drawn line's box (x, baseline, width) extended above and below
 /// the baseline as Typst extends a link's text frame. A link slot needs an `href`, a plain slot refuses one, so
 /// the runtime never renders a value Typst would have styled differently (`show link` rules).
-fn link_fill(slot: &ir::Slot, href: Href, lines: &[(f64, f64, f64)], trace_name: &str) -> Result<Option<LinkFill>> {
+/// `scale` is the text's size relative to the slot's (the `shrink` policy), which the rectangle's height follows.
+fn link_fill(slot: &ir::Slot, href: Href, lines: &[(f64, f64, f64)], scale: f64, trace_name: &str) -> Result<Option<LinkFill>> {
     match (href, slot.link) {
         (None, None) => Ok(None),
         (None, Some(_)) => bail!("slot `{trace_name}` is a link slot (its sample value had an `href`) but the data gives none"),
         (Some(_), None) => bail!("slot `{trace_name}`: the data gives an `href` but the slot was exported without a link; give its sample value an `href` too"),
-        (Some((url, alt)), Some(g)) => Ok(Some(LinkFill { rects: lines.iter().map(|&(x, y, w)| [x, y - g.above, w, g.above + g.below]).collect(), url, alt })),
+        (Some((url, alt)), Some(g)) => Ok(Some(LinkFill { rects: lines.iter().map(|&(x, y, w)| [x, y - g.above * scale, w, (g.above + g.below) * scale]).collect(), url, alt })),
     }
 }
 
@@ -136,7 +145,7 @@ fn fill_slot(slot: &ir::Slot, text: &str, href: Href, font: &LoadedFont, trace_n
         let mut glyphs = Vec::new();
         let mut width = 0.0;
         for c in text.chars() {
-            let id = font.glyph(c).ok_or_else(|| anyhow!("slot `{trace_name}`: {c:?} (U+{:04X}) is not in the slot's repertoire; declare it with `charset:` in the template", c as u32))?;
+            let id = glyph_or_refuse(font, c, &trace_name)?;
             let advance = font.advance(id) * size;
             glyphs.push(ir::Glyph { id, x_advance: advance, x_offset: 0.0, y_offset: 0.0, chars: None });
             width += advance;
@@ -177,7 +186,7 @@ fn fill_slot(slot: &ir::Slot, text: &str, href: Href, font: &LoadedFont, trace_n
     };
     let mut pen = x;
     let trace_glyphs = glyphs.iter().map(|g| { let at = pen; pen += g.x_advance; ReferenceGlyph { id: g.id, x: at, y: slot.baseline } }).collect();
-    let link = link_fill(slot, href, &[(x, slot.baseline, width)], &trace_name)?;
+    let link = link_fill(slot, href, &[(x, slot.baseline, width)], size / slot.size, &trace_name)?;
     Ok(Filled {
         rect: [slot.x, slot.y, slot.width, slot.height], image: None, alt: None, link,
         items: vec![ir::Item::Text { x, y: slot.baseline, font: slot.font, size, fill: slot.fill, text: shown, glyphs, node: None }],
@@ -203,8 +212,13 @@ fn lb_class(c: char) -> Lb {
         ' ' => Sp,
         '\t' | '|' | '\u{ad}' | '\u{2000}'..='\u{2006}' | '\u{2008}'..='\u{200a}' | '\u{2010}' | '\u{2012}' | '\u{2013}' => Ba,
         '!' | '?' => Ex,
+        '\u{37e}' => Is,
+        '\u{2024}' | '\u{2025}' => In,
+        '\u{2027}' => Ba,
+        '\u{2030}' | '\u{2031}' | '\u{20a7}' | '\u{20b6}' | '\u{20bb}' | '\u{20be}' => Po,
+        '\u{20a0}'..='\u{20c0}' => Pr,
         '"' | '\'' | '«' | '»' | '\u{2018}' | '\u{2019}' | '\u{201b}' | '\u{201c}' | '\u{201d}' | '\u{201f}' | '\u{2039}' | '\u{203a}' => Qu,
-        '$' | '+' | '\\' | '£' | '¤' | '¥' | '±' | '\u{20ac}' | '\u{2212}' => Pr,
+        '$' | '+' | '\\' | '£' | '¤' | '¥' | '±' | '\u{2212}' => Pr,
         '%' | '¢' | '°' | '\u{2032}' | '\u{2033}' => Po,
         '(' | '[' | '{' | '¡' | '¿' | '\u{201a}' | '\u{201e}' => Op,
         ')' | ']' => Cp,
@@ -388,9 +402,7 @@ fn fill_lines(slot: &ir::Slot, text: &str, href: Href, font: &LoadedFont, trace_
     if slot.overflow == "shrink" { bail!("slot `{trace_name}`: `shrink` is not an overflow policy for a wrapping slot"); }
     let chars: Vec<char> = text.chars().collect();
     let name = trace_name.clone();
-    let glyph_of = |c: char| -> Result<u16> {
-        font.glyph(c).ok_or_else(|| anyhow!("slot `{name}`: {c:?} (U+{:04X}) is not in the slot's repertoire; declare it with `charset:` in the template", c as u32))
-    };
+    let glyph_of = |c: char| -> Result<u16> { glyph_or_refuse(font, c, &name) };
     // Every character but a hard break is drawn, trailing whitespace included (at zero advance).
     let ids: Vec<u16> = chars.iter().map(|&c| if is_mandatory_break(c) { Ok(0) } else { glyph_of(c) }).collect::<Result<_>>()?;
     let width_of = |from: usize, to: usize| -> f64 { ids[from..to].iter().map(|&id| font.advance(id) * size).sum() };
@@ -475,7 +487,7 @@ fn fill_lines(slot: &ir::Slot, text: &str, href: Href, font: &LoadedFont, trace_
     }
     // The trace reports the first line's baseline as Typst's frame has it: at the box top when that line is whitespace.
     let baseline = ys.first().copied().unwrap_or(slot.baseline);
-    let link = link_fill(slot, href, &drawn, &trace_name)?;
+    let link = link_fill(slot, href, &drawn, 1.0, &trace_name)?;
     Ok(Filled { rect: [slot.x, slot.y, slot.width, slot.height], items, trace: ReferenceSlot { name: trace_name, baseline, size, glyphs: trace_glyphs, ops: None, rect: None, rects: None }, node: None, image: None, alt: None, link })
 }
 
@@ -694,12 +706,29 @@ fn jpeg_header(bytes: &[u8]) -> Result<(u32, u32, u8)> {
                 return Ok((width, height, bytes[at + 9]));
             }
             0xC3 | 0xC5..=0xC7 | 0xC9..=0xCB | 0xCD..=0xCF => bail!("JPEG frame type {code:#x} (lossless, hierarchical or arithmetic coding) is not supported"),
+            // Typst rotates a photo by its EXIF orientation; the runtimes draw it as stored, so they refuse it.
+            0xE1 if bytes.get(at + 4..at + 10) == Some(b"Exif\0\0") => {
+                if let Some(o) = exif_orientation(&bytes[at + 10..(at + 2 + len).min(bytes.len())]) && o != 1 {
+                    bail!("JPEG with EXIF orientation {o}: rotate the image before sending it (Typst would rotate it, the runtimes draw it as stored)");
+                }
+            }
             0xD9 | 0xDA => break,
             _ => {}
         }
         at += 2 + len;
     }
     bail!("JPEG without a frame header")
+}
+
+/// The EXIF orientation tag (0x0112 in IFD0) of a TIFF-structured EXIF block, if present.
+fn exif_orientation(tiff: &[u8]) -> Option<u16> {
+    let big = match tiff.get(..2)? { b"MM" => true, b"II" => false, _ => return None };
+    let u16_at = |at: usize| -> Option<u16> { let b = tiff.get(at..at + 2)?; Some(if big { u16::from_be_bytes([b[0], b[1]]) } else { u16::from_le_bytes([b[0], b[1]]) }) };
+    let u32_at = |at: usize| -> Option<u32> { let b = tiff.get(at..at + 4)?; Some(if big { u32::from_be_bytes([b[0], b[1], b[2], b[3]]) } else { u32::from_le_bytes([b[0], b[1], b[2], b[3]]) }) };
+    if u16_at(2)? != 42 { return None; }
+    let ifd = u32_at(4)? as usize;
+    let count = u16_at(ifd)? as usize;
+    (0..count).map(|i| ifd + 2 + 12 * i).find(|&e| u16_at(e) == Some(0x0112)).and_then(|e| u16_at(e + 8))
 }
 
 /// Baseline and progressive JPEGs pass through as DCT-encoded data, as in Typst's PDFs.
@@ -923,9 +952,7 @@ fn needed_lines(slot: &ir::Slot, text: &str, font: &LoadedFont, trace_name: &str
     let (pitch, size) = (slot.pitch, slot.size);
     if !(pitch > 0.0) { bail!("slot `{trace_name}`: a wrapping slot without a line pitch; export the document again"); }
     let chars: Vec<char> = text.chars().collect();
-    let ids: Vec<u16> = chars.iter().map(|&c| if is_mandatory_break(c) { Ok(0) } else {
-        font.glyph(c).ok_or_else(|| anyhow!("slot `{trace_name}`: {c:?} (U+{:04X}) is not in the slot's repertoire; declare it with `charset:` in the template", c as u32))
-    }).collect::<Result<_>>()?;
+    let ids: Vec<u16> = chars.iter().map(|&c| if is_mandatory_break(c) { Ok(0) } else { glyph_or_refuse(font, c, trace_name) }).collect::<Result<_>>()?;
     let width_of = |from: usize, to: usize| -> f64 { ids[from..to].iter().map(|&id| font.advance(id) * size).sum() };
     let fits = |width: f64| slot.width + 1e-4 >= width;
     let broken = break_lines(&chars, &width_of, &fits);

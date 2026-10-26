@@ -11,7 +11,9 @@
 # Every fixture is exported with a Typst reference for `data.json` and for each of its other `data-*.json` cases
 # (except `*-long*`, which paginate beyond the sample page, and the `wrap` overflow and error cases, which the
 # runtimes handle by policy); both runtimes are then checked against every reference, by glyph positions, bar
-# shapes, image placement, link rectangles and pixels. `wrapfuzz` gets Typst references for random samples as well.
+# shapes, image placement, link rectangles and pixels. `wrapfuzz` and `charset` get Typst references for random
+# samples as well, drawn from each slot's whole repertoire; `leak`, `linkbad`, `charsetbad`, `stylebad`, `rotatedlink`,
+# `smooth` and `leading` must be refused by the exporter, and the `*-error.json` data cases by both runtimes.
 set -u
 cd "$(dirname "$0")"
 FUZZ="${FUZZ:-100}"
@@ -41,7 +43,13 @@ for f in $FIXTURES; do
 done
 if cargo run -q -p paramdoc-export -- fixtures/leak --fuzz 20 > "$B/.last.log" 2>&1; then fail "export leak: the auto-width slot was not detected"; else ok "export leak: detected (exit 1)"; fi
 if cargo run -q -p paramdoc-export -- fixtures/linkbad --fuzz 1 > "$B/.last.log" 2>&1; then fail "export linkbad: a link to a place in the document was accepted"; else ok "export linkbad: refused ($(grep -o 'links to a place in the document' "$B/.last.log" | head -1))"; fi
-run "export wrapfuzz: 0 leaks, Typst references for $SAMPLES random samples" cargo run -q -p paramdoc-export -- fixtures/wrapfuzz --fuzz "$FUZZ" --fuzz-references "$SAMPLES" --reference fixtures/wrapfuzz/data.json
+if cargo run -q -p paramdoc-export -- fixtures/charsetbad --fuzz 1 > "$B/.last.log" 2>&1; then fail "export charsetbad: an Arabic letter in a charset was accepted"; else ok "export charsetbad: refused ($(grep -o 'a script that needs a shaper' "$B/.last.log" | head -1))"; fi
+if cargo run -q -p paramdoc-export -- fixtures/stylebad --fuzz 1 > "$B/.last.log" 2>&1; then fail "export stylebad: a show rule recolouring part of a slot was accepted"; else ok "export stylebad: refused ($(grep -o 'its text has two styles' "$B/.last.log" | head -1))"; fi
+if cargo run -q -p paramdoc-export -- fixtures/rotatedlink --fuzz 1 > "$B/.last.log" 2>&1; then fail "export rotatedlink: a rotated link was accepted"; else ok "export rotatedlink: refused ($(grep -o 'a rotated or skewed link is not supported' "$B/.last.log" | head -1))"; fi
+if cargo run -q -p paramdoc-export -- fixtures/smooth --fuzz 1 > "$B/.last.log" 2>&1; then fail "export smooth: image(scaling: smooth) was accepted"; else ok "export smooth: refused ($(grep -o 'scaling: "smooth") is not supported' "$B/.last.log" | head -1))"; fi
+if cargo run -q -p paramdoc-export -- fixtures/leading --fuzz 1 > "$B/.last.log" 2>&1; then fail "export leading: a clipping slot whose dropped line would peek into the box was accepted"; else ok "export leading: refused ($(grep -o 'its leading is too small' "$B/.last.log" | head -1))"; fi
+run "export wrapfuzz: 0 leaks, Typst references for $SAMPLES random samples of the default repertoire" cargo run -q -p paramdoc-export -- fixtures/wrapfuzz --fuzz "$FUZZ" --fuzz-references "$SAMPLES" --reference fixtures/wrapfuzz/data.json
+run "export charset: Turkish, Greek and Cyrillic proven, Typst references for $SAMPLES random samples" cargo run -q -p paramdoc-export -- fixtures/charset --fuzz "$FUZZ" --fuzz-references "$SAMPLES" --reference fixtures/charset/data.json
 for dir in documents/*/; do
   f=$(basename "$dir")
   [ -f "$B/$f/doc.json" ] || cargo run -q -p paramdoc-export -- "fixtures/$f" --fuzz 1 > /dev/null 2>&1
@@ -67,14 +75,23 @@ run "rust wrap/overflow: ellipsis and clip policies" cargo run -q -p paramdoc-ru
 run "ts   wrap/overflow == rust" "${NODE[@]}" ts/cli.ts "$B/wrap" --data fixtures/wrap/data-overflow.json --out "$B/wrap/overflow-ts.pdf" --expect-rust "$B/wrap/overflow.trace.json"
 if cargo run -q -p paramdoc-runtime -- "$B/wrap" --data fixtures/wrap/data-error.json --out "$B/wrap/error.pdf" > "$B/.last.log" 2>&1; then fail "rust wrap/error: an overflowing \`error\` slot was accepted"; else ok "rust wrap/error: refused ($(grep -o 'needs [0-9]* lines but the slot holds [0-9]*' "$B/.last.log" | head -1))"; fi
 if "${NODE[@]}" ts/cli.ts "$B/wrap" --data fixtures/wrap/data-error.json --out "$B/wrap/error-ts.pdf" > "$B/.last.log" 2>&1; then fail "ts   wrap/error: an overflowing \`error\` slot was accepted"; else ok "ts   wrap/error: refused"; fi
-wf_fail=0
-for i in $(seq 0 $((SAMPLES - 1))); do
-  cargo run -q -p paramdoc-runtime -- "$B/wrapfuzz" --data "$B/wrapfuzz/fuzz-$i.json" --out "$B/wrapfuzz/fuzz-$i.pdf" --expect "$B/wrapfuzz/reference-fuzz-$i.json" > "$B/.last.log" 2>&1 \
-    || { wf_fail=$((wf_fail + 1)); echo "        rust sample $i: $(grep -v '^filled' "$B/.last.log" | head -1 | cut -c1-160)"; }
-  "${NODE[@]}" ts/cli.ts "$B/wrapfuzz" --data "$B/wrapfuzz/fuzz-$i.json" --out "$B/wrapfuzz/fuzz-$i-ts.pdf" --expect "$B/wrapfuzz/reference-fuzz-$i.json" --expect-rust "$B/wrapfuzz/fuzz-$i.trace.json" > "$B/.last.log" 2>&1 \
-    || { wf_fail=$((wf_fail + 1)); echo "        ts   sample $i: $(grep -v '^filled' "$B/.last.log" | head -1 | cut -c1-160)"; }
+for rt in rust ts; do
+  if [ "$rt" = rust ]; then cmd=(cargo run -q -p paramdoc-runtime --); else cmd=("${NODE[@]}" ts/cli.ts); fi
+  if "${cmd[@]}" "$B/figures" --data fixtures/figures/data-exif-error.json --out "$B/figures/exif-$rt.pdf" > "$B/.last.log" 2>&1; then fail "$rt figures/exif-error: a JPEG with an EXIF orientation was accepted"; else ok "$rt figures/exif-error: refused ($(grep -o 'EXIF orientation [0-9]' "$B/.last.log" | head -1))"; fi
+  if "${cmd[@]}" "$B/certificate" --data fixtures/certificate/data-float-error.json --out "$B/certificate/float-$rt.pdf" > "$B/.last.log" 2>&1; then fail "$rt certificate/float-error: a float slot value was accepted"; else ok "$rt certificate/float-error: refused ($(grep -o '[0-9.]* is not an integer' "$B/.last.log" | head -1))"; fi
 done
-if [ "$wf_fail" -eq 0 ]; then ok "wrapfuzz: both runtimes == Typst on $SAMPLES random samples"; else fail "wrapfuzz: $wf_fail of $((SAMPLES * 2)) runs differ from Typst"; fi
+for rf in wrapfuzz charset; do
+  run "rust $rf == Typst" cargo run -q -p paramdoc-runtime -- "$B/$rf" --data "fixtures/$rf/data.json" --out "$B/$rf/runtime.pdf" --expect "$B/$rf/reference.json"
+  run "ts   $rf == Typst == rust" "${NODE[@]}" ts/cli.ts "$B/$rf" --data "fixtures/$rf/data.json" --out "$B/$rf/runtime-ts.pdf" --expect "$B/$rf/reference.json" --expect-rust "$B/$rf/runtime.trace.json"
+  wf_fail=0
+  for i in $(seq 0 $((SAMPLES - 1))); do
+    cargo run -q -p paramdoc-runtime -- "$B/$rf" --data "$B/$rf/fuzz-$i.json" --out "$B/$rf/fuzz-$i.pdf" --expect "$B/$rf/reference-fuzz-$i.json" > "$B/.last.log" 2>&1 \
+      || { wf_fail=$((wf_fail + 1)); echo "        rust sample $i: $(grep -v '^filled' "$B/.last.log" | head -1 | cut -c1-160)"; }
+    "${NODE[@]}" ts/cli.ts "$B/$rf" --data "$B/$rf/fuzz-$i.json" --out "$B/$rf/fuzz-$i-ts.pdf" --expect "$B/$rf/reference-fuzz-$i.json" --expect-rust "$B/$rf/fuzz-$i.trace.json" > "$B/.last.log" 2>&1 \
+      || { wf_fail=$((wf_fail + 1)); echo "        ts   sample $i: $(grep -v '^filled' "$B/.last.log" | head -1 | cut -c1-160)"; }
+  done
+  if [ "$wf_fail" -eq 0 ]; then ok "$rf: both runtimes == Typst on $SAMPLES random samples"; else fail "$rf: $wf_fail of $((SAMPLES * 2)) runs differ from Typst"; fi
+done
 
 echo "4. Pixels at 150 dpi against Typst (tolerance: 1 pixel, the report's known one; 0 for the extra cases; images included)"
 if have pdftoppm; then
@@ -86,9 +103,12 @@ if have pdftoppm; then
     for c in $(cases "$f"); do for v in "" -ts; do n=$((n + 1)); px "$B/$f/$c$v.pdf" "$B/$f/reference-data-$c.pdf" 0 || { px_fail=$((px_fail + 1)); echo "        $f/$c$v: $(tail -1 "$B/.last.log")"; }; done; done
     if [ "$n" -gt 0 ]; then if [ "$px_fail" -eq 0 ]; then ok "$f: $((n / 2)) extra case(s) pixel-identical to Typst, both runtimes"; else fail "$f: $px_fail renders differ from Typst"; fi; fi
   done
-  px_fail=0
-  for i in $(seq 0 $((SAMPLES - 1))); do for v in "" -ts; do px "$B/wrapfuzz/fuzz-$i$v.pdf" "$B/wrapfuzz/reference-fuzz-$i.pdf" 0 || { px_fail=$((px_fail + 1)); echo "        wrapfuzz/fuzz-$i$v: $(tail -1 "$B/.last.log")"; }; done; done
-  if [ "$px_fail" -eq 0 ]; then ok "wrapfuzz: $SAMPLES random samples pixel-identical to Typst, both runtimes"; else fail "wrapfuzz: $px_fail renders differ from Typst"; fi
+  for rf in wrapfuzz charset; do
+    px_fail=0
+    for v in runtime runtime-ts; do px "$B/$rf/$v.pdf" "$B/$rf/reference.pdf" 0 || { px_fail=$((px_fail + 1)); echo "        $rf/$v: $(tail -1 "$B/.last.log")"; }; done
+    for i in $(seq 0 $((SAMPLES - 1))); do for v in "" -ts; do px "$B/$rf/fuzz-$i$v.pdf" "$B/$rf/reference-fuzz-$i.pdf" 0 || { px_fail=$((px_fail + 1)); echo "        $rf/fuzz-$i$v: $(tail -1 "$B/.last.log")"; }; done; done
+    if [ "$px_fail" -eq 0 ]; then ok "$rf: the sample and $SAMPLES random samples pixel-identical to Typst, both runtimes"; else fail "$rf: $px_fail renders differ from Typst"; fi
+  done
 else skip "pdftoppm not on PATH (poppler)"; fi
 
 echo "5. Text extraction: Rust and TypeScript PDFs read the same"
@@ -120,7 +140,7 @@ echo "7. PDF/UA-1 conformance (veraPDF)"
 if have verapdf; then
   list=""
   for f in $FIXTURES; do list="$list $f/runtime $f/runtime-ts"; done
-  for p in $list policies/long transcript/long transcript/long-ts transcript/nohonours wrap/overflow wrap/overflow-ts wrapfuzz/fuzz-0 wrapfuzz/fuzz-0-ts figures/tall figures/tall-ts links/long links/long-ts; do
+  for p in $list policies/long transcript/long transcript/long-ts transcript/nohonours wrap/overflow wrap/overflow-ts wrapfuzz/fuzz-0 wrapfuzz/fuzz-0-ts charset/runtime charset/runtime-ts charset/fuzz-0 charset/fuzz-0-ts figures/tall figures/tall-ts links/long links/long-ts; do
     if verapdf --flavour ua1 --format text "$B/$p.pdf" > "$B/.last.log" 2>&1 && head -1 "$B/.last.log" | grep -q '^PASS'; then ok "$p"; else fail "$p"; grep -v '^PASS' "$B/.last.log" | head -20 | sed 's/^/        /'; fi
   done
 else skip "verapdf not on PATH (brew install verapdf)"; fi

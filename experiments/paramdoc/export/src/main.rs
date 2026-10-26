@@ -20,7 +20,7 @@ use typst::pdf::{ArtifactElem, PdfMarkerTag, PdfMarkerTagKind, TableCellKind, Ta
 use typst::syntax::{FileId, RootedPath, Source, VirtualPath, VirtualRoot};
 use typst::text::{Font, FontBook, TextItem};
 use typst::utils::{LazyHash, PicoStr};
-use typst::visualize::{Curve, CurveItem, ExchangeFormat, FixedStroke, Geometry, Image, ImageElem, ImageKind, Paint, RasterFormat, Shape};
+use typst::visualize::{Curve, CurveItem, ExchangeFormat, FixedStroke, Geometry, Image, ImageElem, ImageKind, ImageScaling, Paint, RasterFormat, Shape};
 use typst::{Library, LibraryExt, World, WorldExt};
 use typst_layout::PagedDocument;
 use typst_pdf::PdfOptions;
@@ -30,7 +30,28 @@ use paramdoc_ir as ir;
 // ---------------------------------------------------------------------------------------------------------
 // World
 
-struct LoadedFont { font: Font, file: String, sha256: String }
+/// A font from the fonts directory, with the character map and advances the runtimes will read from it, and
+/// the name of a table that makes it one they cannot draw as Typst does (colour glyphs, variation axes).
+struct LoadedFont { font: Font, file: String, sha256: String, cmap: HashMap<char, u16>, advances: Vec<u16>, units_per_em: f64, unsupported: Option<&'static str> }
+
+fn font_tables(face: &ttf_parser::Face) -> (HashMap<char, u16>, Vec<u16>, f64, Option<&'static str>) {
+    let mut chars = BTreeSet::new();
+    if let Some(table) = face.tables().cmap {
+        for subtable in table.subtables {
+            if subtable.is_unicode() { subtable.codepoints(|cp| { if let Some(c) = char::from_u32(cp) { chars.insert(c); } }); }
+        }
+    }
+    let cmap = chars.into_iter().filter_map(|c| face.glyph_index(c).map(|g| (c, g.0))).collect();
+    let advances = (0..face.number_of_glyphs()).map(|g| face.glyph_hor_advance(GlyphId(g)).unwrap_or(0)).collect();
+    let t = face.tables();
+    let unsupported = if t.colr.is_some() { Some("COLR (colour glyphs)") }
+        else if t.cbdt.is_some() { Some("CBDT (bitmap colour glyphs)") }
+        else if t.sbix.is_some() { Some("sbix (bitmap glyphs)") }
+        else if t.svg.is_some() { Some("SVG (colour glyphs)") }
+        else if t.fvar.is_some() { Some("fvar (variation axes)") }
+        else { None };
+    (cmap, advances, face.units_per_em() as f64, unsupported)
+}
 
 struct MemWorld {
     library: LazyHash<Library>,
@@ -172,11 +193,16 @@ fn load_fonts(dir: &Path) -> Result<Vec<LoadedFont>> {
         if !matches!(ext.as_str(), "otf" | "ttf" | "ttc" | "otc") { continue; }
         let data = fs::read(&path)?;
         let sha256 = hex(&Sha256::digest(&data));
-        let bytes = Bytes::new(data);
         let file = path.file_name().unwrap().to_string_lossy().to_string();
+        let mut tables = Vec::new();
         for index in 0..64u32 {
-            match Font::new(bytes.clone(), index) {
-                Some(font) => fonts.push(LoadedFont { font, file: file.clone(), sha256: sha256.clone() }),
+            let Ok(face) = ttf_parser::Face::parse(&data, index) else { break };
+            tables.push(font_tables(&face));
+        }
+        let bytes = Bytes::new(data);
+        for (index, (cmap, advances, units_per_em, unsupported)) in tables.into_iter().enumerate() {
+            match Font::new(bytes.clone(), index as u32) {
+                Some(font) => fonts.push(LoadedFont { font, file: file.clone(), sha256: sha256.clone(), cmap, advances, units_per_em, unsupported }),
                 None => break,
             }
         }
@@ -256,6 +282,11 @@ fn curve_ops(curve: &Curve) -> Vec<ir::PathOp> {
     }).collect()
 }
 
+fn describe_color(c: &ir::Color) -> String {
+    let byte = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
+    if c.a < 1.0 { format!("#{:02x}{:02x}{:02x}{:02x}", byte(c.r), byte(c.g), byte(c.b), byte(c.a)) } else { format!("#{:02x}{:02x}{:02x}", byte(c.r), byte(c.g), byte(c.b)) }
+}
+
 fn color(paint: &Paint) -> Result<ir::Color> {
     match paint {
         Paint::Solid(c) => { let rgb = c.to_rgb(); Ok(ir::Color { r: rgb.red, g: rgb.green, b: rgb.blue, a: rgb.alpha }) }
@@ -295,6 +326,7 @@ fn shape_bbox(abs: Point, s: &Shape) -> Rect {
 
 /// The format, pixel size and bytes of a raster image the runtimes can draw: PNG or JPEG.
 fn raster_of(image: &Image) -> Result<(&'static str, u32, u32, &Bytes)> {
+    if image.scaling() == Smart::Custom(ImageScaling::Smooth) { bail!("image(scaling: \"smooth\") is not supported: the runtimes do not write the PDF's interpolation flag; leave `scaling` at auto"); }
     match image.kind() {
         ImageKind::Raster(raster) => {
             let format = match raster.format() {
@@ -537,12 +569,17 @@ impl<'a> Exporter<'a> {
         }
     }
 
+    fn loaded_font(&self, font: &Font) -> Result<&'a LoadedFont> {
+        self.fonts.iter()
+            .find(|f| f.font.data().as_ptr() == font.data().as_ptr() && f.font.index() == font.index())
+            .ok_or_else(|| anyhow!("text uses a font that was not loaded from the fonts directory: {}", font.info().family))
+    }
+
     fn font_id(&mut self, font: &Font) -> Result<usize> {
         let key = (font.data().as_ptr() as usize, font.index());
         if let Some(&id) = self.ir_font_of.get(&key) { return Ok(id); }
-        let loaded = self.fonts.iter()
-            .find(|f| f.font.data().as_ptr() == font.data().as_ptr() && f.font.index() == font.index())
-            .ok_or_else(|| anyhow!("text uses a font that was not loaded from the fonts directory: {}", font.info().family))?;
+        let loaded = self.loaded_font(font)?;
+        if let Some(table) = loaded.unsupported { bail!("font {} has a {table} table; colour and variable fonts are not supported, the runtimes draw plain outlines at the default instance: use a static outline font", loaded.file); }
         let id = self.ir_fonts.len();
         self.ir_fonts.push(ir::Font { family: font.info().family.to_string(), index: font.index(), sha256: loaded.sha256.clone(), source_sha256: loaded.sha256.clone(), file: loaded.file.clone(), ..Default::default() });
         self.ir_font_of.insert(key, id);
@@ -550,6 +587,7 @@ impl<'a> Exporter<'a> {
     }
 
     fn text_item(&mut self, pos: Point, text: &TextItem) -> Result<ir::Item> {
+        if text.stroke.is_some() { bail!("stroked text ({:?}) is not supported; the runtimes draw fills only, so remove `stroke:` from the text style", text.text); }
         if self.lang.is_none() { self.lang = Some(text.lang.as_str().to_string()); }
         let node = self.content_node();
         Ok(ir::Item::Text {
@@ -586,6 +624,11 @@ impl<'a> Exporter<'a> {
         let number_or = |key: &str, default: f64| -> Result<f64> { if dict.get(key).is_ok() { dict_number(dict, key) } else { Ok(default) } };
         let (line_height, pitch) = (number_or("line-height", 0.0)?, number_or("pitch", 0.0)?);
         let name = string("name")?;
+        if let Some(cs) = &charset {
+            for c in cs.chars() {
+                if let Some(reason) = unsupported_reason(c) { bail!("slot `{name}`: `charset` contains {c:?} (U+{:04X}), {reason}; the runtimes refuse what they cannot lay out as Typst does", c as u32); }
+            }
+        }
         if lines > 1 && !(line_height > 0.0 && pitch > 0.0) { bail!("slot `{name}`: a wrapping slot needs `line-height` and `pitch` in its metadata"); }
         let auto_lines = match dict.get("auto-lines") { Ok(Value::Int(n)) if *n >= 1 => Some(*n as u32), Err(_) => None, other => bail!("slot `{name}`: `auto-lines` is not a positive integer: {other:?}") };
         Ok(SlotMeta { name, align: string("align")?, overflow: string("overflow")?, max_length, descent: dict_number(dict, "descent")?, charset, lines, line_height, pitch, auto_lines, link: matches!(dict.get("link"), Ok(Value::Bool(true))) })
@@ -632,13 +675,14 @@ impl<'a> Exporter<'a> {
         }
     }
 
-    /// The page rectangle of a link item: the bounding box of its corners under the accumulated transform, as
-    /// typst-pdf computes it.
-    fn link_rect(acc: Transform, pos: Point, size: Size) -> Rect {
+    /// The page rectangle of a link item under the accumulated transform, as typst-pdf computes it. A rotated or
+    /// skewed link would get a bounding box where a PDF/UA quadrilateral is due: refused.
+    fn link_rect(acc: Transform, pos: Point, size: Size) -> Result<Rect> {
+        if acc.kx.get().abs() > 1e-9 || acc.ky.get().abs() > 1e-9 { bail!("a rotated or skewed link is not supported: its clickable area would be a bounding box, not Typst's quadrilateral"); }
         let corners = [pos, pos + Point::with_x(size.x), pos + Point::with_y(size.y), pos + size.to_point()];
         let (mut x0, mut y0, mut x1, mut y1) = (f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY);
         for c in corners { let p = apply(acc, c); x0 = x0.min(pt(p.x)); y0 = y0.min(pt(p.y)); x1 = x1.max(pt(p.x)); y1 = y1.max(pt(p.y)); }
-        Rect { x: x0, y: y0, w: x1 - x0, h: y1 - y0 }
+        Ok(Rect { x: x0, y: y0, w: x1 - x0, h: y1 - y0 })
     }
 
     /// Records a static link: its rectangle joins those of the same link element (one per line it spans). The
@@ -747,8 +791,41 @@ impl<'a> Exporter<'a> {
                         Inside::Slot(index) => {
                             let abs = apply(acc, *pos);
                             let font = self.font_id(text.font.font())?;
+                            let loaded = self.loaded_font(text.font.font())?;
                             let slot = &mut records.slots[index];
-                            if slot.style.is_none() { slot.style = Some(TextStyle { font, size: pt(text.size), fill: color(&text.fill)?, pen_x: pt(abs.x) }); }
+                            let name = slot.meta.name.as_str();
+                            if text.stroke.is_some() { bail!("slot `{name}`: stroked text is not supported; the runtimes draw fills only"); }
+                            let (size, fill) = (pt(text.size), color(&text.fill)?);
+                            match &slot.style {
+                                None => slot.style = Some(TextStyle { font, size, fill, pen_x: pt(abs.x) }),
+                                Some(style) if style.font != font || (style.size - size).abs() > 1e-9 || style.fill != fill => bail!(
+                                    "slot `{name}`: its text has two styles ({} {:.2}pt {} and {} {:.2}pt {}); a slot has one font, size and colour (a `show` rule in the template?)",
+                                    self.ir_fonts[style.font].family, style.size, describe_color(&style.fill), self.ir_fonts[font].family, size, describe_color(&fill)),
+                                Some(_) => {}
+                            }
+                            // The runtimes draw one glyph per character, the character map's, at the font's advance and
+                            // no offset; Typst must have done the same here, or a feature, language or style rule is at
+                            // work that they cannot reproduce. Checked on every compile: the sample, the references,
+                            // the repertoire proof and the fuzz.
+                            for g in &text.glyphs {
+                                let covered = text.text.get(g.range.start as usize..g.range.end as usize).unwrap_or("");
+                                let mut it = covered.chars();
+                                let (Some(c), None) = (it.next(), it.next()) else { bail!("slot `{name}`: Typst drew one glyph for {covered:?}; the runtimes draw one glyph per character (a ligature or a decomposition in the font)") };
+                                let expected = loaded.cmap.get(&c).copied();
+                                if expected != Some(g.id) {
+                                    bail!("slot `{name}`: Typst drew glyph {} for {c:?} (U+{:04X}) where the font's character map gives {}; a font feature, language or style rule the runtimes cannot reproduce",
+                                        g.id, c as u32, expected.map(|e| e.to_string()).unwrap_or_else(|| "nothing".into()));
+                                }
+                                let advance = loaded.advances.get(g.id as usize).copied().unwrap_or(0) as f64 / loaded.units_per_em * size;
+                                let (adv, dx, dy) = (pt(g.x_advance.at(text.size)), pt(g.x_offset.at(text.size)), pt(g.y_offset.at(text.size)));
+                                // A space may be narrower: trailing whitespace stays in the run at zero advance (Typst trims
+                                // it for layout) and an overfull line shrinks its spaces by up to a third; the runtimes do
+                                // both. Wider than the font's advance is a stretch (justification, `spacing`), not ported.
+                                let narrowed = c.is_whitespace() && adv >= -1e-9 && adv <= advance + 1e-6;
+                                if ((adv - advance).abs() > 1e-6 && !narrowed) || dx.abs() > 1e-9 || dy.abs() > 1e-9 {
+                                    bail!("slot `{name}`: Typst advanced {c:?} by {adv:.4} pt (offset {dx:.4}, {dy:.4}) where the font's advance is {advance:.4}; tracking, spacing, kerning or a feature the runtimes cannot reproduce");
+                                }
+                            }
                             if !slot.baselines.iter().any(|b| (b - pt(abs.y)).abs() < 1e-6) { slot.baselines.push(pt(abs.y)); }
                             slot.sample.push_str(&text.text);
                             let mut pen = pt(abs.x);
@@ -807,7 +884,7 @@ impl<'a> Exporter<'a> {
                     self.on_tag(tag);
                 }
                 FrameItem::Link(dest, size) => {
-                    let rect = Self::link_rect(acc, *pos, *size);
+                    let rect = Self::link_rect(acc, *pos, *size)?;
                     match current {
                         Inside::Slot(index) => {
                             // A link slot: the rectangle and destination inform the contract check; the slot's text
@@ -872,7 +949,7 @@ impl<'a> Exporter<'a> {
                     out.push(Atom { rect: Rect { x: pt(abs.x), y: pt(abs.y), w: pt(size.x), h: pt(size.y) }, item: self.image_item(abs, image, *size, node)?, kind: AtomKind::Static });
                 }
                 FrameItem::Tag(tag) => self.on_tag(tag),
-                FrameItem::Link(dest, size) => { let rect = Self::link_rect(acc, *pos, *size); self.record_link(records, page, rect, dest)?; }
+                FrameItem::Link(dest, size) => { let rect = Self::link_rect(acc, *pos, *size)?; self.record_link(records, page, rect, dest)?; }
             }
         }
         Ok(())
@@ -899,20 +976,43 @@ impl<'a> Exporter<'a> {
             if multi && s.meta.overflow == "shrink" { bail!("slot `{}`: `shrink` is not an overflow policy for a wrapping slot; use error, clip or ellipsis", s.meta.name); }
             let baseline = if multi { s.rect.y + s.meta.line_height } else { s.rect.bottom() - s.meta.descent };
             if strict && !multi && s.baselines.len() > 1 {
-                eprintln!("warning: slot `{}`: the sample wrapped to {} lines; the runtime draws a single line (give the slot `lines:`)", s.meta.name, s.baselines.len());
+                bail!("slot `{}`: the sample wrapped to {} lines; the runtime draws a single line (give the slot `lines:` or a shorter sample)", s.meta.name, s.baselines.len());
             }
             if strict && !multi && !s.baselines.iter().any(|b| (b - baseline).abs() < 0.01) {
-                eprintln!("warning: slot `{}`: the sample's baseline(s) {:?} are not at the box bottom minus descent ({baseline:.2})", s.meta.name, s.baselines);
+                bail!("slot `{}`: the sample's baseline(s) {:?} are not at the box bottom minus descent ({baseline:.2}); a `baseline:` or `top-edge` setting reaches the slot", s.meta.name, s.baselines);
             }
             if strict && multi {
                 for b in &s.baselines {
                     let k = ((b - baseline) / s.meta.pitch).round();
                     if (b - (baseline + k * s.meta.pitch)).abs() > 0.01 {
-                        eprintln!("warning: slot `{}`: the sample's baseline {b:.2} is off the line grid ({baseline:.2} + k × {:.2})", s.meta.name, s.meta.pitch);
+                        bail!("slot `{}`: the sample's baseline {b:.2} is off the line grid ({baseline:.2} + k × {:.2}); a `baseline:`, `top-edge` or `leading` setting reaches the slot", s.meta.name, s.meta.pitch);
                     }
                 }
                 if s.baselines.len() > s.meta.lines as usize {
-                    eprintln!("warning: slot `{}`: the sample wraps to {} lines but the slot holds {}; Typst clips the rest", s.meta.name, s.baselines.len(), s.meta.lines);
+                    bail!("slot `{}`: the sample wraps to {} lines but the slot holds {}; Typst clips the rest (give it a shorter sample or more lines)", s.meta.name, s.baselines.len(), s.meta.lines);
+                }
+                // `lines: auto` measured the sample's height and rounded; the lines Typst then laid out must agree,
+                // or the measurement sat on a rounding tie (G10). Whitespace-only lines leave no run, so a sample
+                // with hard breaks is not checked this way.
+                if let Some(cap) = s.meta.auto_lines && s.meta.lines < cap && !s.sample.contains('\n') && s.baselines.len() != s.meta.lines as usize {
+                    bail!("slot `{}`: `lines: auto` measured {} lines for the sample but Typst laid out {}; a rounding tie in the measurement (change the sample)", s.meta.name, s.meta.lines, s.baselines.len());
+                }
+            }
+            // A dropped line of an overfull wrapping slot sits `pitch − descent` below the box; if the repertoire's
+            // tallest glyph rises higher than that, Typst's clipped box would show its top and the runtime, which
+            // drops whole lines, would not (G9). Only the policies that draw an overfull text are concerned.
+            if multi && matches!(s.meta.overflow.as_str(), "clip" | "ellipsis") {
+                let ir_font = &self.ir_fonts[style.font];
+                if let Some(loaded) = self.fonts.iter().find(|f| f.sha256 == ir_font.source_sha256 && f.font.index() == ir_font.index)
+                    && let Ok(face) = ttf_parser::Face::parse(loaded.font.data(), ir_font.index)
+                {
+                    let repertoire = s.meta.charset.as_deref().unwrap_or(DEFAULT_REPERTOIRE);
+                    let top = repertoire.chars().chain(std::iter::once('…')).filter_map(|c| loaded.cmap.get(&c)).filter_map(|&g| face.glyph_bounding_box(GlyphId(g)).map(|b| b.y_max as f64))
+                        .fold(0.0, f64::max) / loaded.units_per_em * style.size;
+                    let room = s.meta.pitch - s.meta.descent;
+                    if top > room + 1e-6 {
+                        bail!("slot `{}`: its leading is too small for the `{}` policy: the tallest glyph of its repertoire rises {top:.2} pt above the baseline, and a line Typst clips would start {room:.2} pt below the box (set `par.leading` higher or give the slot a larger descent)", s.meta.name, s.meta.overflow);
+                    }
                 }
             }
             // A link slot: Typst put one link rectangle on every text run of the sample, and the runtime will put
@@ -1289,12 +1389,44 @@ struct Instance { x: f64, w: f64, h: f64, variant: Option<u32>, slots: usize }
 // ---------------------------------------------------------------------------------------------------------
 // Export-time font subsetting
 
-/// What a slot may contain unless it declares a `charset`: printable ASCII, Latin-1 and common typography.
+/// What a slot may contain unless it declares a `charset`: printable ASCII, Latin-1 and common typography,
+/// minus the soft hyphen (Typst draws a hyphen where a line ends on one) and the middle dot (Typst shrinks and
+/// justifies it as CJK punctuation); neither is ported.
 const DEFAULT_REPERTOIRE: &str = concat!(
     " !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~",
-    "\u{a0}¡¢£¤¥¦§¨©ª«¬\u{ad}®¯°±²³´µ¶·¸¹º»¼½¾¿ÀÁÂÃÄÅÆÇÈÉÊËÌÍÎÏÐÑÒÓÔÕÖ×ØÙÚÛÜÝÞßàáâãäåæçèéêëìíîïðñòóôõö÷øùúûüýþÿ",
+    "\u{a0}¡¢£¤¥¦§¨©ª«¬®¯°±²³´µ¶¸¹º»¼½¾¿ÀÁÂÃÄÅÆÇÈÉÊËÌÍÎÏÐÑÒÓÔÕÖ×ØÙÚÛÜÝÞßàáâãäåæçèéêëìíîïðñòóôõö÷øùúûüýþÿ",
     "–—‘’‚“”„•…€‹›™−",
 );
+
+/// Why a character cannot be in a slot's repertoire, or `None` for the candidates the runtimes' one-character-
+/// one-glyph model can hold (`PLAN.md` M12): the default set, Latin Extended, Greek, Cyrillic, a few
+/// punctuation and currency characters. The whitelist names candidates; the repertoire proof and the fuzz
+/// (`run`) admit them, so a template with a `charset` beyond the default is proven on export.
+fn unsupported_reason(c: char) -> Option<&'static str> {
+    if DEFAULT_REPERTOIRE.contains(c) || c == '…' { return None; }
+    Some(match c as u32 {
+        0x00AD => "a soft hyphen: Typst draws a hyphen where a line ends on one and the runtimes do not yet (strip them)",
+        0x00B7 => "a middle dot, which Typst shrinks and justifies as CJK punctuation (typst-layout `shaping.rs`, `is_cjk_center_aligned_punctuation`); not ported yet",
+        0x0100..=0x024F | 0x1E00..=0x1EFF => return None,                     // Latin Extended-A, -B and Additional
+        0x0370..=0x03FF => return None,                                        // Greek and Coptic
+        0x0483..=0x0489 => "a combining mark; the runtimes place no marks (send precomposed characters)",
+        0x0400..=0x052F => return None,                                        // Cyrillic and its Supplement
+        0x2000..=0x200A | 0x2010..=0x2014 | 0x2016 | 0x2018..=0x2022 | 0x2024..=0x2027 | 0x2030..=0x2033 | 0x2035..=0x2037 | 0x2039..=0x203B | 0x2044 | 0x202F => return None,
+        0x20A0..=0x20C0 => return None,                                        // currency symbols
+        0x2122 | 0x2212 => return None,
+        0x0300..=0x036F | 0x1AB0..=0x1AFF | 0x1DC0..=0x1DFF | 0x20D0..=0x20FF | 0xFE20..=0xFE2F => "a combining mark; the runtimes place no marks (send precomposed characters)",
+        0x0000..=0x001F | 0x007F..=0x009F => "a control character",
+        0x200B..=0x200F | 0x202A..=0x202E | 0x2060..=0x206F | 0x061C | 0xFEFF => "a format or bidi control character",
+        0xFE00..=0xFE0F | 0xE0100..=0xE01EF => "a variation selector",
+        0x0590..=0x08FF | 0x0900..=0x0DFF | 0x0E00..=0x0FFF | 0x1000..=0x109F | 0x1780..=0x17FF => "a script that needs a shaper (Hebrew, Arabic, Indic, Thai and the like)",
+        0x2E80..=0x9FFF | 0xA000..=0xA4CF | 0xAC00..=0xD7AF | 0xF900..=0xFAFF | 0xFF00..=0xFFEF | 0x20000..=0x3FFFF => "an East Asian character; the runtimes have no East Asian line breaking",
+        0x1F000..=0x1FAFF => "an emoji or pictograph; colour fonts are not supported",
+        0xE000..=0xF8FF | 0xF0000..=0x10FFFF => "a private-use character",
+        0xFDD0..=0xFDEF => "a noncharacter",
+        u if u & 0xFFFE == 0xFFFE => "a noncharacter",
+        _ => "not in the supported scripts (Latin, Greek and Cyrillic, precomposed)",
+    })
+}
 
 struct SubsetFont { file: String, bytes: Vec<u8>, map: HashMap<u16, u16>, source_sha256: String }
 
@@ -1368,7 +1500,14 @@ fn subset_fonts(doc: &mut ir::Document, loaded: &[LoadedFont]) -> Result<Vec<Sub
         let mut chars = repertoire[i].clone();
         for g in &used[i] { if let Some(c) = reverse.get(g) { chars.insert(*c); } }
         let mut char_gids: BTreeMap<char, u16> = BTreeMap::new();
-        for c in &chars { if let Some(g) = face.glyph_index(*c) { char_gids.insert(*c, g.0); } }
+        for c in &chars {
+            match face.glyph_index(*c) {
+                Some(g) => { char_gids.insert(*c, g.0); }
+                None if repertoire[i].contains(c) => bail!("font {} has no glyph for {c:?} (U+{:04X}), which is in a slot's repertoire{}", font.file, *c as u32,
+                    if *c == '…' { " (the ellipsis policy needs it)" } else { "; remove it from `charset:` or use a font that has it" }),
+                None => {}
+            }
+        }
         let mut gids: BTreeSet<u16> = used[i].clone();
         gids.extend(char_gids.values().copied());
         gids.insert(0);
@@ -1415,19 +1554,76 @@ impl Rng {
     fn below(&mut self, n: u64) -> u64 { if n == 0 { 0 } else { self.next() % n } }
 }
 
-/// Letters, digits and spaces with the punctuation of the default repertoire, so random strings exercise the
-/// runtimes' line breaking (every UAX #14 class a Latin repertoire contains) as well as the layout contract.
-const CHARSET: &str = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz        0123456789-.,'\"()/:;!?%$€–—…“”‘’«»‹›„‚•−";
+/// The fuzz alphabet of every text slot: its whole repertoire with spaces made frequent, so random texts of
+/// every admitted character meet Typst's line breaking and shaping; `default` for strings that are no slot's.
+struct Alphabets { slots: HashMap<String, Vec<char>>, default: Vec<char> }
 
-/// Random data of the same shape: strings of random length (up to twice the sample's), random numbers,
-/// arrays of 1 to 2N rows cloned from the sample rows and mutated.
-fn mutate(value: &mut serde_json::Value, rng: &mut Rng) {
+fn alphabet_of(repertoire: &str) -> Vec<char> {
+    let mut set: Vec<char> = repertoire.chars().filter(|c| !c.is_control()).collect();
+    let spaces = (set.len() / 8).max(8);
+    set.extend(std::iter::repeat_n(' ', spaces));
+    set
+}
+
+fn alphabets_of(doc: &ir::Document) -> Alphabets {
+    let mut slots = HashMap::new();
+    each_slot(doc, &mut |slot| { slots.entry(slot.name.clone()).or_insert_with(|| alphabet_of(slot.charset.as_deref().unwrap_or(DEFAULT_REPERTOIRE))); });
+    Alphabets { slots, default: alphabet_of(DEFAULT_REPERTOIRE) }
+}
+
+/// The names of the bars, whose values the probe must leave numeric (a template may print and plot one value).
+fn bar_names(doc: &ir::Document) -> BTreeSet<String> {
+    let mut out: BTreeSet<String> = doc.bars.iter().map(|b| b.name.clone()).collect();
+    if let Some(flow) = &doc.flow {
+        for block in &flow.blocks { if let ir::Block::Static { fragment } = block { out.extend(fragment.bars.iter().map(|b| b.name.clone())); } }
+        for band in &flow.bands { for fragment in &band.fragments { out.extend(fragment.bars.iter().map(|b| b.name.clone())); } }
+        for overlay in &flow.overlays { out.extend(overlay.bars.iter().map(|b| b.name.clone())); }
+    }
+    out
+}
+
+/// Every text slot's repertoire by name, for the repertoire proof.
+fn repertoires_of(doc: &ir::Document) -> BTreeMap<String, String> {
+    let mut out = BTreeMap::new();
+    each_slot(doc, &mut |slot| { out.entry(slot.name.clone()).or_insert_with(|| slot.charset.clone().unwrap_or_else(|| DEFAULT_REPERTOIRE.to_string())); });
+    out
+}
+
+/// A slot's whole repertoire as one text, a space every eight characters so that it wraps.
+fn probe_text(repertoire: &str) -> String {
+    let mut out = String::new();
+    for (i, c) in repertoire.chars().enumerate() { if i > 0 && i % 8 == 0 { out.push(' '); } out.push(c); }
+    out
+}
+
+/// The sample data with every text slot's value (a string, number or boolean) replaced by its repertoire text;
+/// a link slot keeps its `href`. `reached` collects the slots the data gave a value to.
+fn probe_values(value: &mut serde_json::Value, slot: Option<&str>, repertoires: &BTreeMap<String, String>, bars: &BTreeSet<String>, reached: &mut BTreeSet<String>) {
+    match value {
+        serde_json::Value::String(s) if s.starts_with("data:image/") => {}
+        serde_json::Value::Number(_) if slot.is_some_and(|n| bars.contains(n)) => {}
+        serde_json::Value::String(_) | serde_json::Value::Number(_) | serde_json::Value::Bool(_) => {
+            if let Some(r) = slot.and_then(|n| repertoires.get_key_value(n)) { *value = serde_json::Value::String(probe_text(r.1)); reached.insert(r.0.clone()); }
+        }
+        serde_json::Value::Array(items) => items.iter_mut().for_each(|v| probe_values(v, slot, repertoires, bars, reached)),
+        serde_json::Value::Object(map) => map.iter_mut().for_each(|(key, v)| match key.as_str() {
+            "href" => {}
+            "text" | "alt" | "src" => probe_values(v, slot, repertoires, bars, reached),
+            key => probe_values(v, Some(key), repertoires, bars, reached),
+        }),
+        serde_json::Value::Null => {}
+    }
+}
+
+/// Random data of the same shape: strings of random length (up to twice the sample's) from the slot's alphabet,
+/// random numbers, arrays of 1 to 2N rows cloned from the sample rows and mutated.
+fn mutate(value: &mut serde_json::Value, rng: &mut Rng, slot: Option<&str>, alphabets: &Alphabets) {
     match value {
         serde_json::Value::String(s) if s.starts_with("data:image/") => *s = random_png_data_url(rng),
         serde_json::Value::String(s) => {
             let max = (s.chars().count().max(8) * 2) as u64;
             let len = rng.below(max + 1) as usize;
-            let set: Vec<char> = CHARSET.chars().collect();
+            let set: &[char] = slot.and_then(|name| alphabets.slots.get(name)).map(|v| v.as_slice()).unwrap_or(&alphabets.default);
             let mut text: Vec<char> = (0..len).map(|_| set[rng.below(set.len() as u64) as usize]).collect();
             // One string in four carries a web address somewhere, so wrapping slots meet Typst's link breaking.
             if rng.below(4) == 0 {
@@ -1444,10 +1640,15 @@ fn mutate(value: &mut serde_json::Value, rng: &mut Rng) {
             let n = 1 + rng.below(2 * items.len() as u64) as usize;
             let template = items.clone();
             *items = (0..n).map(|i| template[i % template.len()].clone()).collect();
-            items.iter_mut().for_each(|v| mutate(v, rng));
+            items.iter_mut().for_each(|v| mutate(v, rng, slot, alphabets));
         }
-        // An `href` stays a web address, so link slots keep their links.
-        serde_json::Value::Object(map) => map.iter_mut().for_each(|(key, v)| if key == "href" { *v = serde_json::Value::String(random_address(rng)) } else { mutate(v, rng) }),
+        // An `href` stays a web address, so link slots keep their links; a link's `text` and an image's `alt`
+        // belong to the slot their object is the value of.
+        serde_json::Value::Object(map) => map.iter_mut().for_each(|(key, v)| match key.as_str() {
+            "href" => *v = serde_json::Value::String(random_address(rng)),
+            "text" | "alt" | "src" => mutate(v, rng, slot, alphabets),
+            key => mutate(v, rng, Some(key), alphabets),
+        }),
         serde_json::Value::Null => {}
     }
 }
@@ -1816,6 +2017,28 @@ fn run() -> Result<()> {
     }
     describe(&exported);
 
+    // The repertoire proof: every text slot filled with its whole repertoire, through the real template with its
+    // fonts, language and rules, so the slot branch of `export_frame` checks each character against the character
+    // map and the font's advances, and nothing a slot may contain is left unproven.
+    let original: serde_json::Value = serde_json::from_slice(&data)?;
+    let repertoires = repertoires_of(&exported);
+    let mut probe = original.clone();
+    let mut reached = BTreeSet::new();
+    probe_values(&mut probe, None, &repertoires, &bar_names(&exported), &mut reached);
+    let (_, Exported { doc: probed, .. }) = build(&args.fixture, &serde_json::to_vec(&probe)?, &fonts, false).context("in the repertoire proof (every slot filled with its whole repertoire)")?;
+    let mut seen: HashMap<String, BTreeSet<char>> = HashMap::new();
+    each_slot(&probed, &mut |slot| seen.entry(slot.name.clone()).or_default().extend(slot.sample.chars()));
+    let mut shaped = 0;
+    for name in &reached {
+        let repertoire = &repertoires[name];
+        let missing: String = repertoire.chars().filter(|c| !seen.get(name).is_some_and(|s| s.contains(c))).collect();
+        if !missing.is_empty() { bail!("slot `{name}`: the repertoire proof did not shape {missing:?}; Typst dropped these characters"); }
+        shaped += repertoire.chars().count();
+    }
+    let unreached: Vec<&String> = repertoires.keys().filter(|n| !reached.contains(*n)).collect();
+    println!("repertoire proof: {shaped} character(s) over {} slot(s) shaped as the character map and the font's advances say{}", reached.len(),
+        if unreached.is_empty() { String::new() } else { format!("; {} slot(s) without a text value (page counters, a bar's number) checked on the sample only: {}", unreached.len(), unreached.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(", ")) });
+
     // Typst's own layout of other data, for the runtimes to compare against: reference.json / reference.pdf for
     // the first `--reference`, reference-<stem>.json / .pdf for every further one.
     for (i, path) in args.references.iter().enumerate() {
@@ -1834,14 +2057,14 @@ fn run() -> Result<()> {
     }
 
     if args.fuzz == 0 { return Ok(()); }
-    let original: serde_json::Value = serde_json::from_slice(&data)?;
+    let alphabets = alphabets_of(&exported);
     let baseline = static_view(&exported);
     let mut leaks = 0;
     let fuzz_started = std::time::Instant::now();
     for i in 0..args.fuzz {
         let mut rng = Rng(args.seed.wrapping_mul(0x9E37_79B9_7F4A_7C15).wrapping_add(i as u64 + 1));
         let mut sample = original.clone();
-        mutate(&mut sample, &mut rng);
+        mutate(&mut sample, &mut rng, None, &alphabets);
         let bytes = serde_json::to_vec(&sample)?;
         let (doc, Exported { doc: mut fuzzed, unstyled, mut reference, .. }) = match build(&args.fixture, &bytes, &fonts, false) {
             Ok(built) => built,

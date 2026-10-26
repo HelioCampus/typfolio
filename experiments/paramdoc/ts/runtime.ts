@@ -191,16 +191,27 @@ type Href = { url: string; alt?: string } | undefined;
 /** The clickable rectangles of a link slot: each drawn line's box (x, baseline, width) extended above and below the
  *  baseline as Typst extends a link's text frame. A link slot needs an `href`, a plain slot refuses one, so the runtime
  *  never renders a value Typst would have styled differently (`show link` rules). */
-function linkFill(slot: Slot, href: Href, lines: [number, number, number][], traceName: string): LinkFill | undefined {
+/** `scale` is the text's size relative to the slot's (the `shrink` policy), which the rectangle's height follows. */
+function linkFill(slot: Slot, href: Href, lines: [number, number, number][], scale: number, traceName: string): LinkFill | undefined {
   const g = slot.link;
   if (!href && !g) return undefined;
   if (!href) throw new Error(`slot \`${traceName}\` is a link slot (its sample value had an \`href\`) but the data gives none`);
   if (!g) throw new Error(`slot \`${traceName}\`: the data gives an \`href\` but the slot was exported without a link; give its sample value an \`href\` too`);
-  return { rects: lines.map(([x, y, w]) => [x, y - g.above, w, g.above + g.below]), url: href.url, alt: href.alt };
+  return { rects: lines.map(([x, y, w]) => [x, y - g.above * scale, w, (g.above + g.below) * scale]), url: href.url, alt: href.alt };
+}
+
+/** The glyph of a character in the slot's repertoire, or the refusal naming it. */
+function glyphOrRefuse(font: Font, c: string, traceName: string): number {
+  if (c === '\u00ad') throw new Error(`slot \`${traceName}\`: soft hyphens (U+00AD) are not supported; strip them from the text`);
+  const id = font.glyph(c);
+  if (id === undefined) throw new Error(`slot \`${traceName}\`: ${JSON.stringify(c)} (U+${c.codePointAt(0)!.toString(16).toUpperCase().padStart(4, '0')}) is not in the slot's repertoire; declare it with \`charset:\` in the template`);
+  return id;
 }
 
 function textOf(value: unknown): string {
   if (typeof value === 'string') return value;
+  // Typst's `str()` and this formatting agree on integers, not on every float (`1e21`, `1e-7`).
+  if (typeof value === 'number' && !Number.isInteger(value)) throw new Error(`${value} is not an integer; format numbers with a fraction as strings in the application`);
   if (typeof value === 'number' || typeof value === 'boolean') return String(value);
   // A link slot's value: `{ text, href }`.
   if (value && typeof value === 'object' && 'text' in value) return textOf((value as { text: unknown }).text);
@@ -215,8 +226,7 @@ function fillSlot(slot: Slot, text: string, href: Href, font: Font, traceName: s
     const glyphs: Glyph[] = [];
     let width = 0;
     for (const c of s) {
-      const id = font.glyph(c);
-      if (id === undefined) throw new Error(`slot \`${traceName}\`: ${JSON.stringify(c)} (U+${c.codePointAt(0)!.toString(16).toUpperCase().padStart(4, '0')}) is not in the slot's repertoire; declare it with \`charset:\` in the template`);
+      const id = glyphOrRefuse(font, c, traceName);
       const advance = font.advance(id) * size;
       glyphs.push({ id, x_advance: advance, x_offset: 0, y_offset: 0 });
       width += advance;
@@ -263,7 +273,7 @@ function fillSlot(slot: Slot, text: string, href: Href, font: Font, traceName: s
     rect: [slot.x, slot.y, slot.width, slot.height],
     items: [{ kind: 'text', x, y: slot.baseline, font: slot.font, size, fill: slot.fill, text: shown, glyphs }],
     trace: { name: traceName, baseline: slot.baseline, size, glyphs: traceGlyphs },
-    link: linkFill(slot, href, [[x, slot.baseline, width]], traceName),
+    link: linkFill(slot, href, [[x, slot.baseline, width]], size / slot.size, traceName),
   };
 }
 
@@ -284,9 +294,10 @@ const LB_CLASS: Record<string, LB> = {
   '\u200b': 'ZW', '\u2010': 'BA', '\u2011': 'GL', '\u2012': 'BA', '\u2013': 'BA', '\u2014': 'B2', '\u2018': 'QU', '\u2019': 'QU', '\u201a': 'OP', '\u201b': 'QU',
   '\u201c': 'QU', '\u201d': 'QU', '\u201e': 'OP', '\u201f': 'QU', '\u2026': 'IN', '\u202f': 'GL', '\u2032': 'PO', '\u2033': 'PO', '\u2039': 'QU', '\u203a': 'QU',
   '\u2044': 'IS', '\u2060': 'WJ', '\u20ac': 'PR', '\u2212': 'PR',
+  '\u037e': 'IS', '\u2024': 'IN', '\u2025': 'IN', '\u2027': 'BA', '\u2030': 'PO', '\u2031': 'PO', '\u20a7': 'PO', '\u20b6': 'PO', '\u20bb': 'PO', '\u20be': 'PO',
 };
 /** Digits are the ASCII ones and combining marks the main combining blocks, in both runtimes alike. */
-const lineBreakClass = (c: string): LB => LB_CLASS[c] ?? (/^[0-9]$/.test(c) ? 'NU' : /^[\u0300-\u036f\u1ab0-\u1aff\u1dc0-\u1dff\u20d0-\u20ff\ufe20-\ufe2f]$/.test(c) ? 'CM' : 'AL');
+const lineBreakClass = (c: string): LB => LB_CLASS[c] ?? (/^[0-9]$/.test(c) ? 'NU' : /^[\u20a0-\u20c0]$/.test(c) ? 'PR' : /^[\u0300-\u036f\u1ab0-\u1aff\u1dc0-\u1dff\u20d0-\u20ff\ufe20-\ufe2f]$/.test(c) ? 'CM' : 'AL');
 const isInitialQuote = (c: string): boolean => '«‘“‹‛‟'.includes(c);
 const isFinalQuote = (c: string): boolean => '»’”›'.includes(c);
 const isMandatoryBreak = (c: string): boolean => LB_CLASS[c] === 'BK';
@@ -437,11 +448,7 @@ function fillLines(slot: Slot, text: string, href: Href, font: Font, traceName: 
   if (!(pitch > 0)) throw new Error(`slot \`${traceName}\`: a wrapping slot without a line pitch; export the document again`);
   if (slot.overflow === 'shrink') throw new Error(`slot \`${traceName}\`: \`shrink\` is not an overflow policy for a wrapping slot`);
   const chars = [...text];
-  const glyphOf = (c: string): number => {
-    const id = font.glyph(c);
-    if (id === undefined) throw new Error(`slot \`${traceName}\`: ${JSON.stringify(c)} (U+${c.codePointAt(0)!.toString(16).toUpperCase().padStart(4, '0')}) is not in the slot's repertoire; declare it with \`charset:\` in the template`);
-    return id;
-  };
+  const glyphOf = (c: string): number => glyphOrRefuse(font, c, traceName);
   const ids: (number | undefined)[] = new Array<number | undefined>(chars.length);
   const idAt = (i: number): number => (ids[i] ??= glyphOf(chars[i]!));
   const widthOf = (from: number, to: number): number => { let w = 0; for (let i = from; i < to; i++) w += font.advance(idAt(i)) * size; return w; };
@@ -514,7 +521,7 @@ function fillLines(slot: Slot, text: string, href: Href, font: Font, traceName: 
     if (glyphs.length) { items.push({ kind: 'text', x, y, font: slot.font, size, fill: slot.fill, text: line.text, glyphs }); drawn.push([x, y, line.width]); }
   });
   // The trace reports the first line's baseline as Typst's frame has it: at the box top when that line is whitespace.
-  return { rect: [slot.x, slot.y, slot.width, slot.height], items, trace: { name: traceName, baseline: ys[0] ?? slot.baseline, size, glyphs: traceGlyphs }, link: linkFill(slot, href, drawn, traceName) };
+  return { rect: [slot.x, slot.y, slot.width, slot.height], items, trace: { name: traceName, baseline: ys[0] ?? slot.baseline, size, glyphs: traceGlyphs }, link: linkFill(slot, href, drawn, 1, traceName) };
 }
 
 // ---------------------------------------------------------------------------------------------------------
@@ -702,10 +709,30 @@ function jpegHeader(bytes: Uint8Array): [number, number, number] {
       return [(bytes[at + 7]! << 8) | bytes[at + 8]!, (bytes[at + 5]! << 8) | bytes[at + 6]!, bytes[at + 9]!];
     }
     if (code === 0xc3 || (code >= 0xc5 && code <= 0xc7) || (code >= 0xc9 && code <= 0xcb) || (code >= 0xcd && code <= 0xcf)) throw new Error(`JPEG frame type 0x${code.toString(16)} (lossless, hierarchical or arithmetic coding) is not supported`);
+    // Typst rotates a photo by its EXIF orientation; the runtimes draw it as stored, so they refuse it.
+    if (code === 0xe1 && String.fromCharCode(...bytes.subarray(at + 4, at + 10)) === 'Exif\0\0') {
+      const o = exifOrientation(bytes.subarray(at + 10, Math.min(at + 2 + len, bytes.length)));
+      if (o !== undefined && o !== 1) throw new Error(`JPEG with EXIF orientation ${o}: rotate the image before sending it (Typst would rotate it, the runtimes draw it as stored)`);
+    }
     if (code === 0xd9 || code === 0xda) break;
     at += 2 + len;
   }
   throw new Error('JPEG without a frame header');
+}
+
+/** The EXIF orientation tag (0x0112 in IFD0) of a TIFF-structured EXIF block, if present. */
+function exifOrientation(tiff: Uint8Array): number | undefined {
+  const order = String.fromCharCode(tiff[0] ?? 0, tiff[1] ?? 0);
+  if (order !== 'MM' && order !== 'II') return undefined;
+  const view = new DataView(tiff.buffer, tiff.byteOffset, tiff.byteLength), little = order === 'II';
+  const u16 = (at: number): number | undefined => at + 2 <= tiff.length ? view.getUint16(at, little) : undefined;
+  const u32 = (at: number): number | undefined => at + 4 <= tiff.length ? view.getUint32(at, little) : undefined;
+  if (u16(2) !== 42) return undefined;
+  const ifd = u32(4);
+  if (ifd === undefined) return undefined;
+  const count = u16(ifd) ?? 0;
+  for (let i = 0; i < count; i++) { const e = ifd + 2 + 12 * i; if (u16(e) === 0x0112) return u16(e + 8); }
+  return undefined;
 }
 
 /** Baseline and progressive JPEGs pass through as DCT-encoded data, as in Typst's PDFs. */
@@ -909,12 +936,7 @@ function neededLines(slot: Slot, text: string, font: Font, traceName: string): n
   const pitch = slot.pitch ?? 0, size = slot.size;
   if (!(pitch > 0)) throw new Error(`slot \`${traceName}\`: a wrapping slot without a line pitch; export the document again`);
   const chars = [...text];
-  const ids = chars.map(c => {
-    if (isMandatoryBreak(c)) return 0;
-    const id = font.glyph(c);
-    if (id === undefined) throw new Error(`slot \`${traceName}\`: ${JSON.stringify(c)} (U+${c.codePointAt(0)!.toString(16).toUpperCase().padStart(4, '0')}) is not in the slot's repertoire; declare it with \`charset:\` in the template`);
-    return id;
-  });
+  const ids = chars.map(c => isMandatoryBreak(c) ? 0 : glyphOrRefuse(font, c, traceName));
   const widthOf = (from: number, to: number): number => { let w = 0; for (let i = from; i < to; i++) w += font.advance(ids[i]!) * size; return w; };
   const broken = breakLines(chars, widthOf, width => slot.width + 1e-4 >= width);
   const lineHeight = slot.baseline - slot.y, leading = pitch - lineHeight;
