@@ -432,7 +432,7 @@ function linebreakLink(link: string[], f: (end: number) => void): void {
 /** A glyph of a shaped text as Typst's `calculate_adjustability` (typst-layout 0.15.1 `shaping.rs`) leaves it: `advance`
  *  and `offset` after the adjustment of consecutive punctuation, `shrink` what `commit` may still take from each side, `c`
  *  the glyph's character to Typst (the soft hyphen for the glyph after soft hyphens that open the text), `at` the index of
- *  its character in the text that was shaped. */
+ *  its character in the slot's text (`base` plus its index in the text shaped). */
 interface Shaped { id: number; advance: number; offset: number; shrink: [number, number]; c: string; at: number }
 
 /** Shapes a text as Typst shapes a paragraph's (or a reshaped line's) text: one glyph per character but soft hyphens and
@@ -444,7 +444,7 @@ interface Shaped { id: number; advance: number; offset: number; shrink: [number,
  *  Requirements 3.1.6.1): where two dots meet and their facing shrinkabilities reach half the first one's advance, the first
  *  gives up to a quarter on its right and the second the rest on its left (its glyph moving left), in text order, each pair
  *  seeing the state the previous one left. Same arithmetic as the Rust runtime's `shape_text`. */
-function shapeText(cs: string[], font: Font, size: number, traceName: string): Shaped[] {
+function shapeText(cs: string[], base: number, font: Font, size: number, traceName: string): Shaped[] {
   let leading = 0; while (leading < cs.length && cs[leading] === SHY) leading++;
   const out: Shaped[] = [];
   cs.forEach((c, i) => {
@@ -453,7 +453,7 @@ function shapeText(cs: string[], font: Font, size: number, traceName: string): S
     const a = font.advance(id) * size;
     const eff = i === leading && leading > 0 ? SHY : c;
     const shrink: [number, number] = isSpaceGlyph(eff) ? [0, Math.min(a / 3, a * 0.75)] : isMiddleDot(eff) ? [a / 4, a / 4] : [0, 0];
-    out.push({ id, advance: a, offset: 0, shrink, c: eff, at: i });
+    out.push({ id, advance: a, offset: 0, shrink, c: eff, at: base + i });
   });
   for (let k = 0; k + 1 < out.length; k++) {
     const g = out[k]!, next = out[k + 1]!;
@@ -472,29 +472,37 @@ function shapeText(cs: string[], font: Font, size: number, traceName: string): S
 /** The shaping of a slot's whole text, which Typst does once; a line is a slice of it, except that a line starting on a
  *  soft hyphen inside the text is shaped again by Typst (no glyph starts at the hyphen, so the slice is not safe to break)
  *  and so gets its own adjustments. */
+/** `before[i]` is the number of glyphs before character `i`, so the glyphs of `from..to` are a slice of `whole`; `prefix`
+ *  sums their advances, so a line's natural width is one subtraction (the breaker measures many). */
 class Shaping {
   private readonly chars: string[];
   private readonly font: Font;
   private readonly size: number;
   private readonly traceName: string;
   private readonly whole: Shaped[];
-  private readonly glyphAt: (number | undefined)[];
+  private readonly before: number[];
+  private readonly prefix: number[];
   constructor(chars: string[], font: Font, size: number, traceName: string) {
     this.chars = chars; this.font = font; this.size = size; this.traceName = traceName;
-    this.whole = shapeText(chars, font, size, traceName);
-    this.glyphAt = new Array<number | undefined>(chars.length);
-    this.whole.forEach((g, k) => { this.glyphAt[g.at] = k; });
+    this.whole = shapeText(chars, 0, font, size, traceName);
+    this.before = new Array<number>(chars.length + 1);
+    let k = 0;
+    for (let i = 0; i <= chars.length; i++) { this.before[i] = k; if (k < this.whole.length && this.whole[k]!.at === i) k++; }
+    this.prefix = new Array<number>(this.whole.length + 1);
+    let sum = 0;
+    this.prefix[0] = 0;
+    this.whole.forEach((g, j) => { sum += g.advance; this.prefix[j + 1] = sum; });
   }
   reshaped(from: number): boolean { return from > 0 && from < this.chars.length && this.chars[from] === SHY; }
-  /** The glyphs of the line `from..to`, `at` relative to `from`. */
+  /** The glyphs of the line `from..to`. */
   line(from: number, to: number): Shaped[] {
-    if (this.reshaped(from)) return shapeText(this.chars.slice(from, to), this.font, this.size, this.traceName);
-    return this.whole.filter(g => g.at >= from && g.at < to).map(g => ({ ...g, shrink: [g.shrink[0], g.shrink[1]], at: g.at - from }));
+    if (this.reshaped(from)) return shapeText(this.chars.slice(from, to), from, this.font, this.size, this.traceName);
+    return this.whole.slice(this.before[from]!, this.before[to]!);
   }
   /** The natural width of `from..to`, as the breaker measures a line. */
   widthOf(from: number, to: number): number {
     if (this.reshaped(from)) { let w = 0; for (const g of this.line(from, to)) w += g.advance; return w; }
-    let w = 0; for (let i = from; i < to; i++) { const k = this.glyphAt[i]; if (k !== undefined) w += this.whole[k]!.advance; } return w;
+    return this.prefix[this.before[to]!]! - this.prefix[this.before[from]!]!;
   }
 }
 
@@ -551,9 +559,10 @@ function fillLines(slot: Slot, text: string, href: Href, font: Font, traceName: 
   // (`extra`: spaces and middle dots); a line without one keeps its width and is aligned as the slot says. Trimmed
   // trailing whitespace has no advance and no adjustability; the hyphen neither. Same arithmetic as the Rust runtime's `run`.
   const sum = (xs: number[]): number => xs.reduce((w, a) => w + a, 0);
-  const run = (glyphs: Shaped[], kept: number, justify: boolean, hyphenated: boolean, text: string): LineRun => {
+  // `keptEnd`: the characters before it count for the width, the rest is trimmed trailing whitespace.
+  const run = (glyphs: Shaped[], keptEnd: number, justify: boolean, hyphenated: boolean, text: string): LineRun => {
     const ids: number[] = [], advances: number[] = [], offsets: number[] = [], shrink: [number, number][] = [], charsOf: string[] = [], isKept: boolean[] = [];
-    for (const g of glyphs) { const k = g.at < kept; ids.push(g.id); advances.push(k ? g.advance : 0); offsets.push(k ? g.offset : 0); shrink.push(k ? g.shrink : [0, 0]); charsOf.push(g.c); isKept.push(k); }
+    for (const g of glyphs) { const k = g.at < keptEnd; ids.push(g.id); advances.push(k ? g.advance : 0); offsets.push(k ? g.offset : 0); shrink.push(k ? [g.shrink[0], g.shrink[1]] : [0, 0]); charsOf.push(g.c); isKept.push(k); }
     const drawnHyphen = hyphenated && hyphenId !== undefined;
     if (drawnHyphen) { ids.push(hyphenId); advances.push(hyphenWidth); offsets.push(0); shrink.push([0, 0]); charsOf.push('-'); isKept.push(true); }
     const n = ids.length;
@@ -582,13 +591,13 @@ function fillLines(slot: Slot, text: string, href: Href, font: Font, traceName: 
   };
   // Every line but the last and lines before a hard break are justified (`line.rs`: `config.justify && breakpoint !=
   // Mandatory`; the end of the text is a mandatory break too).
-  const render = (l: BrokenLine): LineRun => run(shaping.line(l.start, l.shapingEnd), l.layoutEnd - l.start, slot.justify === true && !l.mandatory, l.hyphen, chars.slice(l.start, l.shapingEnd).join(''));
+  const render = (l: BrokenLine): LineRun => run(shaping.line(l.start, l.shapingEnd), l.layoutEnd, slot.justify === true && !l.mandatory, l.hyphen, chars.slice(l.start, l.shapingEnd).join(''));
   const ellipsize = (l: BrokenLine): LineRun => {
     const ellipsis = [...(font.glyph('…') !== undefined ? '…' : '...')];
     const kept = chars.slice(l.start, l.layoutEnd);
     const trimmed = (): string[] => { while (kept.length && (isWhitespace(kept[kept.length - 1]!) || kept[kept.length - 1] === SHY)) kept.pop(); return kept; };
     // The ellipsized line is the runtime's own and the last one shown: never stretched, never hyphenated.
-    const shape = (): LineRun => { const cs = [...trimmed(), ...ellipsis]; return run(shapeText(cs, font, size, traceName), cs.length, false, false, cs.join('')); };
+    const shape = (): LineRun => { const cs = [...trimmed(), ...ellipsis]; return run(shapeText(cs, 0, font, size, traceName), cs.length, false, false, cs.join('')); };
     let shown = shape();
     while (!fits(shown.width) && kept.length) { kept.pop(); shown = shape(); }
     return shown;

@@ -375,7 +375,7 @@ fn linebreak_link(link: &[char], f: &mut dyn FnMut(usize)) {
 /// A glyph of a shaped text as Typst's `calculate_adjustability` (typst-layout 0.15.1 `shaping.rs`) leaves it:
 /// `advance` and `offset` after the adjustment of consecutive punctuation, `shrink` what `commit` may still take
 /// from each side, `c` the glyph's character to Typst (the soft hyphen for the glyph after soft hyphens that open
-/// the text), `at` the index of its character in the text that was shaped.
+/// the text), `at` the index of its character in the slot's text (`base` plus its index in the text shaped).
 #[derive(Clone, Copy)]
 struct Shaped { id: u16, advance: f64, offset: f64, shrink: (f64, f64), c: char, at: usize }
 
@@ -389,7 +389,7 @@ struct Shaped { id: u16, advance: f64, offset: f64, shrink: (f64, f64), c: char,
 /// their facing shrinkabilities reach half the first one's advance, the first gives up to a quarter on its right
 /// and the second the rest on its left (its glyph moving left), in text order, each pair seeing the state the
 /// previous one left.
-fn shape_text(cs: &[char], font: &LoadedFont, size: f64, trace_name: &str) -> Result<Vec<Shaped>> {
+fn shape_text(cs: &[char], base: usize, font: &LoadedFont, size: f64, trace_name: &str) -> Result<Vec<Shaped>> {
     let leading = cs.iter().take_while(|&&c| c == SHY).count();
     let mut out: Vec<Shaped> = Vec::with_capacity(cs.len());
     for (i, &c) in cs.iter().enumerate() {
@@ -398,7 +398,7 @@ fn shape_text(cs: &[char], font: &LoadedFont, size: f64, trace_name: &str) -> Re
         let a = font.advance(id) * size;
         let c = if i == leading && leading > 0 { SHY } else { c };
         let shrink = if is_space_glyph(c) { (0.0, (a / 3.0).min(a * 0.75)) } else if is_middle_dot(c) { (a / 4.0, a / 4.0) } else { (0.0, 0.0) };
-        out.push(Shaped { id, advance: a, offset: 0.0, shrink, c, at: i });
+        out.push(Shaped { id, advance: a, offset: 0.0, shrink, c, at: base + i });
     }
     for k in 0..out.len().saturating_sub(1) {
         if !(is_middle_dot(out[k].c) && is_middle_dot(out[k + 1].c)) { continue; }
@@ -419,25 +419,32 @@ fn shape_text(cs: &[char], font: &LoadedFont, size: f64, trace_name: &str) -> Re
 /// The shaping of a slot's whole text, which Typst does once; a line is a slice of it, except that a line
 /// starting on a soft hyphen inside the text is shaped again by Typst (no glyph starts at the hyphen, so the
 /// slice is not safe to break) and so gets its own adjustments.
-struct Shaping<'a> { chars: &'a [char], whole: Vec<Shaped>, glyph_at: Vec<Option<usize>>, font: &'a LoadedFont<'a>, size: f64, trace_name: &'a str }
+/// `before[i]` is the number of glyphs before character `i`, so the glyphs of `from..to` are a slice of `whole`;
+/// `prefix` sums their advances, so a line's natural width is one subtraction (the breaker measures many).
+struct Shaping<'a> { chars: &'a [char], whole: Vec<Shaped>, before: Vec<usize>, prefix: Vec<f64>, font: &'a LoadedFont<'a>, size: f64, trace_name: &'a str }
 
 impl<'a> Shaping<'a> {
     fn new(chars: &'a [char], font: &'a LoadedFont<'a>, size: f64, trace_name: &'a str) -> Result<Self> {
-        let whole = shape_text(chars, font, size, trace_name)?;
-        let mut glyph_at = vec![None; chars.len()];
-        for (k, g) in whole.iter().enumerate() { glyph_at[g.at] = Some(k); }
-        Ok(Self { chars, whole, glyph_at, font, size, trace_name })
+        let whole = shape_text(chars, 0, font, size, trace_name)?;
+        let mut before = Vec::with_capacity(chars.len() + 1);
+        let mut k = 0;
+        for i in 0..=chars.len() { before.push(k); if k < whole.len() && whole[k].at == i { k += 1; } }
+        let mut prefix = Vec::with_capacity(whole.len() + 1);
+        let mut sum = 0.0;
+        prefix.push(0.0);
+        for g in &whole { sum += g.advance; prefix.push(sum); }
+        Ok(Self { chars, whole, before, prefix, font, size, trace_name })
     }
     fn reshaped(&self, from: usize) -> bool { from > 0 && from < self.chars.len() && self.chars[from] == SHY }
-    /// The glyphs of the line `from..to`, `at` relative to `from`.
+    /// The glyphs of the line `from..to`.
     fn line(&self, from: usize, to: usize) -> Result<Vec<Shaped>> {
-        if self.reshaped(from) { return shape_text(&self.chars[from..to], self.font, self.size, self.trace_name); }
-        Ok(self.whole.iter().filter(|g| g.at >= from && g.at < to).map(|g| Shaped { at: g.at - from, ..*g }).collect())
+        if self.reshaped(from) { return shape_text(&self.chars[from..to], from, self.font, self.size, self.trace_name); }
+        Ok(self.whole[self.before[from]..self.before[to]].to_vec())
     }
     /// The natural width of `from..to`, as the breaker measures a line.
     fn width_of(&self, from: usize, to: usize) -> f64 {
         if self.reshaped(from) { return self.line(from, to).map(|gs| gs.iter().map(|g| g.advance).sum()).unwrap_or(0.0); }
-        (from..to).map(|i| self.glyph_at[i].map_or(0.0, |k| self.whole[k].advance)).sum()
+        self.prefix[self.before[to]] - self.prefix[self.before[from]]
     }
 }
 
@@ -499,11 +506,12 @@ fn fill_lines(slot: &ir::Slot, text: &str, href: Href, font: &LoadedFont, trace_
     // equally among the justifiable glyphs (`extra`: spaces and middle dots); a line without one keeps its width
     // and is aligned as the slot says. Trimmed trailing whitespace has no advance and no adjustability; the
     // hyphen neither.
-    let run = |glyphs: Vec<Shaped>, kept: usize, justify: bool, hyphenated: bool, text: String| -> LineRun {
+    // `kept_end`: the characters before it count for the width, the rest is trimmed trailing whitespace.
+    let run = |glyphs: Vec<Shaped>, kept_end: usize, justify: bool, hyphenated: bool, text: String| -> LineRun {
         let n = glyphs.len() + usize::from(hyphenated && hyphen.is_some());
         let (mut ids, mut advances, mut offsets, mut shrink, mut chars_of, mut is_kept) = (Vec::with_capacity(n), Vec::with_capacity(n), Vec::with_capacity(n), Vec::with_capacity(n), Vec::with_capacity(n), Vec::with_capacity(n));
         for g in &glyphs {
-            let k = g.at < kept;
+            let k = g.at < kept_end;
             ids.push(g.id); advances.push(if k { g.advance } else { 0.0 }); offsets.push(if k { g.offset } else { 0.0 }); shrink.push(if k { g.shrink } else { (0.0, 0.0) }); chars_of.push(g.c); is_kept.push(k);
         }
         let mut hyphen_width = 0.0;
@@ -532,13 +540,13 @@ fn fill_lines(slot: &ir::Slot, text: &str, href: Href, font: &LoadedFont, trace_
     };
     // Every line but the last and lines before a hard break are justified (`line.rs`: `config.justify &&
     // breakpoint != Mandatory`; the end of the text is a mandatory break too).
-    let render = |l: &BrokenLine| -> Result<LineRun> { Ok(run(shaping.line(l.start, l.shaping_end)?, l.layout_end - l.start, slot.justify && !l.mandatory, l.hyphen, chars[l.start..l.shaping_end].iter().collect())) };
+    let render = |l: &BrokenLine| -> Result<LineRun> { Ok(run(shaping.line(l.start, l.shaping_end)?, l.layout_end, slot.justify && !l.mandatory, l.hyphen, chars[l.start..l.shaping_end].iter().collect())) };
     let ellipsize = |l: &BrokenLine| -> Result<LineRun> {
         let ellipsis: Vec<char> = if font.glyph('…').is_some() { vec!['…'] } else { vec!['.', '.', '.'] };
         let mut kept: Vec<char> = chars[l.start..l.layout_end].to_vec();
         let trim = |kept: &mut Vec<char>| while kept.last().is_some_and(|&c| c.is_whitespace() || c == SHY) { kept.pop(); };
         // The ellipsized line is the runtime's own and the last one shown: never stretched, never hyphenated.
-        let shape = |kept: &[char]| -> Result<LineRun> { let cs: Vec<char> = kept.iter().chain(&ellipsis).copied().collect(); Ok(run(shape_text(&cs, font, size, &trace_name)?, cs.len(), false, false, cs.iter().collect())) };
+        let shape = |kept: &[char]| -> Result<LineRun> { let cs: Vec<char> = kept.iter().chain(&ellipsis).copied().collect(); Ok(run(shape_text(&cs, 0, font, size, &trace_name)?, cs.len(), false, false, cs.iter().collect())) };
         trim(&mut kept);
         let mut shown = shape(&kept)?;
         while !fits(shown.width) && !kept.is_empty() { kept.pop(); trim(&mut kept); shown = shape(&kept)?; }

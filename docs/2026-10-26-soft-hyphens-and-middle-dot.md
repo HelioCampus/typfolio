@@ -66,7 +66,8 @@ both runtimes.
 - A link whose *text* ends on a soft hyphen: Typst appends the hyphen run outside the link's tag range, which
   changes the structure tree (the fuzz caught it as a leak) and crashes typst-pdf 0.15.1 ("expected link
   ancestor in logical tree"), so such data has no compiler fallback. Both runtimes refuse it with the message to
-  strip the hyphen (G52). A soft hyphen at the end of a *line* inside a link is fine.
+  strip the hyphen (G52). A soft hyphen at the end of a *line* inside a link is fine. The upstream report, with
+  a plain-file reproduction, is `docs/upstream/2026-10-27-typst-pdf-link-ending-on-soft-hyphen.md`.
 - Typst's PDF wraps the glyph before each soft hyphen in an `ActualText` span and re-encodes the pen position
   after it as a 32-bit float; on a justified line that can put one glyph a quarter pixel off in poppler against
   the runtimes' exact positions (54 pixels of one glyph's edges in `justify/hyphens`, channel delta 64). Glyph
@@ -84,12 +85,22 @@ both runtimes.
 | `wrapfuzz` and `charset` (U+00AD and U+00B7 in the repertoires), the sample and the random texts | both runtimes identical to Typst in glyphs and pixels |
 | `./check.sh` | 191 checks, 0 failed |
 | Sizes | wasm 695,746 B raw / 245,595 B gzip, up 4,403 B / 2,131 B from M11 (691,343 / 243,464); worker bundle 39,028 B / 15,085 B gzip, up 1,948 B / 766 B from M11 (37,080 / 14,319) |
+| Throughput, the report on 1000 benchmark inputs × 3, one thread (M-series Mac) | TypeScript in Node 3,245 to 3,276 documents/s, median 0.29 ms per document (M10: 3,336 to 3,358 and 0.283 ms; M11: 3,267 to 3,297); Rust native 1,722 to 1,784 documents/s, median 0.55 ms (M10: 1,774 to 1,819; unchanged within noise) |
+
+Measured the same way as the sizes, at each commit with its own checked-in report document: the first build of
+this work cost the TypeScript runtime 6% per document (the breaker summed every candidate line's advances over the
+new shaped-text model); a prefix sum over the shaped text brought it back to M11's level. What remains against M10
+is about 2.5% in TypeScript, M11's per-glyph justification arithmetic, and nothing in Rust.
 
 ## How to run
 
 ```sh
 cd experiments/paramdoc
 ./check.sh
+# throughput, before and after a runtime change (the sizes are measured the same way, see PLAN.md):
+node --disable-warning=ExperimentalWarning --experimental-strip-types notes/bench/gen-inputs.mjs 1000 ../../.build/paramdoc/bench/inputs.json
+node --disable-warning=ExperimentalWarning --experimental-strip-types ts/cli.ts bench documents/report --inputs ../../.build/paramdoc/bench/inputs.json --repeat 3
+cargo run --release -p paramdoc-runtime -- bench documents/report --inputs ../../.build/paramdoc/bench/inputs.json --repeat 3
 cargo run -p paramdoc-export -- fixtures/wrap --fuzz 30 --reference fixtures/wrap/data.json --reference fixtures/wrap/data-hyphens.json --reference fixtures/wrap/data-dots.json
 cargo run -p paramdoc-runtime -- ../../.build/paramdoc/wrap --data fixtures/wrap/data-hyphens.json --out /tmp/hyphens.pdf --expect ../../.build/paramdoc/wrap/reference-data-hyphens.json
 ```

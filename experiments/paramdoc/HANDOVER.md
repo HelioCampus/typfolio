@@ -60,6 +60,9 @@ Commits, oldest first:
 
 ```sh
 cd experiments/paramdoc && ./check.sh      # 191 checks, a few minutes after the first build; FUZZ=20 ./check.sh is quicker
+# After a runtime change, measure what it cost, as the status log in PLAN.md records per milestone: the sizes
+# (the release wasm; the demo's worker bundle through vite build) and the throughput (ts/cli.ts bench and
+# paramdoc-runtime bench on documents/report with notes/bench/gen-inputs.mjs's 1000 inputs, --repeat 3).
 DEMO_URL=http://127.0.0.1:4190 ./check.sh  # also drives the performance page of a running pretext-hybrid dev server
 ```
 
@@ -265,7 +268,9 @@ through link slots (`slot(name, (text:, href:))`), with rectangles equal to typs
   whitespace-only line, which has no height, the line after the last one shows its top inside the box, and the
   hidden lines are in the PDF's text (as in Typst's). `error` and `ellipsis` still count visible lines.
 - **Soft hyphens and Typst's PDF.** A link whose text ends on a soft hyphen changes Typst's structure tree
-  and crashes typst-pdf 0.15.1, so the runtimes refuse it (G52). And
+  and crashes typst-pdf 0.15.1, so the runtimes refuse it (G52; the upstream report with a plain-file
+  reproduction is `docs/upstream/`, and `paramdoc-export <dir> --plain-pdf out.pdf` compiles a plain
+  `main.typ` with the pinned crates for such reports). And
   Typst's PDF re-encodes the pen position after each soft-hyphen cluster (an `ActualText` span) as a 32-bit
   float, so on a justified line one glyph can land a quarter pixel off in poppler against the runtimes' exact
   positions: `check.sh` ignores channel differences up to 64 where soft hyphens meet justified lines

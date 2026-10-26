@@ -1799,11 +1799,11 @@ fn short(v: &serde_json::Value) -> String {
 // ---------------------------------------------------------------------------------------------------------
 // CLI
 
-struct Args { fixture: PathBuf, data: PathBuf, fonts: PathBuf, out: PathBuf, fuzz: usize, seed: u64, references: Vec<PathBuf>, fuzz_references: usize }
+struct Args { fixture: PathBuf, data: PathBuf, fonts: PathBuf, out: PathBuf, fuzz: usize, seed: u64, references: Vec<PathBuf>, fuzz_references: usize, plain_pdf: Option<PathBuf> }
 
 fn parse_args() -> Result<Args> {
     let mut args = std::env::args().skip(1);
-    let fixture = PathBuf::from(args.next().ok_or_else(|| anyhow!("usage: paramdoc-export <fixture-dir> [--data f] [--fonts d] [--out d] [--fuzz N] [--seed S] [--reference data.json]... [--fuzz-references K]"))?);
+    let fixture = PathBuf::from(args.next().ok_or_else(|| anyhow!("usage: paramdoc-export <fixture-dir> [--data f] [--fonts d] [--out d] [--fuzz N] [--seed S] [--reference data.json]... [--fuzz-references K] [--plain-pdf out.pdf]"))?);
     let name = fixture.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| "doc".into());
     let mut parsed = Args {
         data: fixture.join("data.json"),
@@ -1813,6 +1813,7 @@ fn parse_args() -> Result<Args> {
         seed: 1,
         references: Vec::new(),
         fuzz_references: 0,
+        plain_pdf: None,
         fixture,
     };
     while let Some(flag) = args.next() {
@@ -1825,6 +1826,7 @@ fn parse_args() -> Result<Args> {
             "--seed" => parsed.seed = value.parse()?,
             "--reference" => parsed.references.push(value.into()),
             "--fuzz-references" => parsed.fuzz_references = value.parse()?,
+            "--plain-pdf" => parsed.plain_pdf = Some(value.into()),
             other => bail!("unknown flag {other}"),
         }
     }
@@ -2005,6 +2007,17 @@ fn run() -> Result<()> {
     fs::create_dir_all(&args.out)?;
     let fonts = load_fonts(&args.fonts)?;
     let data = fs::read(&args.data).with_context(|| format!("reading {}", args.data.display()))?;
+
+    // `--plain-pdf`: compile `main.typ` with the pinned typst crates and write typst-pdf's output, nothing else;
+    // for reproducing Typst's own behaviour on a plain file (the reports in `docs/upstream`).
+    if let Some(path) = &args.plain_pdf {
+        let world = MemWorld::new(&args.fixture, &data, &fonts, None)?;
+        let doc = compile(&world)?;
+        let pdf = typst_pdf::pdf(&doc, &PdfOptions::default()).map_err(|e| anyhow!("pdf export failed: {e:?}"))?;
+        fs::write(path, &pdf).with_context(|| format!("writing {}", path.display()))?;
+        println!("compiled {} page(s) and wrote {} ({} bytes)", doc.pages().len(), path.display(), pdf.len());
+        return Ok(());
+    }
 
     let started = std::time::Instant::now();
     let (doc, Exported { doc: mut exported, images, .. }) = build(&args.fixture, &data, &fonts, true)?;

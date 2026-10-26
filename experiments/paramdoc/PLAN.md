@@ -407,7 +407,10 @@ Defaults: fonts from `../../fixtures/fonts`, output under `../../.build/paramdoc
   after each soft-hyphen cluster as a 32-bit float, which on a justified line can put one glyph a quarter pixel
   off in poppler (positions agree to 1e-3 pt; `check.sh` ignores channel differences up to 64 there). `check.sh`
   191 checks. Sizes: wasm 695,746 B raw / 245,595 B gzip (+4,403 / +2,131 over M11), worker bundle 39,028 B /
-  15,085 B gzip (+1,948 / +766 over M11). Notes in `docs/2026-10-26-soft-hyphens-and-middle-dot.md`.
+  15,085 B gzip (+1,948 / +766 over M11). Throughput (the report, 1000 benchmark inputs × 3, one thread):
+  TypeScript 3,245 to 3,276 documents/s, median 0.29 ms (M10 3,336 to 3,358, 0.283 ms; M11 3,267 to 3,297),
+  after a prefix sum over the shaped text took back the 6% the first build had cost; Rust native 1,722 to 1,784
+  (M10 1,774 to 1,819), unchanged within noise. Notes in `docs/2026-10-26-soft-hyphens-and-middle-dot.md`.
 - **M11 justified wrapping slots (2026-10-26).** `slot(..., justify: true)` makes a wrapping slot justified:
   the dialect sets `par(justify: justify)` with the simple breaker and hyphenation still pinned, so the breaks
   do not move; both runtimes port Typst's `commit` (typst-layout 0.15.1 `line.rs`): an overfull line shrinks

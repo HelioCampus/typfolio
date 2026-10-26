@@ -70,7 +70,8 @@ with the reason.
   caught it as a leak), and typst-pdf 0.15.1 then cannot write the PDF ("internal error: expected link ancestor
   in logical tree", `link.rs:107`), so such data has no compiler fallback; both runtimes refuse it with the
   message to strip the hyphen (`links/data-shy-error.json`). A soft hyphen at the end of a *line* inside a link
-  is fine and is in `check.sh` (`links/data-hyphens.json`). Fix: report upstream.
+  is fine and is in `check.sh` (`links/data-hyphens.json`). Fix: upstream; the report, with a plain-file
+  reproduction, is `docs/upstream/2026-10-27-typst-pdf-link-ending-on-soft-hyphen.md` (not filed yet).
 
 ## Links
 
