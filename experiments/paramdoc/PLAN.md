@@ -335,6 +335,85 @@ Exit: `./check.sh` green with the two new fixtures; the default repertoire fuzze
 entry of the Text, Links and Images sections of `GAPS.md` closed, refused or reduced to a documented cosmetic
 rule; status-log entry, `HANDOVER.md` item 6 and the contract paragraph, the note. Then M11.
 
+### M13: one Typst binding for the compiler, the exporter and the runtime (plan, not built)
+
+Written 2026-10-27. The idea is lever 3 of `.idea/TODO/07-wasm-size.md` (an own minimal binding crate, typst and
+typst-pdf bound directly, without typst.ts's reflexo and tinymist layers), with what paramdoc has since added
+to it.
+
+**Why.**
+- Two Typsts today. `@typfolio/wasm` is built from a pinned revision of typst.ts's `typst-ts-web-compiler`,
+  whose Typst is a patched 0.15.1 (git tag `typst.ts/v0.8.1`, revision `59b5999d`); the paramdoc exporter
+  compiles with the crates.io 0.15.1 crates. Checked on 2026-10-27: the patch adds "content hints" to frames
+  (the character a line break ate, a newline on blocks, rows and math rows, for typst.ts's text and HTML
+  conversions), public accessors (`FuncInner`, `labelled_at`) and `pdf_to_svg`; it changes no layout. So the
+  compiler fallback and the export agree today, but by inspection, not by proof, and every Typst upgrade would
+  have to be inspected again.
+- The exporter already is a minimal binding: an in-memory `World` (`MemWorld`), `typst::compile`,
+  `typst_pdf::pdf`, and since 2026-10-27 a `--plain-pdf` mode that is a compile call and nothing else. The
+  pieces of an own binding exist; what is missing is the wasm-bindgen surface and the build around it.
+- One pin, one provenance, one licence bundle, one Typst upgrade at a time, and the exporter inside a product
+  build (G38, the Vite plugin) instead of an experiment next to it.
+- Possibly a smaller compiler wasm. The note's estimate (about 9 MB raw) predates fat LTO; the data sections
+  (syntect grammars, hayagriva CSL styles, ICU, hypher, rustybuzz tables, wasmi) come from Typst itself and stay.
+  The saving is reflexo and tinymist and whatever of typst-ide, typst-render, typst-svg and typst-html the
+  current features link. It is the first thing to measure, not a promise.
+
+**Scope.**
+1. A size prototype first (a day): a `cdylib` of `typst` + `typst-pdf` with a stub compile, the current release
+   profile (`opt-level s`, fat LTO, `codegen-units 1`, `cdylib` only), wasm-bindgen 0.2.118; raw, gzip and
+   Brotli next to the pinned artifact. If the saving is small, the item is still worth doing for the first
+   three reasons, but the plan's order changes (it moves behind G38 instead of before it).
+2. A binding crate in the paramdoc Rust workspace (so the exporter, the runtime and the compiler share one
+   `Cargo.lock`): the shared `World` generalised from `MemWorld` (template files, data mounted at paths,
+   `sys.inputs`, fonts from bytes, a package registry through a host callback as today), compile to a
+   `PagedDocument`, export through `typst_pdf::pdf` with the options core uses (standards, identifier,
+   timestamp), structured diagnostics, cancellation checks and disposal. The wasm-bindgen surface replaces
+   what `packages/core/src/engine.ts` uses of typst.ts today: `TypstCompilerBuilder` (`set_access_model`,
+   `set_package_registry`, `build`), `TypstCompiler` (`reset_shadow`, `map_shadow`, `snapshot`),
+   `TypstCompileWorld` (`set_pdf_opts`, `compile`, `get_artifact`, `free`), `TypstFontResolverBuilder` and
+   `get_font_info`. It can be smaller and typed; core's public API does not change.
+3. `packages/core/src/engine.ts` rewritten against that surface. The diagnostics come as data, not as the
+   Rust debug text core parses today (`exportDiagnostics`); the `missing-glyph` code stays.
+4. The build: `compiler-source.json` pins the repository's own crate and the Typst version instead of a
+   typst.ts revision; `tools/build-wasm.ts` keeps the profile, the path remapping, the reproducibility checks
+   and the pinned artifact hashes, with `SOURCE_DATE_EPOCH` and the remapped roots taken from this repository
+   rather than an upstream checkout; `cargo-about` regenerates the notices for the smaller tree;
+   `LICENSE.typst-ts` goes when nothing of typst.ts is compiled in.
+5. The proof: every existing suite (`npm test`, `test:vite`, `test:browser`, `test:browsers`, `test:packed`,
+   the CI `compiler` job), the paramdoc `check.sh` on the shared pin, and one new check that the item is for:
+   the same template compiled through the compiler path and through the exporter's build gives the same
+   frames and, with the same identifier and timestamp, the same PDF bytes.
+6. Sizes and speed recorded before and after, as this experiment does for every change: wasm raw, gzip and
+   Brotli, init time, first and steady compile (the harness in `.idea/TODO/07-wasm-size.md`).
+
+Not in scope: SVG or canvas rendering, incremental compilation and Typst package imports beyond the current
+registry callback (what the README names as reasons to use typst.ts itself), HTML export, any change to
+core's public API, and G38's plugin, which this item makes possible but does not build.
+
+**Risks.**
+- Behaviour the tests do not pin. typst.ts's wrapper decides things core relies on without saying so: the font
+  resolver's order and fallback, the virtual file system behind `map_shadow`, how `sys.inputs` and the entry
+  path are resolved, the mapping of PDF options, the shape of errors. Mitigation: the corpus the suites use is
+  compiled through both bindings before the switch and the PDFs compared byte for byte (krilla is
+  deterministic for a fixed identifier and timestamp); every difference is explained or fixed before the pin
+  moves.
+- The size may not fall much. Mitigated by the prototype in step 1; the item stays worth doing for the
+  single-pin reasons even then, but at a lower place in the order.
+- The reproducibility machinery was built around an upstream checkout (`.build/upstream`, a commit's
+  timestamp, remapped upstream paths). Moving the pin in-repo changes what is pinned (this repository's commit
+  and `Cargo.lock`); the hash checks and the "not reproducing the pinned artifact" rule must be kept intact
+  through the move, and verified on CI's Linux as well as macOS, where the current build was proven.
+- Ownership. The binding becomes ours to carry through Typst upgrades, as the exporter's frame walk already is;
+  typst.ts's own fixes (its patch today is small, but it exists for a reason) stop arriving for free.
+- A long transition. `@typfolio/wasm` must keep shipping the typst.ts build until the new one passes
+  everything; that is a major version of the wasm package and a core release that switches, not a swap in
+  place.
+
+Exit: all suites green on the new binding; the pinned hashes refreshed with review; the corpus byte-identical
+or every difference explained; the paramdoc `check.sh` green with the exporter on the shared pin; a size and
+speed table in this log. Then G38 can put the exporter into a build.
+
 ## Running
 
 ```sh
