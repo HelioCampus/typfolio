@@ -203,9 +203,16 @@ function linkFill(slot: Slot, href: Href, lines: [number, number, number][], sca
   return { rects: lines.map(([x, y, w]) => [x, y - g.above * scale, w, (g.above + g.below) * scale]), url: href.url, alt: href.alt };
 }
 
+/** A soft hyphen: no glyph of its own (Typst removes default ignorables when shaping), a break opportunity after it, and
+ *  the font's hyphen drawn where a line ends on one (typst-layout 0.15.1 `line.rs`: `full.ends_with(SHY)`,
+ *  `ShapedText::hyphen`). The exporter maps it to the hyphen glyph in the character map when a repertoire admits it. */
+const SHY = '\u00ad';
+/** The middle dot is CJK centre-aligned punctuation to Typst (`shaping.rs`, `is_cjk_center_aligned_punctuation`): on an
+ *  overfull line it shrinks by a quarter of its advance on each side, and it counts as justifiable. */
+const isMiddleDot = (c: string): boolean => c === '\u00b7';
+
 /** The glyph of a character in the slot's repertoire, or the refusal naming it. */
 function glyphOrRefuse(font: Font, c: string, traceName: string): number {
-  if (c === '\u00ad') throw new Error(`slot \`${traceName}\`: soft hyphens (U+00AD) are not supported; strip them from the text`);
   const id = font.glyph(c);
   if (id === undefined) throw new Error(`slot \`${traceName}\`: ${JSON.stringify(c)} (U+${c.codePointAt(0)!.toString(16).toUpperCase().padStart(4, '0')}) is not in the slot's repertoire; declare it with \`charset:\` in the template`);
   return id;
@@ -224,16 +231,17 @@ function textOf(value: unknown): string {
 function fillSlot(slot: Slot, text: string, href: Href, font: Font, traceName: string): Filled {
   const length = [...text].length;
   if (slot.max_length != null && length > slot.max_length) throw new Error(`slot \`${traceName}\`: ${JSON.stringify(text)} has ${length} characters, max-length is ${slot.max_length}`);
+  // A link's text must not end on a soft hyphen: Typst appends the hyphen outside the link's tag range and typst-pdf
+  // 0.15.1 cannot write that PDF (G52), so there is no compiler fallback for such data.
+  if (href && text.endsWith(SHY)) throw new Error(`slot \`${traceName}\`: a link's text must not end on a soft hyphen (U+00AD); Typst cannot export it (the hyphen falls outside the link), strip it`);
   if ((slot.lines ?? 1) > 1) return fillLines(slot, text, href, font, traceName);
   const shape = (s: string, size: number): [Glyph[], number] => {
     const glyphs: Glyph[] = [];
     let width = 0;
-    for (const c of s) {
-      const id = glyphOrRefuse(font, c, traceName);
-      const advance = font.advance(id) * size;
-      glyphs.push({ id, x_advance: advance, x_offset: 0, y_offset: 0 });
-      width += advance;
-    }
+    const push = (id: number): void => { const advance = font.advance(id) * size; glyphs.push({ id, x_advance: advance, x_offset: 0, y_offset: 0 }); width += advance; };
+    // A soft hyphen draws nothing; a text ending on one ends with the font's hyphen, as Typst's line does.
+    for (const c of s) if (c !== SHY) push(glyphOrRefuse(font, c, traceName));
+    if (s.endsWith(SHY)) push(glyphOrRefuse(font, SHY, traceName));
     return [glyphs, width];
   };
   let size = slot.size;
@@ -272,11 +280,15 @@ function fillSlot(slot: Slot, text: string, href: Href, font: Font, traceName: s
   }
   let pen = x;
   const traceGlyphs = glyphs.map(g => { const at = pen; pen += g.x_advance; return { id: g.id, x: at, y: slot.baseline }; });
+  // A link slot: Typst's hyphen is a text run of its own, with its own link rectangle.
+  const runs: [number, number, number][] = [[x, slot.baseline, width]];
+  const last = glyphs[glyphs.length - 1];
+  if (shown.endsWith(SHY) && last) { runs[0]![2] -= last.x_advance; runs.push([x + runs[0]![2], slot.baseline, last.x_advance]); }
   return {
     rect: [slot.x, slot.y, slot.width, slot.height],
     items: [{ kind: 'text', x, y: slot.baseline, font: slot.font, size, fill: slot.fill, text: shown, glyphs }],
     trace: { name: traceName, baseline: slot.baseline, size, glyphs: traceGlyphs },
-    link: linkFill(slot, href, [[x, slot.baseline, width]], size / slot.size, traceName),
+    link: linkFill(slot, href, runs, size / slot.size, traceName),
   };
 }
 
@@ -417,22 +429,96 @@ function linebreakLink(link: string[], f: (end: number) => void): void {
   });
 }
 
-/** A line of a wrapping slot: `layoutEnd` excludes the trailing whitespace that does not count for the width;
- *  `shapingEnd` includes it (Typst draws those glyphs at zero advance). */
-/** `mandatory`: the line ends at a hard break or at the end of the text, so it is never justified. */
-interface BrokenLine { start: number; layoutEnd: number; shapingEnd: number; width: number; mandatory: boolean }
-/** A line as drawn: the first `kept` glyphs count for the width, the rest are trimmed trailing whitespace at zero advance. */
-interface LineRun { ids: number[]; advances: number[]; text: string; width: number; kept: number }
+/** A glyph of a shaped text as Typst's `calculate_adjustability` (typst-layout 0.15.1 `shaping.rs`) leaves it: `advance`
+ *  and `offset` after the adjustment of consecutive punctuation, `shrink` what `commit` may still take from each side, `c`
+ *  the glyph's character to Typst (the soft hyphen for the glyph after soft hyphens that open the text), `at` the index of
+ *  its character in the text that was shaped. */
+interface Shaped { id: number; advance: number; offset: number; shrink: [number, number]; c: string; at: number }
+
+/** Shapes a text as Typst shapes a paragraph's (or a reshaped line's) text: one glyph per character but soft hyphens and
+ *  hard breaks, the character map's glyph at the font's advance; the glyph after soft hyphens that open the text takes
+ *  their cluster (rustybuzz merges a leading default ignorable forward), so to Typst its character is the soft hyphen and
+ *  it has no adjustability. Then `base_adjustability` with the default `par.justification-limits`: a space may shrink by a
+ *  third of its advance (min(a / 3, 0.75 a)) on its right, a middle dot (CJK centre-aligned punctuation to Typst) by a
+ *  quarter on each side; nothing else adjusts. Then consecutive CJK punctuation is pulled together (Chinese Layout
+ *  Requirements 3.1.6.1): where two dots meet and their facing shrinkabilities reach half the first one's advance, the first
+ *  gives up to a quarter on its right and the second the rest on its left (its glyph moving left), in text order, each pair
+ *  seeing the state the previous one left. Same arithmetic as the Rust runtime's `shape_text`. */
+function shapeText(cs: string[], font: Font, size: number, traceName: string): Shaped[] {
+  let leading = 0; while (leading < cs.length && cs[leading] === SHY) leading++;
+  const out: Shaped[] = [];
+  cs.forEach((c, i) => {
+    if (c === SHY || isMandatoryBreak(c)) return;
+    const id = glyphOrRefuse(font, c, traceName);
+    const a = font.advance(id) * size;
+    const eff = i === leading && leading > 0 ? SHY : c;
+    const shrink: [number, number] = isSpaceGlyph(eff) ? [0, Math.min(a / 3, a * 0.75)] : isMiddleDot(eff) ? [a / 4, a / 4] : [0, 0];
+    out.push({ id, advance: a, offset: 0, shrink, c: eff, at: i });
+  });
+  for (let k = 0; k + 1 < out.length; k++) {
+    const g = out[k]!, next = out[k + 1]!;
+    if (!(isMiddleDot(g.c) && isMiddleDot(next.c))) continue;
+    const delta = g.advance / 2;
+    if (g.shrink[1] + next.shrink[0] >= delta) {
+      const leftDelta = Math.min(g.shrink[1], delta);
+      g.advance -= leftDelta; g.shrink[1] -= leftDelta;
+      const amount = delta - leftDelta;
+      next.offset -= amount; next.advance -= amount; next.shrink[0] -= amount;
+    }
+  }
+  return out;
+}
+
+/** The shaping of a slot's whole text, which Typst does once; a line is a slice of it, except that a line starting on a
+ *  soft hyphen inside the text is shaped again by Typst (no glyph starts at the hyphen, so the slice is not safe to break)
+ *  and so gets its own adjustments. */
+class Shaping {
+  private readonly chars: string[];
+  private readonly font: Font;
+  private readonly size: number;
+  private readonly traceName: string;
+  private readonly whole: Shaped[];
+  private readonly glyphAt: (number | undefined)[];
+  constructor(chars: string[], font: Font, size: number, traceName: string) {
+    this.chars = chars; this.font = font; this.size = size; this.traceName = traceName;
+    this.whole = shapeText(chars, font, size, traceName);
+    this.glyphAt = new Array<number | undefined>(chars.length);
+    this.whole.forEach((g, k) => { this.glyphAt[g.at] = k; });
+  }
+  reshaped(from: number): boolean { return from > 0 && from < this.chars.length && this.chars[from] === SHY; }
+  /** The glyphs of the line `from..to`, `at` relative to `from`. */
+  line(from: number, to: number): Shaped[] {
+    if (this.reshaped(from)) return shapeText(this.chars.slice(from, to), this.font, this.size, this.traceName);
+    return this.whole.filter(g => g.at >= from && g.at < to).map(g => ({ ...g, shrink: [g.shrink[0], g.shrink[1]], at: g.at - from }));
+  }
+  /** The natural width of `from..to`, as the breaker measures a line. */
+  widthOf(from: number, to: number): number {
+    if (this.reshaped(from)) { let w = 0; for (const g of this.line(from, to)) w += g.advance; return w; }
+    let w = 0; for (let i = from; i < to; i++) { const k = this.glyphAt[i]; if (k !== undefined) w += this.whole[k]!.advance; } return w;
+  }
+}
+
+/** A line of a wrapping slot: `layoutEnd` excludes the trailing whitespace and soft hyphens that do not count for the
+ *  width; `shapingEnd` includes them (Typst draws the whitespace glyphs at zero advance).
+ *  `mandatory`: the line ends at a hard break or at the end of the text, so it is never justified.
+ *  `hyphen`: the line's full text ends on a soft hyphen, so the font's hyphen is drawn after it (its width counted). */
+interface BrokenLine { start: number; layoutEnd: number; shapingEnd: number; width: number; mandatory: boolean; hyphen: boolean }
+/** A line as drawn: `kept` glyphs count for the width (the hyphen among them), the rest are trimmed trailing whitespace
+ *  at zero advance; `hyphenWidth` is the drawn hyphen's advance, 0 without one. */
+interface LineRun { ids: number[]; advances: number[]; offsets: number[]; text: string; width: number; kept: number; hyphenWidth: number }
 const isSpaceGlyph = (c: string): boolean => c === ' ' || c === '\u00a0' || c === '\u3000';
 
 /** Typst's simple breaker: greedy first fit, a mandatory break or a line that does not fit even on its own
  *  committed as it is (an overlong word overflows, as in Typst). */
-function breakLines(chars: string[], widthOf: (from: number, to: number) => number, fits: (width: number) => boolean): BrokenLine[] {
+function breakLines(chars: string[], widthOf: (from: number, to: number) => number, fits: (width: number) => boolean, hyphenWidth: number): BrokenLine[] {
   const line = (start: number, end: number, mandatory: boolean): BrokenLine => {
     let shapingEnd = end, layoutEnd = end;
     if (mandatory) { while (shapingEnd > start && isMandatoryBreak(chars[shapingEnd - 1]!)) shapingEnd--; layoutEnd = shapingEnd; }
     else while (layoutEnd > start && (isWhitespace(chars[layoutEnd - 1]!) || isDefaultIgnorable(chars[layoutEnd - 1]!))) layoutEnd--;
-    return { start, layoutEnd, shapingEnd, width: widthOf(start, layoutEnd), mandatory };
+    // Typst appends the font's hyphen when the line's full text ends on a soft hyphen (`line.rs`, `Dash::Soft`), at the
+    // end of the text too; its width counts for the fit.
+    const hyphen = end > start && chars[end - 1] === SHY;
+    return { start, layoutEnd, shapingEnd, width: widthOf(start, layoutEnd) + (hyphen ? hyphenWidth : 0), mandatory, hyphen };
   };
   const lines: BrokenLine[] = [];
   let start = 0;
@@ -452,59 +538,66 @@ function fillLines(slot: Slot, text: string, href: Href, font: Font, traceName: 
   if (!(pitch > 0)) throw new Error(`slot \`${traceName}\`: a wrapping slot without a line pitch; export the document again`);
   if (slot.overflow === 'shrink') throw new Error(`slot \`${traceName}\`: \`shrink\` is not an overflow policy for a wrapping slot`);
   const chars = [...text];
-  const glyphOf = (c: string): number => glyphOrRefuse(font, c, traceName);
-  const ids: (number | undefined)[] = new Array<number | undefined>(chars.length);
-  const idAt = (i: number): number => (ids[i] ??= glyphOf(chars[i]!));
-  const widthOf = (from: number, to: number): number => { let w = 0; for (let i = from; i < to; i++) w += font.advance(idAt(i)) * size; return w; };
+  const shaping = new Shaping(chars, font, size, traceName);
+  // A line ending on a soft hyphen gets the font's hyphen, whose width counts for the break.
+  const hyphenId = chars.includes(SHY) ? glyphOrRefuse(font, SHY, traceName) : undefined;
+  const hyphenWidth = hyphenId === undefined ? 0 : font.advance(hyphenId) * size;
+  const widthOf = (from: number, to: number): number => shaping.widthOf(from, to);
   const fits = (width: number): boolean => slot.width + 1e-4 >= width; // Typst's `Abs::fits`
-  // Typst's `commit` (typst-layout 0.15.1 `line.rs`) with the default `par.justification-limits`: a kept space may
-  // shrink by a third of its advance (min(a / 3, 0.75 a)) and stretch by half of it; nothing else adjusts.
-  // `remaining < 0`: the line does not fit and its spaces shrink (ragged lines too), by `ratio` of their
-  // shrinkability, down to -1. Otherwise a justified line stretches its spaces by `ratio` of their stretchability,
-  // up to 1, and shares what is still left equally among them (`extra`); a line without a space keeps its width and
-  // is aligned as the slot says. Same arithmetic as the Rust runtime's `run`.
+  // Typst's `commit` (typst-layout 0.15.1 `line.rs`) over the shaped glyphs (`shapeText`): `remaining < 0`: the line does
+  // not fit and its glyphs shrink (ragged lines too), each by `ratio` of what it may still give on each side, down to -1,
+  // the glyph moving left by its left share. Otherwise a justified line stretches its spaces by `ratio` of their
+  // stretchability (half a space each), up to 1, and shares what is still left equally among the justifiable glyphs
+  // (`extra`: spaces and middle dots); a line without one keeps its width and is aligned as the slot says. Trimmed
+  // trailing whitespace has no advance and no adjustability; the hyphen neither. Same arithmetic as the Rust runtime's `run`.
   const sum = (xs: number[]): number => xs.reduce((w, a) => w + a, 0);
-  const run = (cs: string[], kept: number, justify: boolean): LineRun => {
-    const ids = cs.map(glyphOf);
-    const advances = ids.map((id, i) => (i < kept ? font.advance(id) * size : 0));
+  const run = (glyphs: Shaped[], kept: number, justify: boolean, hyphenated: boolean, text: string): LineRun => {
+    const ids: number[] = [], advances: number[] = [], offsets: number[] = [], shrink: [number, number][] = [], charsOf: string[] = [], isKept: boolean[] = [];
+    for (const g of glyphs) { const k = g.at < kept; ids.push(g.id); advances.push(k ? g.advance : 0); offsets.push(k ? g.offset : 0); shrink.push(k ? g.shrink : [0, 0]); charsOf.push(g.c); isKept.push(k); }
+    const drawnHyphen = hyphenated && hyphenId !== undefined;
+    if (drawnHyphen) { ids.push(hyphenId); advances.push(hyphenWidth); offsets.push(0); shrink.push([0, 0]); charsOf.push('-'); isKept.push(true); }
+    const n = ids.length;
+    const justifiable = charsOf.map((c, i) => isKept[i]! && (isSpaceGlyph(c) || isMiddleDot(c)));
     let width = sum(advances);
-    const spaces = cs.map((c, i) => i < kept && isSpaceGlyph(c));
     const remaining = slot.width - width;
-    const shrinkable = advances.map((a, i) => (spaces[i] ? Math.min(a / 3, a * 0.75) : 0));
-    const shrinkability = sum(shrinkable);
+    const shrinkability = sum(shrink.map(([l, r]) => l + r));
     if (remaining < 0 && shrinkability > 0) {
       const ratio = Math.max(remaining / shrinkability, -1);
-      for (let i = 0; i < advances.length; i++) advances[i]! += ratio * shrinkable[i]!;
+      for (let i = 0; i < n; i++) { const [l, r] = shrink[i]!; offsets[i]! += l * ratio; advances[i]! += (l + r) * ratio; }
       width = sum(advances);
     } else if (justify) {
-      const stretchable = advances.map((a, i) => (spaces[i] ? a * 0.5 : 0));
-      const stretchability = sum(stretchable);
+      const stretch = advances.map((a, i) => (isKept[i] && isSpaceGlyph(charsOf[i]!) ? a * 0.5 : 0));
+      const stretchability = sum(stretch);
       let ratio = 0, left = remaining;
       if (stretchability > 0) { ratio = Math.min(remaining / stretchability, 1); left = Math.max(remaining - stretchability, 0); }
-      const justifiables = spaces.filter(s => s).length;
+      // Typst's `Line::justifiables`: a middle dot that ends the line is not counted (it still takes the share).
+      let justifiables = justifiable.filter(j => j).length;
+      const lastKept = isKept.lastIndexOf(true);
+      if (lastKept >= 0 && isMiddleDot(charsOf[lastKept]!)) justifiables--;
       const extra = justifiables > 0 && left > 0 ? left / justifiables : 0;
-      for (let i = 0; i < advances.length; i++) advances[i]! += ratio * stretchable[i]! + (spaces[i] ? extra : 0);
+      for (let i = 0; i < n; i++) advances[i]! += ratio * stretch[i]! + (justifiable[i] ? extra : 0);
       width = sum(advances);
     }
-    return { ids, advances, text: cs.join(''), width, kept };
+    return { ids, advances, offsets, text, width, kept: isKept.filter(k => k).length, hyphenWidth: drawnHyphen ? hyphenWidth : 0 };
   };
   // Every line but the last and lines before a hard break are justified (`line.rs`: `config.justify && breakpoint !=
   // Mandatory`; the end of the text is a mandatory break too).
-  const render = (l: BrokenLine): LineRun => run(chars.slice(l.start, l.shapingEnd), l.layoutEnd - l.start, slot.justify === true && !l.mandatory);
+  const render = (l: BrokenLine): LineRun => run(shaping.line(l.start, l.shapingEnd), l.layoutEnd - l.start, slot.justify === true && !l.mandatory, l.hyphen, chars.slice(l.start, l.shapingEnd).join(''));
   const ellipsize = (l: BrokenLine): LineRun => {
     const ellipsis = [...(font.glyph('…') !== undefined ? '…' : '...')];
     const kept = chars.slice(l.start, l.layoutEnd);
-    const trimmed = (): string[] => { while (kept.length && isWhitespace(kept[kept.length - 1]!)) kept.pop(); return kept; };
-    // The ellipsized line is the runtime's own and the last one shown: never stretched.
-    let shown = run([...trimmed(), ...ellipsis], kept.length + ellipsis.length, false);
-    while (!fits(shown.width) && kept.length) { kept.pop(); shown = run([...trimmed(), ...ellipsis], kept.length + ellipsis.length, false); }
+    const trimmed = (): string[] => { while (kept.length && (isWhitespace(kept[kept.length - 1]!) || kept[kept.length - 1] === SHY)) kept.pop(); return kept; };
+    // The ellipsized line is the runtime's own and the last one shown: never stretched, never hyphenated.
+    const shape = (): LineRun => { const cs = [...trimmed(), ...ellipsis]; return run(shapeText(cs, font, size, traceName), cs.length, false, false, cs.join('')); };
+    let shown = shape();
+    while (!fits(shown.width) && kept.length) { kept.pop(); shown = shape(); }
     return shown;
   };
 
-  const broken = breakLines(chars, widthOf, fits);
+  const broken = breakLines(chars, widthOf, fits, hyphenWidth);
   let runs = broken.map(render);
   // Lines stack as Typst stacks them: a line is as tall as the line height, except that a line of nothing but
-  // trimmed whitespace has no height; `leading` separates lines. The first baseline is the slot's.
+  // trimmed whitespace (no kept glyph, no hyphen) has no height; `leading` separates lines. The first baseline is the slot's.
   const lineHeight = slot.baseline - slot.y, leading = pitch - lineHeight;
   const baselines = (rs: LineRun[]): number[] => { let y = slot.y; return rs.map((r, k) => { const h = r.ids.length > 0 && r.kept === 0 ? 0 : lineHeight; if (k > 0) y += leading; y += h; return y; }); };
   const bottom = slot.y + slot.height + 1e-6;
@@ -514,7 +607,9 @@ function fillLines(slot: Slot, text: string, href: Href, font: Font, traceName: 
     case 'error':
       if (overlong >= 0) throw new Error(`slot \`${traceName}\`: ${JSON.stringify(runs[overlong]!.text)} is ${runs[overlong]!.width.toFixed(2)} pt wide but the slot is ${slot.width.toFixed(2)} pt; declare an overflow policy or a smaller max-length`);
       throw new Error(`slot \`${traceName}\`: ${JSON.stringify(text)} needs ${runs.length} lines but the slot holds ${lines}; declare an overflow policy or a smaller max-length`);
-    case 'clip': runs = runs.slice(0, visible); break; // overlong lines stay, clipped by the box as in Typst
+    // Every line is drawn and the box clips, as in Typst: a line whose baseline is below the box may still show its
+    // top (after a whitespace-only line, which has no height, the lines sit one line height up).
+    case 'clip': break;
     case 'ellipsis': {
       const cut = Math.min(overlong >= 0 ? overlong : visible - 1, visible - 1);
       runs = runs.slice(0, cut + 1);
@@ -538,8 +633,14 @@ function fillLines(slot: Slot, text: string, href: Href, font: Font, traceName: 
       default: throw new Error(`slot \`${traceName}\`: unknown alignment ${JSON.stringify(slot.align)}`);
     }
     let pen = x;
-    const glyphs: Glyph[] = line.ids.map((id, i) => { traceGlyphs.push({ id, x: pen, y }); pen += line.advances[i]!; return { id, x_advance: line.advances[i]!, x_offset: 0, y_offset: 0 }; });
-    if (glyphs.length) { items.push({ kind: 'text', x, y, font: slot.font, size, fill: slot.fill, text: line.text, glyphs }); drawn.push([x, y, line.width]); }
+    const glyphs: Glyph[] = line.ids.map((id, i) => { const advance = line.advances[i]!, offset = line.offsets[i]!; traceGlyphs.push({ id, x: pen + offset, y }); pen += advance; return { id, x_advance: advance, x_offset: offset, y_offset: 0 }; });
+    if (glyphs.length) {
+      items.push({ kind: 'text', x, y, font: slot.font, size, fill: slot.fill, text: line.text, glyphs });
+      // A link slot: Typst's hyphen is a text run of its own, with its own link rectangle.
+      const textWidth = line.width - line.hyphenWidth;
+      drawn.push([x, y, textWidth]);
+      if (line.hyphenWidth > 0) drawn.push([x + textWidth, y, line.hyphenWidth]);
+    }
   });
   // The trace reports the first line's baseline as Typst's frame has it: at the box top when that line is whitespace.
   return { rect: [slot.x, slot.y, slot.width, slot.height], items, trace: { name: traceName, baseline: ys[0] ?? slot.baseline, size, glyphs: traceGlyphs }, link: linkFill(slot, href, drawn, 1, traceName) };
@@ -957,12 +1058,13 @@ function neededLines(slot: Slot, text: string, font: Font, traceName: string): n
   const pitch = slot.pitch ?? 0, size = slot.size;
   if (!(pitch > 0)) throw new Error(`slot \`${traceName}\`: a wrapping slot without a line pitch; export the document again`);
   const chars = [...text];
-  const ids = chars.map(c => isMandatoryBreak(c) ? 0 : glyphOrRefuse(font, c, traceName));
-  const widthOf = (from: number, to: number): number => { let w = 0; for (let i = from; i < to; i++) w += font.advance(ids[i]!) * size; return w; };
-  const broken = breakLines(chars, widthOf, width => slot.width + 1e-4 >= width);
+  const shaping = new Shaping(chars, font, size, traceName);
+  const hyphenWidth = chars.includes(SHY) ? font.advance(glyphOrRefuse(font, SHY, traceName)) * size : 0;
+  const widthOf = (from: number, to: number): number => shaping.widthOf(from, to);
+  const broken = breakLines(chars, widthOf, width => slot.width + 1e-4 >= width, hyphenWidth);
   const lineHeight = slot.baseline - slot.y, leading = pitch - lineHeight;
   let y = 0;
-  broken.forEach((l, k) => { const h = l.shapingEnd > l.start && l.layoutEnd === l.start ? 0 : lineHeight; if (k > 0) y += leading; y += h; });
+  broken.forEach((l, k) => { const h = l.shapingEnd > l.start && l.layoutEnd === l.start && !l.hyphen ? 0 : lineHeight; if (k > 0) y += leading; y += h; });
   return Math.max(0, Math.round((y - lineHeight) / pitch)) + 1;
 }
 

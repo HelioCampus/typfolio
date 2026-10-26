@@ -1,0 +1,34 @@
+{
+  "portal": {
+    "text": "Open the student portal­",
+    "href": "https://portal.example.edu/login",
+    "alt": "Student portal sign-in"
+  },
+  "notes": {
+    "text": "The full policy, with the appeals procedure and the deadlines for each term, is published on the faculty pages and updated every September.",
+    "href": "https://example.org/policy/appeals"
+  },
+  "courses": [
+    {
+      "title": "Algebra",
+      "resource": {
+        "text": "Problem sets",
+        "href": "https://example.org/algebra/sets"
+      }
+    },
+    {
+      "title": "Analysis",
+      "resource": {
+        "text": "Lecture notes",
+        "href": "https://example.org/analysis/notes"
+      }
+    },
+    {
+      "title": "Geometry",
+      "resource": {
+        "text": "Reading list",
+        "href": "https://example.org/geometry/reading"
+      }
+    }
+  ]
+}

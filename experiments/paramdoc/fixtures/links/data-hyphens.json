@@ -1,0 +1,27 @@
+{
+  "portal": {
+    "text": "Open the stu­dent por­tal",
+    "href": "https://portal.example.edu/login",
+    "alt": "Student portal sign-in"
+  },
+  "notes": {
+    "text": "The full pol­icy, with the ap­peals pro­ce­dure and the dead­lines for each term, is pub­lished on the fac­ul­ty pages and up­dated every Sep­tem­ber.",
+    "href": "https://example.org/policy/appeals"
+  },
+  "courses": [
+    {
+      "title": "Al­ge­bra­",
+      "resource": {
+        "text": "Prob­lem sets",
+        "href": "https://example.org/algebra/sets"
+      }
+    },
+    {
+      "title": "Analysis",
+      "resource": {
+        "text": "Lecture notes",
+        "href": "https://example.org/analysis/notes"
+      }
+    }
+  ]
+}

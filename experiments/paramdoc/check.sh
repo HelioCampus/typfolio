@@ -12,14 +12,18 @@
 # (except `*-long*`, which paginate beyond the sample page, and the `wrap` overflow and error cases, which the
 # runtimes handle by policy); both runtimes are then checked against every reference, by glyph positions, bar
 # shapes, image placement, link rectangles and pixels. `wrapfuzz` and `charset` get Typst references for random
-# samples as well, drawn from each slot's whole repertoire; `leak`, `linkbad`, `charsetbad`, `stylebad`, `rotatedlink`,
-# `smooth` and `leading` must be refused by the exporter, and the `*-error.json` data cases by both runtimes.
+# samples as well, drawn from each slot's whole repertoire; `leak`, `linkbad`, `charsetbad`, `stylebad`, `rotatedlink`
+# and `smooth` must be refused by the exporter, and the `*-error.json` data cases by both runtimes.
+# Pixels: Typst's PDF re-encodes the pen position after each soft-hyphen cluster (an `ActualText` span) as a
+# 32-bit float, which on a justified line can land one glyph a quarter pixel off in poppler; where soft hyphens
+# meet justified lines (`justify/hyphens`, the random samples) a difference of at most 64 in a channel is not
+# counted. Glyph positions are compared to 1e-3 pt regardless.
 set -u
 cd "$(dirname "$0")"
 FUZZ="${FUZZ:-100}"
 SAMPLES=$(( FUZZ < 40 ? FUZZ : 40 ))
 B=../../.build/paramdoc
-FIXTURES="certificate policies transcript report wrap justify figures links"
+FIXTURES="certificate policies transcript report wrap justify figures links leading"
 PASS=0; FAIL=0; SKIP=0
 ok()   { PASS=$((PASS + 1)); printf '  ok    %s\n' "$1"; }
 fail() { FAIL=$((FAIL + 1)); printf '  FAIL  %s\n' "$1"; }
@@ -30,7 +34,7 @@ fonts_match() { for font in "documents/$1"/fonts/*; do cmp -s "$font" "$B/$1/fon
 # The extra data cases of a fixture that have a Typst reference: `data-<case>.json` → `<case>`.
 cases() { for d in "fixtures/$1"/data-*.json; do [ -e "$d" ] || continue; case $d in *-long*|*error*|*overflow*) ;; *) basename "$d" .json | sed 's/^data-//';; esac; done; }
 refs()  { printf -- '--reference fixtures/%s/data.json ' "$1"; for c in $(cases "$1"); do printf -- '--reference fixtures/%s/data-%s.json ' "$1" "$c"; done; }
-px()    { pdftoppm -r 150 -singlefile "$1" "$B/.px-a" && pdftoppm -r 150 -singlefile "$2" "$B/.px-b" && node notes/bench/ppmdiff.mjs "$B/.px-a.ppm" "$B/.px-b.ppm" "$3" > "$B/.last.log" 2>&1; }
+px()    { pdftoppm -r 150 -singlefile "$1" "$B/.px-a" && pdftoppm -r 150 -singlefile "$2" "$B/.px-b" && node notes/bench/ppmdiff.mjs "$B/.px-a.ppm" "$B/.px-b.ppm" "$3" "${4:-0}" > "$B/.last.log" 2>&1; }
 NODE=(node --disable-warning=ExperimentalWarning --experimental-strip-types)
 mkdir -p "$B"
 
@@ -47,7 +51,6 @@ if cargo run -q -p paramdoc-export -- fixtures/charsetbad --fuzz 1 > "$B/.last.l
 if cargo run -q -p paramdoc-export -- fixtures/stylebad --fuzz 1 > "$B/.last.log" 2>&1; then fail "export stylebad: a show rule recolouring part of a slot was accepted"; else ok "export stylebad: refused ($(grep -o 'its text has two styles' "$B/.last.log" | head -1))"; fi
 if cargo run -q -p paramdoc-export -- fixtures/rotatedlink --fuzz 1 > "$B/.last.log" 2>&1; then fail "export rotatedlink: a rotated link was accepted"; else ok "export rotatedlink: refused ($(grep -o 'a rotated or skewed link is not supported' "$B/.last.log" | head -1))"; fi
 if cargo run -q -p paramdoc-export -- fixtures/smooth --fuzz 1 > "$B/.last.log" 2>&1; then fail "export smooth: image(scaling: smooth) was accepted"; else ok "export smooth: refused ($(grep -o 'scaling: "smooth") is not supported' "$B/.last.log" | head -1))"; fi
-if cargo run -q -p paramdoc-export -- fixtures/leading --fuzz 1 > "$B/.last.log" 2>&1; then fail "export leading: a clipping slot whose dropped line would peek into the box was accepted"; else ok "export leading: refused ($(grep -o 'its leading is too small' "$B/.last.log" | head -1))"; fi
 run "export wrapfuzz: 0 leaks, Typst references for $SAMPLES random samples of the default repertoire" cargo run -q -p paramdoc-export -- fixtures/wrapfuzz --fuzz "$FUZZ" --fuzz-references "$SAMPLES" --reference fixtures/wrapfuzz/data.json
 run "export charset: Turkish, Greek and Cyrillic proven, Typst references for $SAMPLES random samples" cargo run -q -p paramdoc-export -- fixtures/charset --fuzz "$FUZZ" --fuzz-references "$SAMPLES" --reference fixtures/charset/data.json
 for dir in documents/*/; do
@@ -79,6 +82,7 @@ for rt in rust ts; do
   if [ "$rt" = rust ]; then cmd=(cargo run -q -p paramdoc-runtime --); else cmd=("${NODE[@]}" ts/cli.ts); fi
   if "${cmd[@]}" "$B/figures" --data fixtures/figures/data-exif-error.json --out "$B/figures/exif-$rt.pdf" > "$B/.last.log" 2>&1; then fail "$rt figures/exif-error: a JPEG with an EXIF orientation was accepted"; else ok "$rt figures/exif-error: refused ($(grep -o 'EXIF orientation [0-9]' "$B/.last.log" | head -1))"; fi
   if "${cmd[@]}" "$B/certificate" --data fixtures/certificate/data-float-error.json --out "$B/certificate/float-$rt.pdf" > "$B/.last.log" 2>&1; then fail "$rt certificate/float-error: a float slot value was accepted"; else ok "$rt certificate/float-error: refused ($(grep -o '[0-9.]* is not an integer' "$B/.last.log" | head -1))"; fi
+  if "${cmd[@]}" "$B/links" --data fixtures/links/data-shy-error.json --out "$B/links/shy-$rt.pdf" > "$B/.last.log" 2>&1; then fail "$rt links/shy-error: a link text ending on a soft hyphen was accepted"; else ok "$rt links/shy-error: refused ($(grep -o 'must not end on a soft hyphen' "$B/.last.log" | head -1))"; fi
 done
 for rf in wrapfuzz charset; do
   run "rust $rf == Typst" cargo run -q -p paramdoc-runtime -- "$B/$rf" --data "fixtures/$rf/data.json" --out "$B/$rf/runtime.pdf" --expect "$B/$rf/reference.json"
@@ -100,13 +104,13 @@ if have pdftoppm; then
       if px "$B/$f/$v.pdf" "$B/$f/reference.pdf" 1; then ok "$f $v vs Typst"; else fail "$f $v vs Typst"; tail -1 "$B/.last.log" | sed 's/^/        /'; fi
     done
     px_fail=0; n=0
-    for c in $(cases "$f"); do for v in "" -ts; do n=$((n + 1)); px "$B/$f/$c$v.pdf" "$B/$f/reference-data-$c.pdf" 0 || { px_fail=$((px_fail + 1)); echo "        $f/$c$v: $(tail -1 "$B/.last.log")"; }; done; done
+    for c in $(cases "$f"); do ignore=0; [ "$f/$c" = justify/hyphens ] && ignore=64; for v in "" -ts; do n=$((n + 1)); px "$B/$f/$c$v.pdf" "$B/$f/reference-data-$c.pdf" 0 "$ignore" || { px_fail=$((px_fail + 1)); echo "        $f/$c$v: $(tail -1 "$B/.last.log")"; }; done; done
     if [ "$n" -gt 0 ]; then if [ "$px_fail" -eq 0 ]; then ok "$f: $((n / 2)) extra case(s) pixel-identical to Typst, both runtimes"; else fail "$f: $px_fail renders differ from Typst"; fi; fi
   done
   for rf in wrapfuzz charset; do
     px_fail=0
     for v in runtime runtime-ts; do px "$B/$rf/$v.pdf" "$B/$rf/reference.pdf" 0 || { px_fail=$((px_fail + 1)); echo "        $rf/$v: $(tail -1 "$B/.last.log")"; }; done
-    for i in $(seq 0 $((SAMPLES - 1))); do for v in "" -ts; do px "$B/$rf/fuzz-$i$v.pdf" "$B/$rf/reference-fuzz-$i.pdf" 0 || { px_fail=$((px_fail + 1)); echo "        $rf/fuzz-$i$v: $(tail -1 "$B/.last.log")"; }; done; done
+    for i in $(seq 0 $((SAMPLES - 1))); do for v in "" -ts; do px "$B/$rf/fuzz-$i$v.pdf" "$B/$rf/reference-fuzz-$i.pdf" 0 64 || { px_fail=$((px_fail + 1)); echo "        $rf/fuzz-$i$v: $(tail -1 "$B/.last.log")"; }; done; done
     if [ "$px_fail" -eq 0 ]; then ok "$rf: the sample and $SAMPLES random samples pixel-identical to Typst, both runtimes"; else fail "$rf: $px_fail renders differ from Typst"; fi
   done
 else skip "pdftoppm not on PATH (poppler)"; fi
@@ -120,6 +124,8 @@ if have pdftotext; then
     if diff <(pdftotext -layout "$B/$p.pdf" -) <(pdftotext -layout "$B/$p-ts.pdf" -) > "$B/.last.log"; then ok "$p"; else fail "$p"; cat "$B/.last.log"; fi
   done
   if [ "$(pdftotext -layout "$B/wrap/overflow.pdf" - | grep -c '…')" = 2 ]; then ok "wrap/overflow: two ellipsis lines, as the policies say"; else fail "wrap/overflow: expected two ellipsis lines"; fi
+  n=$(pdftotext -layout "$B/wrap/hyphens.pdf" - | grep -c -- '-$'); if [ "$n" -ge 3 ]; then ok "wrap/hyphens: $n lines end on the hyphen drawn for a soft hyphen"; else fail "wrap/hyphens: expected at least 3 lines ending on a drawn hyphen, found $n"; fi
+  n=$(pdftotext -layout "$B/leading/clipped.pdf" - | grep -c 'fifth'); if [ "$n" = 1 ]; then ok "leading/clipped: the lines the box hides are in the PDF, as in Typst's"; else fail "leading/clipped: expected the hidden lines in the PDF"; fi
   if [ "$(pdftotext -layout "$B/transcript/long.pdf" - | grep -c 'honours')" = 0 ] && [ "$(pdftotext -layout "$B/transcript/runtime.pdf" - | grep -c 'honours')" = 1 ]; then ok "transcript: the honours block appears only when the data says so"; else fail "transcript: the honours block is not picked by the data"; fi
   for v in runtime runtime-ts; do
     n=$(grep -a -c '/Subtype /Link' "$B/links/$v.pdf"); if [ "$n" = 10 ]; then ok "links/$v: 10 link annotations (2 static, 2 link slots, 3 rows with one of each)"; else fail "links/$v: expected 10 link annotations, found $n"; fi
@@ -140,7 +146,7 @@ echo "7. PDF/UA-1 conformance (veraPDF)"
 if have verapdf; then
   list=""
   for f in $FIXTURES; do list="$list $f/runtime $f/runtime-ts"; done
-  for p in $list policies/long transcript/long transcript/long-ts transcript/nohonours wrap/overflow wrap/overflow-ts wrapfuzz/fuzz-0 wrapfuzz/fuzz-0-ts charset/runtime charset/runtime-ts charset/fuzz-0 charset/fuzz-0-ts figures/tall figures/tall-ts links/long links/long-ts; do
+  for p in $list policies/long transcript/long transcript/long-ts transcript/nohonours wrap/overflow wrap/overflow-ts wrap/hyphens wrap/hyphens-ts wrap/dots links/hyphens links/hyphens-ts leading/clipped wrapfuzz/fuzz-0 wrapfuzz/fuzz-0-ts charset/runtime charset/runtime-ts charset/fuzz-0 charset/fuzz-0-ts figures/tall figures/tall-ts links/long links/long-ts; do
     if verapdf --flavour ua1 --format text "$B/$p.pdf" > "$B/.last.log" 2>&1 && head -1 "$B/.last.log" | grep -q '^PASS'; then ok "$p"; else fail "$p"; grep -v '^PASS' "$B/.last.log" | head -20 | sed 's/^/        /'; fi
   done
 else skip "verapdf not on PATH (brew install verapdf)"; fi

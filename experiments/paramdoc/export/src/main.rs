@@ -807,11 +807,18 @@ impl<'a> Exporter<'a> {
                             // no offset; Typst must have done the same here, or a feature, language or style rule is at
                             // work that they cannot reproduce. Checked on every compile: the sample, the references,
                             // the repertoire proof and the fuzz.
+                            // A text item of one soft hyphen is Typst's own hyphen for a line that ends on one
+                            // (`ShapedText::hyphen`): the font's `-` glyph, which the runtimes draw there too.
+                            let hyphen_item = text.text.as_str() == "\u{ad}";
                             for g in &text.glyphs {
                                 let covered = text.text.get(g.range.start as usize..g.range.end as usize).unwrap_or("");
-                                let mut it = covered.chars();
+                                // A glyph next to a soft hyphen covers it as well: Typst removes the hyphen's own
+                                // (default-ignorable) glyph when shaping, so the glyph before it reaches to the next
+                                // cluster, and a soft hyphen that opens the shaped text merges into the glyph after it.
+                                let shown = if hyphen_item { covered } else { covered.trim_matches('\u{ad}') };
+                                let mut it = shown.chars();
                                 let (Some(c), None) = (it.next(), it.next()) else { bail!("slot `{name}`: Typst drew one glyph for {covered:?}; the runtimes draw one glyph per character (a ligature or a decomposition in the font)") };
-                                let expected = loaded.cmap.get(&c).copied();
+                                let expected = loaded.cmap.get(&if c == '\u{ad}' { '-' } else { c }).copied();
                                 if expected != Some(g.id) {
                                     bail!("slot `{name}`: Typst drew glyph {} for {c:?} (U+{:04X}) where the font's character map gives {}; a font feature, language or style rule the runtimes cannot reproduce",
                                         g.id, c as u32, expected.map(|e| e.to_string()).unwrap_or_else(|| "nothing".into()));
@@ -821,14 +828,23 @@ impl<'a> Exporter<'a> {
                                 // A space may be narrower: trailing whitespace stays in the run at zero advance (Typst trims
                                 // it for layout) and an overfull line shrinks its spaces by up to a third; the runtimes do
                                 // both. Wider than the font's advance is a stretch, which only a justified slot may show
-                                // (M11; `spacing` is pinned in the dialect).
-                                let narrowed = c.is_whitespace() && adv >= -1e-9 && (adv <= advance + 1e-6 || slot.meta.justify);
-                                if ((adv - advance).abs() > 1e-6 && !narrowed) || dx.abs() > 1e-9 || dy.abs() > 1e-9 {
+                                // (M11; `spacing` is pinned in the dialect). A middle dot is CJK centre-aligned punctuation
+                                // to Typst: it may give up to a quarter of its advance on each side (on an overfull line, or
+                                // to a neighbouring dot), the glyph moving left by what its left side gave, and on a
+                                // justified line it takes a share like a space; the runtimes port all of it.
+                                let dot = c == '\u{b7}';
+                                let exact = (adv - advance).abs() <= 1e-6 && dx.abs() <= 1e-9;
+                                let narrowed = c.is_whitespace() && adv >= -1e-9 && adv <= advance + 1e-6 && dx.abs() <= 1e-9;
+                                let stretched = c.is_whitespace() && slot.meta.justify && adv >= advance - 1e-6 && dx.abs() <= 1e-9;
+                                let (left, right) = (-dx, advance - adv + dx); // what each side of a dot gave
+                                let dot_ok = dot && left >= -1e-9 && left <= advance / 4.0 + 1e-6 && (slot.meta.justify || (right >= -1e-9 && right <= advance / 4.0 + 1e-6));
+                                if !(exact || narrowed || stretched || dot_ok) || dy.abs() > 1e-9 {
                                     bail!("slot `{name}`: Typst advanced {c:?} by {adv:.4} pt (offset {dx:.4}, {dy:.4}) where the font's advance is {advance:.4}; tracking, spacing, kerning or a feature the runtimes cannot reproduce");
                                 }
                             }
                             if !slot.baselines.iter().any(|b| (b - pt(abs.y)).abs() < 1e-6) { slot.baselines.push(pt(abs.y)); }
-                            slot.sample.push_str(&text.text);
+                            // The run before the hyphen item already carries the soft hyphen in its text.
+                            if !hyphen_item { slot.sample.push_str(&text.text); }
                             let mut pen = pt(abs.x);
                             for g in &text.glyphs {
                                 slot.glyphs.push((g.id, pen + pt(g.x_offset.at(text.size)), pt(abs.y)));
@@ -999,23 +1015,6 @@ impl<'a> Exporter<'a> {
                     bail!("slot `{}`: `lines: auto` measured {} lines for the sample but Typst laid out {}; a rounding tie in the measurement (change the sample)", s.meta.name, s.meta.lines, s.baselines.len());
                 }
             }
-            // A dropped line of an overfull wrapping slot sits `pitch − descent` below the box; if the repertoire's
-            // tallest glyph rises higher than that, Typst's clipped box would show its top and the runtime, which
-            // drops whole lines, would not (G9). Only the policies that draw an overfull text are concerned.
-            if multi && matches!(s.meta.overflow.as_str(), "clip" | "ellipsis") {
-                let ir_font = &self.ir_fonts[style.font];
-                if let Some(loaded) = self.fonts.iter().find(|f| f.sha256 == ir_font.source_sha256 && f.font.index() == ir_font.index)
-                    && let Ok(face) = ttf_parser::Face::parse(loaded.font.data(), ir_font.index)
-                {
-                    let repertoire = s.meta.charset.as_deref().unwrap_or(DEFAULT_REPERTOIRE);
-                    let top = repertoire.chars().chain(std::iter::once('…')).filter_map(|c| loaded.cmap.get(&c)).filter_map(|&g| face.glyph_bounding_box(GlyphId(g)).map(|b| b.y_max as f64))
-                        .fold(0.0, f64::max) / loaded.units_per_em * style.size;
-                    let room = s.meta.pitch - s.meta.descent;
-                    if top > room + 1e-6 {
-                        bail!("slot `{}`: its leading is too small for the `{}` policy: the tallest glyph of its repertoire rises {top:.2} pt above the baseline, and a line Typst clips would start {room:.2} pt below the box (set `par.leading` higher or give the slot a larger descent)", s.meta.name, s.meta.overflow);
-                    }
-                }
-            }
             // A link slot: Typst put one link rectangle on every text run of the sample, and the runtime will put
             // one on every line it draws, so each rectangle must be its run's box extended by the same amounts
             // above and below the baseline (the text's edges plus half the leading, as Typst's `modify_text` does).
@@ -1044,18 +1043,18 @@ impl<'a> Exporter<'a> {
                 if !s.links.is_empty() { bail!("slot `{}` contains a link in its content; give the slot a `(text: …, href: …)` value instead", s.meta.name); }
                 None
             };
-            // The reference is what is visible: a wrapping slot's lines below the box are clipped by Typst and
-            // dropped by the runtimes.
-            let bottom = s.rect.bottom() + 1e-6;
+            // The reference is everything Typst laid out, the lines a clipping slot's box hides included: the
+            // runtimes draw every line and clip the box as Typst does (typst-pdf places the link rectangles of
+            // hidden lines too).
             reference.push(ReferenceSlot {
                 name: s.meta.name.clone(), size: style.size,
                 baseline: if multi { s.baselines.first() } else { s.baselines.last() }.copied().unwrap_or(baseline),
-                glyphs: s.glyphs.iter().filter(|(_, _, y)| !multi || *y <= bottom).map(|(id, x, y)| ReferenceGlyph { id: *id, x: *x, y: *y }).collect(),
+                glyphs: s.glyphs.iter().map(|(id, x, y)| ReferenceGlyph { id: *id, x: *x, y: *y }).collect(),
                 font: self.ir_fonts.get(style.font).map(|f| f.source_sha256.clone()).unwrap_or_default(),
                 ops: None, rect: None, rects: None,
             });
-            if let Some(g) = link {
-                let rects = s.links.iter().filter(|r| r.y + g.above <= bottom).map(|r| [r.x, r.y, r.w, r.h]).collect();
+            if link.is_some() {
+                let rects = s.links.iter().map(|r| [r.x, r.y, r.w, r.h]).collect();
                 link_refs.push((index, ReferenceSlot { name: format!("{}#link", s.meta.name), size: 0.0, baseline: 0.0, glyphs: Vec::new(), font: String::new(), ops: None, rect: None, rects: Some(rects) }));
             }
             slots.push(ir::Slot {
@@ -1390,12 +1389,13 @@ struct Instance { x: f64, w: f64, h: f64, variant: Option<u32>, slots: usize }
 // ---------------------------------------------------------------------------------------------------------
 // Export-time font subsetting
 
-/// What a slot may contain unless it declares a `charset`: printable ASCII, Latin-1 and common typography,
-/// minus the soft hyphen (Typst draws a hyphen where a line ends on one) and the middle dot (Typst shrinks and
-/// justifies it as CJK punctuation); neither is ported.
+/// What a slot may contain unless it declares a `charset`: printable ASCII, Latin-1 and common typography. The
+/// soft hyphen (no glyph; Typst draws the font's hyphen where a line ends on one) and the middle dot (CJK
+/// centre-aligned punctuation to Typst: shrinkable and justifiable) are laid out as Typst lays them out since
+/// 2026-10-26 (G44, G51).
 const DEFAULT_REPERTOIRE: &str = concat!(
     " !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~",
-    "\u{a0}¡¢£¤¥¦§¨©ª«¬®¯°±²³´µ¶¸¹º»¼½¾¿ÀÁÂÃÄÅÆÇÈÉÊËÌÍÎÏÐÑÒÓÔÕÖ×ØÙÚÛÜÝÞßàáâãäåæçèéêëìíîïðñòóôõö÷øùúûüýþÿ",
+    "\u{a0}¡¢£¤¥¦§¨©ª«¬\u{ad}®¯°±²³´µ¶·¸¹º»¼½¾¿ÀÁÂÃÄÅÆÇÈÉÊËÌÍÎÏÐÑÒÓÔÕÖ×ØÙÚÛÜÝÞßàáâãäåæçèéêëìíîïðñòóôõö÷øùúûüýþÿ",
     "–—‘’‚“”„•…€‹›™−",
 );
 
@@ -1406,8 +1406,6 @@ const DEFAULT_REPERTOIRE: &str = concat!(
 fn unsupported_reason(c: char) -> Option<&'static str> {
     if DEFAULT_REPERTOIRE.contains(c) || c == '…' { return None; }
     Some(match c as u32 {
-        0x00AD => "a soft hyphen: Typst draws a hyphen where a line ends on one and the runtimes do not yet (strip them)",
-        0x00B7 => "a middle dot, which Typst shrinks and justifies as CJK punctuation (typst-layout `shaping.rs`, `is_cjk_center_aligned_punctuation`); not ported yet",
         0x0100..=0x024F | 0x1E00..=0x1EFF => return None,                     // Latin Extended-A, -B and Additional
         0x0370..=0x03FF => return None,                                        // Greek and Coptic
         0x0483..=0x0489 => "a combining mark; the runtimes place no marks (send precomposed characters)",
@@ -1500,15 +1498,21 @@ fn subset_fonts(doc: &mut ir::Document, loaded: &[LoadedFont]) -> Result<Vec<Sub
         }
         let mut chars = repertoire[i].clone();
         for g in &used[i] { if let Some(c) = reverse.get(g) { chars.insert(*c); } }
+        // A soft hyphen has no glyph of its own: Typst draws the font's hyphen where a line ends on one, so the
+        // character map sends it to that glyph and the subset holds it.
+        let soft_hyphens = repertoire[i].contains(&'\u{ad}');
+        if soft_hyphens { chars.insert('-'); }
         let mut char_gids: BTreeMap<char, u16> = BTreeMap::new();
         for c in &chars {
+            if *c == '\u{ad}' { continue; }
             match face.glyph_index(*c) {
                 Some(g) => { char_gids.insert(*c, g.0); }
-                None if repertoire[i].contains(c) => bail!("font {} has no glyph for {c:?} (U+{:04X}), which is in a slot's repertoire{}", font.file, *c as u32,
-                    if *c == '…' { " (the ellipsis policy needs it)" } else { "; remove it from `charset:` or use a font that has it" }),
+                None if repertoire[i].contains(c) || (soft_hyphens && *c == '-') => bail!("font {} has no glyph for {c:?} (U+{:04X}), which is in a slot's repertoire{}", font.file, *c as u32,
+                    if *c == '…' { " (the ellipsis policy needs it)" } else if *c == '-' { " (soft hyphens need it)" } else { "; remove it from `charset:` or use a font that has it" }),
                 None => {}
             }
         }
+        if soft_hyphens { char_gids.insert('\u{ad}', char_gids[&'-']); }
         let mut gids: BTreeSet<u16> = used[i].clone();
         gids.extend(char_gids.values().copied());
         gids.insert(0);
@@ -1645,11 +1649,18 @@ fn mutate(value: &mut serde_json::Value, rng: &mut Rng, slot: Option<&str>, alph
         }
         // An `href` stays a web address, so link slots keep their links; a link's `text` and an image's `alt`
         // belong to the slot their object is the value of.
-        serde_json::Value::Object(map) => map.iter_mut().for_each(|(key, v)| match key.as_str() {
-            "href" => *v = serde_json::Value::String(random_address(rng)),
-            "text" | "alt" | "src" => mutate(v, rng, slot, alphabets),
-            key => mutate(v, rng, Some(key), alphabets),
-        }),
+        serde_json::Value::Object(map) => {
+            map.iter_mut().for_each(|(key, v)| match key.as_str() {
+                "href" => *v = serde_json::Value::String(random_address(rng)),
+                "text" | "alt" | "src" => mutate(v, rng, slot, alphabets),
+                key => mutate(v, rng, Some(key), alphabets),
+            });
+            // A link's text must not end on a soft hyphen (G52: Typst leaves the hyphen outside the link and
+            // cannot write the PDF); the runtimes refuse it, so the fuzz does not generate it.
+            if map.contains_key("href") && let Some(serde_json::Value::String(t)) = map.get_mut("text") {
+                while t.ends_with('\u{ad}') { t.pop(); }
+            }
+        }
         serde_json::Value::Null => {}
     }
 }
@@ -2069,7 +2080,12 @@ fn run() -> Result<()> {
         let bytes = serde_json::to_vec(&sample)?;
         let (doc, Exported { doc: mut fuzzed, unstyled, mut reference, .. }) = match build(&args.fixture, &bytes, &fonts, false) {
             Ok(built) => built,
-            Err(error) => { leaks += 1; println!("sample {i}: compile failed: {error}"); continue; }
+            Err(error) => {
+                leaks += 1;
+                fs::write(args.out.join(format!("fuzz-{i}.json")), serde_json::to_string_pretty(&sample)?)?;
+                println!("sample {i}: compile failed (data in fuzz-{i}.json): {error}");
+                continue;
+            }
         };
         // An empty sample shows no style; copy the baseline's so only the geometry is compared for that slot.
         for name in &unstyled {

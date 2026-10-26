@@ -9,7 +9,7 @@
 #let turkish = "ÇçĞğİıÖöŞşÜüÂâÎîÛû"
 #let greek = "ΑΒΓΔΕΖΗΘΙΚΛΜΝΞΟΠΡΣΤΥΦΧΨΩαβγδεζηθικλμνξοπρστυφχψωςΆΈΉΊΌΎΏάέήίόύώϊϋΐΰ\u{37e}\u{384}\u{385}\u{387}"
 #let cyrillic = "АБВГДЕЁЖЗИЙКЛМНОПРСТУФХЦЧШЩЪЫЬЭЮЯабвгдеёжзийклмнопрстуфхцчшщъыьэюяЂђЈјЉљЊњЋћЏџЄєІіЇїҐґ"
-#let punctuation = "\u{a0}«»–—‘’‚“”„•…€‹›"
+#let punctuation = "\u{a0}«»–—‘’‚“”„•…€‹›\u{ad}·"
 #let repertoire = latin + turkish + greek + cyrillic + punctuation
 
 #set page(width: 210mm, height: 200mm, margin: 15mm)

@@ -232,7 +232,9 @@ runtimes; status-log entry, `HANDOVER.md` item 4 and contract paragraph, `GAPS.m
 Result (2026-10-26): done, see the status log and `docs/2026-10-26-refusals.md`. The plan below is as it was
 built, with two findings it did not foresee: Typst keeps trailing spaces in a run at zero advance and shrinks
 spaces on overfull lines (the shaping check allows a space any advance up to the font's), and the middle dot is
-CJK punctuation to Typst (refused, G51).
+CJK punctuation to Typst (refused, G51). Later the same day the two small ports it left open landed, soft hyphens
+(G44) and the middle dot (G51), and the leading check of step 7 (G9) went with them: a clipping slot now draws
+every line and clips, as Typst does (`docs/2026-10-26-soft-hyphens-and-middle-dot.md`).
 
 Decided 2026-10-26, first written in a fork of the working session (`HANDOVER-refuse.md`, since folded in here)
 and reworked after an audit of the exporter and both runtimes. The runtimes will not grow to cover everything:
@@ -375,6 +377,37 @@ Defaults: fonts from `../../fixtures/fonts`, output under `../../.build/paramdoc
 
 ## Status log
 
+- **Soft hyphens, the middle dot and clipped lines (2026-10-26).** The two ports M12 left open, and a gap the
+  new fuzz found. Soft hyphens (G44): no glyph of their own (Typst shapes with `REMOVE_DEFAULT_IGNORABLES`), a
+  break opportunity after them, and where a line's full text ends on one, at the end of the text too, the
+  font's hyphen drawn after the trimmed text at its natural advance, counted for the fit and never stretched
+  (typst-layout 0.15.1 `line.rs`, `Dash::Soft`, `ShapedText::hyphen`); in a link slot the hyphen is a run of
+  its own with its own rectangle. The exporter maps U+00AD to the hyphen glyph in the character map, keeps `-`
+  in the subset, and in the shaping check lets a glyph cover the soft hyphen next to it (rustybuzz drops the
+  hyphen's cluster into its neighbour) and recognises Typst's one-character hyphen item; a space or a dot right
+  after soft hyphens that open a line takes their cluster and so has no adjustability, as in Typst. The middle
+  dot (G51):
+  CJK centre-aligned punctuation to Typst (`base_adjustability`): shrinkable by a quarter of its advance on
+  each side, the glyph moving left by the left quarter, no stretch, justifiable; consecutive dots are pulled
+  together at shaping time (`calculate_adjustability`: the first gives up to a quarter on its right, the next
+  the rest of half the first's advance on its left, in text order), and a dot that ends a line is not counted
+  among the justifiables but still takes the share (`Line::justifiables`). The runtimes model the shaped text as
+  Typst leaves it (`shape_text`, shaped once for the whole text, again for a line that opens on a soft hyphen)
+  and run `commit` on that. Both back in the default
+  repertoire, so the repertoire proof and the fuzz cover them. Clipped lines (G9, found by the charset fuzz): a
+  whitespace-only line has no height, so the lines after it sit one line height up and the top of the line
+  after the last one can show inside the box; the runtimes now draw every line of a `clip` slot and the box
+  clips, as Typst's does, the reference holds every glyph Typst laid out, and the leading check is gone
+  (`fixtures/leading` is a positive case). Fixtures: `wrap` and `justify` `data-hyphens.json` and
+  `data-dots.json` (an overfull dotted line that shrinks, a line that ends on a dot), `policies` and `links`
+  `data-hyphens.json`, `leading/data-clipped.json`, `charset` with U+00AD and U+00B7 in its repertoire; every
+  case and the random samples identical to Typst in glyphs and pixels, both runtimes. Found on the way: a link
+  whose text ends on a soft hyphen changes Typst's structure tree and crashes typst-pdf 0.15.1, so both
+  runtimes refuse it (G52), and Typst's PDF re-encodes the pen position
+  after each soft-hyphen cluster as a 32-bit float, which on a justified line can put one glyph a quarter pixel
+  off in poppler (positions agree to 1e-3 pt; `check.sh` ignores channel differences up to 64 there). `check.sh`
+  191 checks. Sizes: wasm 695,746 B raw / 245,595 B gzip (+4,403 / +2,131 over M11), worker bundle 39,028 B /
+  15,085 B gzip (+1,948 / +766 over M11). Notes in `docs/2026-10-26-soft-hyphens-and-middle-dot.md`.
 - **M11 justified wrapping slots (2026-10-26).** `slot(..., justify: true)` makes a wrapping slot justified:
   the dialect sets `par(justify: justify)` with the simple breaker and hyphenation still pinned, so the breaks
   do not move; both runtimes port Typst's `commit` (typst-layout 0.15.1 `line.rs`): an overfull line shrinks

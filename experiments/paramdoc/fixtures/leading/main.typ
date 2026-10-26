@@ -1,5 +1,6 @@
-// A wrapping slot that clips, under a leading so small that the top of a line Typst clips would show inside the
-// box while the runtimes drop the whole line: the exporter must refuse it (M12, G9; check.sh expects exit 1).
+// A wrapping slot that clips, under a leading so small that the top of the line after the last one shows inside
+// the box: Typst clips it, and the runtimes draw every line and clip the box the same way (`data-clipped.json`;
+// check.sh compares glyphs and pixels with Typst). Until 2026-10-26 the exporter refused this template (G9).
 #import "paramdoc.typ": slot
 #let data = json("/data.json")
 

@@ -44,22 +44,22 @@ Commits, oldest first:
 |---|---|
 | `PLAN.md` | Principle, architecture, milestones, findings, measurements, re-evaluations. Read it first. |
 | `GAPS.md` | The one inventory of what paramdoc cannot do yet, for application developers: status (refused at export, refused at fill, silent, missing, rule), workaround, fix and cost. Add every new gap there; the open-items list below is only the order. |
-| `check.sh` | The whole proof below as one script: build, exports with fuzzing, checked-in documents against a fresh export, both runtimes against Typst and each other, pixels, text, structure, veraPDF, and with `DEMO_URL` set the demo page. 157 checks, a few minutes. |
+| `check.sh` | The whole proof below as one script: build, exports with fuzzing, checked-in documents against a fresh export, both runtimes against Typst and each other, pixels, text, structure, veraPDF, and with `DEMO_URL` set the demo page. 191 checks, a few minutes. |
 | `export-documents.sh` | Exports a fixture and copies what a browser runtime needs, `doc.json` and the subset fonts, into `documents/<fixture>/`. |
 | `documents/report/` | The report fixture exported, checked in (152 kB) because the demo page cannot run the exporter at build time. Regenerate after changing the fixture, the dialect or the exporter. |
 | `Cargo.toml`, `Cargo.lock`, `.cargo/config.toml` | Rust workspace; build output goes to `../../.build/paramdoc-target` (gitignored), never in-tree. |
 | `ir/` | The parametric document format (`doc.json`), serde types, version 8 (links and link-slot geometry since 2026-10-26), plus `geometry`: the ports of Typst's rounded rectangle and image placement both the exporter and the runtimes use. |
 | `export/` | `paramdoc-export`: links Typst 0.15.1 as a library (crates.io), compiles a fixture with sample data, walks the frames, exports the document, subsets fonts, dumps Typst's layout as a reference, fuzzes the data and diffs the contract. |
 | `runtime/` | `paramdoc-runtime`: Rust library + CLI (`fill`, `bench`) + C ABI (`paramdoc_open/render/close`, `paramdoc_fill`) for the wasm32 cdylib build. Depends on pdf-writer, flate2, serde_json, sha2 only. |
-| `ts/runtime.ts`, `ts/cli.ts` | The same runtime in dependency-free erasable TypeScript; Node 22 runs it with `--experimental-strip-types`; Vite bundles it with the demo's worker into 37 kB minified, 14 kB gzipped (16 kB before images, bars and links). |
-| `fixtures/*/` | Templates in the slot dialect, each with `paramdoc.typ` (the dialect helper, identical copies), `main.typ`, `data.json`: `certificate` (fixed page), `policies` (overflow policies), `leak` (deliberately broken, must fail the check), `transcript` (flow: table bands, 42-row `data-long.json`), `report` (the worker-batch benchmark's report in the dialect), `wrap` and `wrapfuzz` (wrapping slots, one data case per breaking rule, random texts), `justify` (the `wrap` template with every wrapping slot justified, the same data cases), `figures` (image slots), `links` (static links and link slots, 40-row `data-long.json`), `charset` (a declared Turkish, Greek and Cyrillic repertoire under `lang: "tr"`, random texts), and the ones that must fail the export: `linkbad` (an internal link), `charsetbad` (an Arabic letter in a charset), `stylebad` (a show rule recolouring part of a slot), `rotatedlink`, `smooth` (`scaling: "smooth"`), `leading` (too little leading for a clipping slot). |
+| `ts/runtime.ts`, `ts/cli.ts` | The same runtime in dependency-free erasable TypeScript; Node 22 runs it with `--experimental-strip-types`; Vite bundles it with the demo's worker into 39 kB minified, 15 kB gzipped (16 kB before images, bars and links). |
+| `fixtures/*/` | Templates in the slot dialect, each with `paramdoc.typ` (the dialect helper, identical copies), `main.typ`, `data.json`: `certificate` (fixed page), `policies` (overflow policies), `leak` (deliberately broken, must fail the check), `transcript` (flow: table bands, 42-row `data-long.json`), `report` (the worker-batch benchmark's report in the dialect), `wrap` and `wrapfuzz` (wrapping slots, one data case per breaking rule, random texts), `justify` (the `wrap` template with every wrapping slot justified, the same data cases), `figures` (image slots), `links` (static links and link slots, 40-row `data-long.json`), `charset` (a declared Turkish, Greek and Cyrillic repertoire under `lang: "tr"`, random texts), `leading` (a clipping slot whose next line shows its top inside the box), and the ones that must fail the export: `linkbad` (an internal link), `charsetbad` (an Arabic letter in a charset), `stylebad` (a show rule recolouring part of a slot), `rotatedlink`, `smooth` (`scaling: "smooth"`). |
 | `notes/wasm-size-report.md` | Where the 24 MB compiler's bytes go (crate by crate, data blobs, dependency paths). |
 | `notes/bench/` | Scripts: `gen-inputs.mjs` (1000 inputs from the repo's `data.ts`), `bench-wasm.mjs` (Rust wasm in Node), `bench-browser.mjs` (drives the repo's `/performance` page headlessly), `bench-ts.html` + `bench-ts-browser.mjs` (TypeScript runtime in Chromium), `inspect.mjs` (structure via the repo's `inspectPdf`), `ppmdiff.mjs` (pixel diff of two PPMs, used by `check.sh`), `write-all.mjs` (every benchmark input as a PDF, for veraPDF over the set). |
 
 ## How to prove it still works (do this first after any change)
 
 ```sh
-cd experiments/paramdoc && ./check.sh      # 157 checks, a few minutes after the first build; FUZZ=20 ./check.sh is quicker
+cd experiments/paramdoc && ./check.sh      # 191 checks, a few minutes after the first build; FUZZ=20 ./check.sh is quicker
 DEMO_URL=http://127.0.0.1:4190 ./check.sh  # also drives the performance page of a running pretext-hybrid dev server
 ```
 
@@ -145,8 +145,9 @@ the default Latin set); the exporter subsets fonts to exactly that plus the stat
 2026-10-26, M12): the runtimes never lay anything out differently from Typst; what they cannot reproduce stops
 with a message, at export when the template declares it, at fill when the data brings it. Supported in slots:
 Latin (Extended included), Greek and Cyrillic, precomposed, left to right, one font, size and colour per slot,
-no hyphenation (`hyphenate: false` pinned; soft hyphens refused until the dash is ported), no middle dot (CJK
-punctuation to Typst), no stroked text, no colour or variable fonts, integers and strings as values. A declared
+no hyphenation (`hyphenate: false` pinned), but soft hyphens from the data draw Typst's hyphen where a line
+ends on one and the middle dot shrinks and justifies as Typst's CJK punctuation does (both since 2026-10-26),
+no stroked text, no colour or variable fonts, integers and strings as values. A declared
 `charset` must stay inside that whitelist, and whatever it declares is proven on every export: the exporter
 fills each slot with its whole repertoire through the real template (the repertoire proof) and checks every
 glyph of every compile against the font's character map and advances, so a feature, language or style rule that
@@ -194,7 +195,7 @@ switch. The row stripes and the score bars are back since 2026-10-25 (two band v
 
 ## Open items, in the order I would do them
 
-`GAPS.md` is the full inventory (G1–G51 as of 2026-10-26) and the place to record a new gap; this section only
+`GAPS.md` is the full inventory (G1–G52 as of 2026-10-26) and the place to record a new gap; this section only
 says what to build next and why.
 
 veraPDF, the first item at handover, is done (2026-10-24, veraPDF 1.30.0): every runtime PDF passes PDF/UA-1
@@ -244,9 +245,10 @@ through link slots (`slot(name, (text:, href:))`), with rectangles equal to typs
    image files yet.
 6. **Refuse what the runtimes cannot reproduce**: done (M12, 2026-10-26). The runtimes will not grow to cover
    what would make the TypeScript one heavy (a shaper, bidi, hyphenation patterns, SVG); unsupported input stops
-   with a message. What is left of it, both small and listed in `GAPS.md`: the soft-hyphen dash (G44, the cheap
-   half of hyphenation: the data producer hyphenates, the runtime draws Typst's `-`) and the middle dot's CJK
-   shrinkability (G51). The decision on hyphenation itself (G2) stands: off, unless it comes without tables.
+   with a message. The two small ports it left open landed later the same day: soft hyphens (G44, the cheap
+   half of hyphenation: the data producer hyphenates, the runtime draws Typst's `-` where a line ends on one)
+   and the middle dot's CJK shrinkability (G51), see `docs/2026-10-26-soft-hyphens-and-middle-dot.md`. The
+   decision on hyphenation itself (G2) stands: off, unless it comes without tables.
 
 ## Things that will bite you
 
@@ -254,8 +256,20 @@ through link slots (`slot(name, (text:, href:))`), with rectangles equal to typs
   setting that changes a glyph or an advance inside a slot (`tnum`, `smcp`, stylistic sets, a `show` rule, a
   font with `locl` rules under the template's `lang`) is refused at export with the glyph ids; the fix is in the
   template, never in the runtime. A space is allowed any advance up to the font's: Typst trims trailing spaces to
-  zero width and shrinks spaces on overfull lines, both ported. Wider than the font's advance is refused (no
-  stretch until M11 lands, and then only what M11 ports).
+  zero width and shrinks spaces on overfull lines, both ported. Wider than the font's advance is a stretch,
+  allowed in a justified slot only (M11). A middle dot may be narrower with a negative offset (its CJK
+  shrinkability, on an overfull line or next to another dot) or wider in a justified slot; a glyph may cover the soft hyphen next to it (and a space or a
+  dot right after soft hyphens that open a line takes their cluster: no adjustability, as in Typst); a
+  one-character text item of a soft hyphen is Typst's own hyphen for a line ending on one. Nothing else.
+- **A clipping slot draws every line and clips the box, as Typst does** (since 2026-10-26): after a
+  whitespace-only line, which has no height, the line after the last one shows its top inside the box, and the
+  hidden lines are in the PDF's text (as in Typst's). `error` and `ellipsis` still count visible lines.
+- **Soft hyphens and Typst's PDF.** A link whose text ends on a soft hyphen changes Typst's structure tree
+  and crashes typst-pdf 0.15.1, so the runtimes refuse it (G52). And
+  Typst's PDF re-encodes the pen position after each soft-hyphen cluster (an `ActualText` span) as a 32-bit
+  float, so on a justified line one glyph can land a quarter pixel off in poppler against the runtimes' exact
+  positions: `check.sh` ignores channel differences up to 64 where soft hyphens meet justified lines
+  (`justify/hyphens`, the random samples); glyph positions are still compared to 1e-3 pt.
 - **The repertoire proof needs a data value per slot.** A slot the data gives no value to (`page-number`,
   `page-count`, a slot sharing a number with a bar) is checked on its sample only; the export says which.
 - **Whitelist, then proof.** A `charset` character outside the whitelist (`unsupported_reason` in the exporter)

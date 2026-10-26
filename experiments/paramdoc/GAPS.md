@@ -4,7 +4,8 @@ The one inventory of what paramdoc cannot do yet, written for someone building a
 cannot express, what happens if you try, the workaround, and what a fix would take. `HANDOVER.md` keeps the
 *order* in which the next pieces should be built; this file keeps the *list*. When a note's "Open" section is
 written, add its items here; when a gap closes, move it to the table at the end with the date and the note.
-Last reconciled 2026-10-26, after M11 (justified slots: `docs/2026-10-26-justified-slots.md`).
+Last reconciled 2026-10-26, after the soft-hyphen, middle-dot and clipped-line ports
+(`docs/2026-10-26-soft-hyphens-and-middle-dot.md`).
 
 **Status words.** *refused at export*: the exporter stops with a message naming the element, before anything
 ships. *refused at fill*: the runtime stops with a message naming the slot; the document was exportable but this
@@ -16,9 +17,9 @@ with the reason.
 
 - **G2 Hyphenation.** Status: rule (decided 2026-10-26). Not supported unless it comes without pattern tables
   (tens of kB per language) and without a port of Typst's hyphenation step into both runtimes; `hyphenate:
-  false` stays pinned, and narrow justified columns will show loose lines. What stays possible and cheap: soft
-  hyphens supplied by the data (U+00AD), once the runtimes draw the dash Typst draws at such a break (G44;
-  `PLAN.md`, M12).
+  false` stays pinned, and narrow justified columns will show loose lines. What is possible and cheap: soft
+  hyphens supplied by the data (U+00AD), supported since 2026-10-26 (the runtimes draw the hyphen Typst draws
+  where a line ends on one), so any hyphenation library can hyphenate server side.
 - **G3 Optimized line breaking.** Status: missing. Slots use Typst's simple (greedy) breaker, justified ones too
   (since M11, `justify: true`); Typst's default for justified paragraphs is the optimized one, so a justified
   slot breaks like a browser, not like the paragraph around it. Fix: port `linebreak_optimized` and its cost
@@ -47,21 +48,11 @@ with the reason.
 - **G8 Overflow policies are the runtime's own.** Status: rule. `clip`, `ellipsis` and `shrink` describe what
   the runtime does when text does not fit; Typst never shows them, so they are not compared with Typst (the
   exporter's check cases skip them). `shrink` is refused for wrapping slots (it would change the line pitch).
-- **G9 Leading smaller than the slot's descent.** Status: refused at export (since M12). The top of the first
-  dropped line of an overfull wrapping slot would peek into the box in Typst's output and not in the runtime's;
-  a `clip` or `ellipsis` slot whose repertoire's tallest glyph rises more than `pitch − descent` above the
-  baseline is refused (`fixtures/leading`). Workaround: more leading or a larger `descent:`.
 - **G10 Line count at a rounding tie.** Status: silent, not seen in any fuzz. `lines: auto` is measured by height
   and rounded in the dialect and copied in the runtimes; a text whose first line is only whitespace lands near
   a tie, and float noise could make Typst and the runtime pick different variants. Since M12 the exporter refuses
   a sample whose measured count is not the number of lines Typst laid out; data is not checked. Fix: write the
   formula so a tie is impossible; trivial.
-- **G44 Soft hyphens (U+00AD).** Status: refused (since M12; at export in a `charset`, at fill in data with its
-  own message). Typst breaks after a soft hyphen and draws the font's `-` at the line end even with hyphenation
-  off (typst-layout 0.15.1 `line.rs:141`, `shaping.rs:610`); the runtimes would break and draw nothing.
-  Workaround: strip them in the application. Fix: port the dash (append the font's `-` glyph to a line ending on
-  U+00AD, its width counted; not stretched under M11); half a day, both runtimes. The cheap half of hyphenation
-  (G2), since any hyphenation library can insert soft hyphens server side.
 - **G45 Stroked text.** Status: refused at export (since M12). `text(stroke:)` on static text or inside a slot
   stops the export; the runtimes draw fills only. Fix: an IR stroke on text items and the PDF text render mode;
   small, if a template needs it.
@@ -74,11 +65,12 @@ with the reason.
 - **G49 Non-integer numbers as slot values.** Status: refused at fill (since M12). The runtimes format numbers
   themselves, Typst's sample used `str()`; equal for integers and booleans, which the fuzz proves, not for every
   float. Workaround: format the number as a string in the application.
-- **G51 The middle dot (U+00B7).** Status: refused (since M12; out of the default set, refused in a `charset`,
-  "not in the slot's repertoire" at fill). Typst treats it as CJK centre-aligned punctuation (typst-layout 0.15.1
-  `shaping.rs`, `is_cjk_center_aligned_punctuation`): on an overfull line it shrinks by a quarter on each side
-  and under justification it is justifiable; the runtimes shrink spaces only. Found by the repertoire fuzz of
-  M12. Fix: give the glyph that shrinkability and count it as justifiable in both runtimes; ~15 lines.
+- **G52 A link whose text ends on a soft hyphen.** Status: refused at fill (a Typst bug). Typst appends the
+  hyphen as a text run of its own after the link's tag range, which changes the structure tree (the fuzz
+  caught it as a leak), and typst-pdf 0.15.1 then cannot write the PDF ("internal error: expected link ancestor
+  in logical tree", `link.rs:107`), so such data has no compiler fallback; both runtimes refuse it with the
+  message to strip the hyphen (`links/data-shy-error.json`). A soft hyphen at the end of a *line* inside a link
+  is fine and is in `check.sh` (`links/data-hyphens.json`). Fix: report upstream.
 
 ## Links
 
@@ -189,6 +181,9 @@ with the reason.
 | Web addresses in wrapping slots (Typst's link breaking) | 2026-10-26 | `docs/2026-10-26-addresses-and-links.md` |
 | Clickable links: static links and link slots as PDF/UA annotations | 2026-10-26 | `docs/2026-10-26-addresses-and-links.md` |
 | G1 Justified text in wrapping slots (`justify: true`; the space-stretching step of Typst's `commit`, breaks unchanged) | 2026-10-26 | `docs/2026-10-26-justified-slots.md` |
+| G44 Soft hyphens: no glyph, a break opportunity, the font's hyphen drawn where a line ends on one | 2026-10-26 | `docs/2026-10-26-soft-hyphens-and-middle-dot.md` |
+| G51 The middle dot: shrinkable by a quarter on each side, pulled together with a neighbouring dot, justifiable, as Typst's CJK punctuation | 2026-10-26 | `docs/2026-10-26-soft-hyphens-and-middle-dot.md` |
+| G9 Leading smaller than the descent: a clipping slot draws every line and the box clips, as Typst's does (`fixtures/leading`) | 2026-10-26 | `docs/2026-10-26-soft-hyphens-and-middle-dot.md` |
 | G48 Shaper features, tracking, spacing and language in slots: pinned in the dialect, every glyph of every compile checked against the character map and the font's advances, the whole repertoire shaped through the template on export | 2026-10-26 | `docs/2026-10-26-refusals.md` |
 | G50 The exporter warned where it should refuse (a single-line sample that wrapped, baselines off the contract or the grid, a sample taller than its box) | 2026-10-26 | `docs/2026-10-26-refusals.md` |
 | A declared `charset` beyond the default: Turkish, Greek and Cyrillic under `lang: "tr"`, random texts and pixels identical to Typst (`fixtures/charset`) | 2026-10-26 | `docs/2026-10-26-refusals.md` |

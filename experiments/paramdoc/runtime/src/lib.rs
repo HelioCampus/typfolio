@@ -93,8 +93,15 @@ pub struct ReferenceSlot {
 }
 
 /// The glyph of a character in the slot's repertoire, or the refusal naming it.
+/// A soft hyphen: no glyph of its own (Typst removes default ignorables when shaping), a break opportunity after
+/// it, and the font's hyphen drawn where a line ends on one (typst-layout 0.15.1 `line.rs`: `full.ends_with(SHY)`,
+/// `ShapedText::hyphen`). The exporter maps it to the hyphen glyph in the character map when a repertoire admits it.
+const SHY: char = '\u{ad}';
+/// The middle dot is CJK centre-aligned punctuation to Typst (`shaping.rs`, `is_cjk_center_aligned_punctuation`):
+/// on an overfull line it shrinks by a quarter of its advance on each side, and it counts as justifiable.
+fn is_middle_dot(c: char) -> bool { c == '\u{b7}' }
+
 fn glyph_or_refuse(font: &LoadedFont, c: char, trace_name: &str) -> Result<u16> {
-    if c == '\u{ad}' { bail!("slot `{trace_name}`: soft hyphens (U+00AD) are not supported; strip them from the text"); }
     font.glyph(c).ok_or_else(|| anyhow!("slot `{trace_name}`: {c:?} (U+{:04X}) is not in the slot's repertoire; declare it with `charset:` in the template", c as u32))
 }
 
@@ -140,16 +147,17 @@ fn fill_slot(slot: &ir::Slot, text: &str, href: Href, font: &LoadedFont, trace_n
     if let Some(max) = slot.max_length && text.chars().count() > max as usize {
         bail!("slot `{trace_name}`: {text:?} has {} characters, max-length is {max}", text.chars().count());
     }
+    // A link's text must not end on a soft hyphen: Typst appends the hyphen outside the link's tag range and
+    // typst-pdf 0.15.1 cannot write that PDF (G52), so there is no compiler fallback for such data.
+    if href.is_some() && text.ends_with(SHY) { bail!("slot `{trace_name}`: a link's text must not end on a soft hyphen (U+00AD); Typst cannot export it (the hyphen falls outside the link), strip it"); }
     if slot.lines > 1 { return fill_lines(slot, text, href, font, trace_name); }
     let shape = |text: &str, size: f64| -> Result<(Vec<ir::Glyph>, f64)> {
         let mut glyphs = Vec::new();
         let mut width = 0.0;
-        for c in text.chars() {
-            let id = glyph_or_refuse(font, c, &trace_name)?;
-            let advance = font.advance(id) * size;
-            glyphs.push(ir::Glyph { id, x_advance: advance, x_offset: 0.0, y_offset: 0.0, chars: None });
-            width += advance;
-        }
+        let mut push = |id: u16| { let advance = font.advance(id) * size; glyphs.push(ir::Glyph { id, x_advance: advance, x_offset: 0.0, y_offset: 0.0, chars: None }); width += advance; };
+        // A soft hyphen draws nothing; a text ending on one ends with the font's hyphen, as Typst's line does.
+        for c in text.chars().filter(|&c| c != SHY) { push(glyph_or_refuse(font, c, &trace_name)?); }
+        if text.ends_with(SHY) { push(glyph_or_refuse(font, SHY, &trace_name)?); }
         Ok((glyphs, width))
     };
     let mut size = slot.size;
@@ -186,7 +194,10 @@ fn fill_slot(slot: &ir::Slot, text: &str, href: Href, font: &LoadedFont, trace_n
     };
     let mut pen = x;
     let trace_glyphs = glyphs.iter().map(|g| { let at = pen; pen += g.x_advance; ReferenceGlyph { id: g.id, x: at, y: slot.baseline } }).collect();
-    let link = link_fill(slot, href, &[(x, slot.baseline, width)], size / slot.size, &trace_name)?;
+    // A link slot: Typst's hyphen is a text run of its own, with its own link rectangle.
+    let mut runs = vec![(x, slot.baseline, width)];
+    if shown.ends_with(SHY) && let Some(h) = glyphs.last() { runs[0].2 -= h.x_advance; runs.push((x + runs[0].2, slot.baseline, h.x_advance)); }
+    let link = link_fill(slot, href, &runs, size / slot.size, &trace_name)?;
     Ok(Filled {
         rect: [slot.x, slot.y, slot.width, slot.height], image: None, alt: None, link,
         items: vec![ir::Item::Text { x, y: slot.baseline, font: slot.font, size, fill: slot.fill, text: shown, glyphs, node: None }],
@@ -361,16 +372,87 @@ fn linebreak_link(link: &[char], f: &mut dyn FnMut(usize)) {
     }
 }
 
-/// A line of a wrapping slot: `layout_end` excludes the trailing whitespace that does not count for the width;
-/// `shaping_end` includes it (Typst draws those glyphs at zero advance).
+/// A glyph of a shaped text as Typst's `calculate_adjustability` (typst-layout 0.15.1 `shaping.rs`) leaves it:
+/// `advance` and `offset` after the adjustment of consecutive punctuation, `shrink` what `commit` may still take
+/// from each side, `c` the glyph's character to Typst (the soft hyphen for the glyph after soft hyphens that open
+/// the text), `at` the index of its character in the text that was shaped.
+#[derive(Clone, Copy)]
+struct Shaped { id: u16, advance: f64, offset: f64, shrink: (f64, f64), c: char, at: usize }
+
+/// Shapes a text as Typst shapes a paragraph's (or a reshaped line's) text: one glyph per character but soft
+/// hyphens and hard breaks, the character map's glyph at the font's advance; the glyph after soft hyphens that
+/// open the text takes their cluster (rustybuzz merges a leading default ignorable forward), so to Typst its
+/// character is the soft hyphen and it has no adjustability. Then `base_adjustability` with the default
+/// `par.justification-limits`: a space may shrink by a third of its advance (min(a / 3, 0.75 a)) on its right, a
+/// middle dot (CJK centre-aligned punctuation to Typst) by a quarter on each side; nothing else adjusts. Then
+/// consecutive CJK punctuation is pulled together (Chinese Layout Requirements 3.1.6.1): where two dots meet and
+/// their facing shrinkabilities reach half the first one's advance, the first gives up to a quarter on its right
+/// and the second the rest on its left (its glyph moving left), in text order, each pair seeing the state the
+/// previous one left.
+fn shape_text(cs: &[char], font: &LoadedFont, size: f64, trace_name: &str) -> Result<Vec<Shaped>> {
+    let leading = cs.iter().take_while(|&&c| c == SHY).count();
+    let mut out: Vec<Shaped> = Vec::with_capacity(cs.len());
+    for (i, &c) in cs.iter().enumerate() {
+        if c == SHY || is_mandatory_break(c) { continue; }
+        let id = glyph_or_refuse(font, c, trace_name)?;
+        let a = font.advance(id) * size;
+        let c = if i == leading && leading > 0 { SHY } else { c };
+        let shrink = if is_space_glyph(c) { (0.0, (a / 3.0).min(a * 0.75)) } else if is_middle_dot(c) { (a / 4.0, a / 4.0) } else { (0.0, 0.0) };
+        out.push(Shaped { id, advance: a, offset: 0.0, shrink, c, at: i });
+    }
+    for k in 0..out.len().saturating_sub(1) {
+        if !(is_middle_dot(out[k].c) && is_middle_dot(out[k + 1].c)) { continue; }
+        let delta = out[k].advance / 2.0;
+        if out[k].shrink.1 + out[k + 1].shrink.0 >= delta {
+            let left_delta = out[k].shrink.1.min(delta);
+            out[k].advance -= left_delta;
+            out[k].shrink.1 -= left_delta;
+            let amount = delta - left_delta;
+            out[k + 1].offset -= amount;
+            out[k + 1].advance -= amount;
+            out[k + 1].shrink.0 -= amount;
+        }
+    }
+    Ok(out)
+}
+
+/// The shaping of a slot's whole text, which Typst does once; a line is a slice of it, except that a line
+/// starting on a soft hyphen inside the text is shaped again by Typst (no glyph starts at the hyphen, so the
+/// slice is not safe to break) and so gets its own adjustments.
+struct Shaping<'a> { chars: &'a [char], whole: Vec<Shaped>, glyph_at: Vec<Option<usize>>, font: &'a LoadedFont<'a>, size: f64, trace_name: &'a str }
+
+impl<'a> Shaping<'a> {
+    fn new(chars: &'a [char], font: &'a LoadedFont<'a>, size: f64, trace_name: &'a str) -> Result<Self> {
+        let whole = shape_text(chars, font, size, trace_name)?;
+        let mut glyph_at = vec![None; chars.len()];
+        for (k, g) in whole.iter().enumerate() { glyph_at[g.at] = Some(k); }
+        Ok(Self { chars, whole, glyph_at, font, size, trace_name })
+    }
+    fn reshaped(&self, from: usize) -> bool { from > 0 && from < self.chars.len() && self.chars[from] == SHY }
+    /// The glyphs of the line `from..to`, `at` relative to `from`.
+    fn line(&self, from: usize, to: usize) -> Result<Vec<Shaped>> {
+        if self.reshaped(from) { return shape_text(&self.chars[from..to], self.font, self.size, self.trace_name); }
+        Ok(self.whole.iter().filter(|g| g.at >= from && g.at < to).map(|g| Shaped { at: g.at - from, ..*g }).collect())
+    }
+    /// The natural width of `from..to`, as the breaker measures a line.
+    fn width_of(&self, from: usize, to: usize) -> f64 {
+        if self.reshaped(from) { return self.line(from, to).map(|gs| gs.iter().map(|g| g.advance).sum()).unwrap_or(0.0); }
+        (from..to).map(|i| self.glyph_at[i].map_or(0.0, |k| self.whole[k].advance)).sum()
+    }
+}
+
+/// A line of a wrapping slot: `layout_end` excludes the trailing whitespace and soft hyphens that do not count for
+/// the width; `shaping_end` includes them (Typst draws the whitespace glyphs at zero advance).
 /// `mandatory`: the line ends at a hard break or at the end of the text, so it is never justified.
-struct BrokenLine { start: usize, layout_end: usize, shaping_end: usize, width: f64, mandatory: bool }
-/// A line as drawn: the first `kept` glyphs count for the width, the rest are trimmed trailing whitespace.
-struct LineRun { ids: Vec<u16>, advances: Vec<f64>, text: String, width: f64, kept: usize }
+/// `hyphen`: the line's full text ends on a soft hyphen, so the font's hyphen is drawn after it (its width counted).
+struct BrokenLine { start: usize, layout_end: usize, shaping_end: usize, width: f64, mandatory: bool, hyphen: bool }
+/// A line as drawn: `kept` glyphs count for the width (the hyphen among them), the rest are trimmed trailing
+/// whitespace; `hyphen_width` is the drawn hyphen's advance, 0 without one.
+struct LineRun { ids: Vec<u16>, advances: Vec<f64>, offsets: Vec<f64>, text: String, width: f64, kept: usize, hyphen_width: f64 }
 
 /// Typst's simple breaker: greedy first fit, a mandatory break or a line that does not fit even on its own
 /// committed as it is (an overlong word overflows, as in Typst).
-fn break_lines(chars: &[char], width_of: &dyn Fn(usize, usize) -> f64, fits: &dyn Fn(f64) -> bool) -> Vec<BrokenLine> {
+fn break_lines(chars: &[char], width_of: &dyn Fn(usize, usize) -> f64, fits: &dyn Fn(f64) -> bool, hyphen_width: f64) -> Vec<BrokenLine> {
     let line = |start: usize, end: usize, mandatory: bool| -> BrokenLine {
         let (mut shaping_end, mut layout_end) = (end, end);
         if mandatory {
@@ -379,7 +461,10 @@ fn break_lines(chars: &[char], width_of: &dyn Fn(usize, usize) -> f64, fits: &dy
         } else {
             while layout_end > start && (chars[layout_end - 1].is_whitespace() || is_default_ignorable(chars[layout_end - 1])) { layout_end -= 1; }
         }
-        BrokenLine { start, layout_end, shaping_end, width: width_of(start, layout_end), mandatory }
+        // Typst appends the font's hyphen when the line's full text ends on a soft hyphen (`line.rs`, `Dash::Soft`), at
+        // the end of the text too; its width counts for the fit.
+        let hyphen = end > start && chars[end - 1] == SHY;
+        BrokenLine { start, layout_end, shaping_end, width: width_of(start, layout_end) + if hyphen { hyphen_width } else { 0.0 }, mandatory, hyphen }
     };
     let mut lines = Vec::new();
     let mut start = 0;
@@ -402,61 +487,69 @@ fn fill_lines(slot: &ir::Slot, text: &str, href: Href, font: &LoadedFont, trace_
     if !(pitch > 0.0) { bail!("slot `{trace_name}`: a wrapping slot without a line pitch; export the document again"); }
     if slot.overflow == "shrink" { bail!("slot `{trace_name}`: `shrink` is not an overflow policy for a wrapping slot"); }
     let chars: Vec<char> = text.chars().collect();
-    let name = trace_name.clone();
-    let glyph_of = |c: char| -> Result<u16> { glyph_or_refuse(font, c, &name) };
-    // Every character but a hard break is drawn, trailing whitespace included (at zero advance).
-    let ids: Vec<u16> = chars.iter().map(|&c| if is_mandatory_break(c) { Ok(0) } else { glyph_of(c) }).collect::<Result<_>>()?;
-    let width_of = |from: usize, to: usize| -> f64 { ids[from..to].iter().map(|&id| font.advance(id) * size).sum() };
+    let shaping = Shaping::new(&chars, font, size, &trace_name)?;
+    // A line ending on a soft hyphen gets the font's hyphen, whose width counts for the break.
+    let hyphen = if chars.contains(&SHY) { let id = glyph_or_refuse(font, SHY, &trace_name)?; Some((id, font.advance(id) * size)) } else { None };
+    let width_of = |from: usize, to: usize| -> f64 { shaping.width_of(from, to) };
     let fits = |width: f64| slot.width + 1e-4 >= width; // Typst's `Abs::fits`
-    // Typst's `commit` (typst-layout 0.15.1 `line.rs`) with the default `par.justification-limits`: a kept space
-    // may shrink by a third of its advance (min(a / 3, 0.75 a)) and stretch by half of it; nothing else adjusts.
-    // `remaining < 0`: the line does not fit and its spaces shrink (ragged lines too), by `ratio` of their
-    // shrinkability, down to -1. Otherwise a justified line stretches its spaces by `ratio` of their
-    // stretchability, up to 1, and shares what is still left equally among them (`extra`); a line without a space
-    // keeps its width and is aligned as the slot says.
-    let run = |cs: &[char], kept: usize, justify: bool| -> Result<LineRun> {
-        let ids: Vec<u16> = cs.iter().map(|&c| glyph_of(c)).collect::<Result<_>>()?;
-        let mut advances: Vec<f64> = ids.iter().enumerate().map(|(i, &id)| if i < kept { font.advance(id) * size } else { 0.0 }).collect();
+    // Typst's `commit` (typst-layout 0.15.1 `line.rs`) over the shaped glyphs (`shape_text`): `remaining < 0`: the
+    // line does not fit and its glyphs shrink (ragged lines too), each by `ratio` of what it may still give on
+    // each side, down to -1, the glyph moving left by its left share. Otherwise a justified line stretches its
+    // spaces by `ratio` of their stretchability (half a space each), up to 1, and shares what is still left
+    // equally among the justifiable glyphs (`extra`: spaces and middle dots); a line without one keeps its width
+    // and is aligned as the slot says. Trimmed trailing whitespace has no advance and no adjustability; the
+    // hyphen neither.
+    let run = |glyphs: Vec<Shaped>, kept: usize, justify: bool, hyphenated: bool, text: String| -> LineRun {
+        let n = glyphs.len() + usize::from(hyphenated && hyphen.is_some());
+        let (mut ids, mut advances, mut offsets, mut shrink, mut chars_of, mut is_kept) = (Vec::with_capacity(n), Vec::with_capacity(n), Vec::with_capacity(n), Vec::with_capacity(n), Vec::with_capacity(n), Vec::with_capacity(n));
+        for g in &glyphs {
+            let k = g.at < kept;
+            ids.push(g.id); advances.push(if k { g.advance } else { 0.0 }); offsets.push(if k { g.offset } else { 0.0 }); shrink.push(if k { g.shrink } else { (0.0, 0.0) }); chars_of.push(g.c); is_kept.push(k);
+        }
+        let mut hyphen_width = 0.0;
+        if hyphenated && let Some((id, w)) = hyphen { ids.push(id); advances.push(w); offsets.push(0.0); shrink.push((0.0, 0.0)); chars_of.push('-'); is_kept.push(true); hyphen_width = w; }
+        let justifiable: Vec<bool> = (0..n).map(|i| is_kept[i] && (is_space_glyph(chars_of[i]) || is_middle_dot(chars_of[i]))).collect();
         let mut width: f64 = advances.iter().sum();
-        let spaces: Vec<bool> = cs.iter().enumerate().map(|(i, &c)| i < kept && is_space_glyph(c)).collect();
         let remaining = slot.width - width;
-        let shrinkable: Vec<f64> = advances.iter().zip(&spaces).map(|(&a, &s)| if s { (a / 3.0).min(a * 0.75) } else { 0.0 }).collect();
-        let shrinkability: f64 = shrinkable.iter().sum();
+        let shrinkability: f64 = shrink.iter().map(|(l, r)| l + r).sum();
         if remaining < 0.0 && shrinkability > 0.0 {
             let ratio = (remaining / shrinkability).max(-1.0);
-            for (advance, shrink) in advances.iter_mut().zip(&shrinkable) { *advance += ratio * shrink; }
+            for i in 0..n { let (l, r) = shrink[i]; offsets[i] += l * ratio; advances[i] += (l + r) * ratio; }
             width = advances.iter().sum();
         } else if justify {
-            let stretchable: Vec<f64> = advances.iter().zip(&spaces).map(|(&a, &s)| if s { a * 0.5 } else { 0.0 }).collect();
-            let stretchability: f64 = stretchable.iter().sum();
+            let stretch: Vec<f64> = (0..n).map(|i| if is_kept[i] && is_space_glyph(chars_of[i]) { advances[i] * 0.5 } else { 0.0 }).collect();
+            let stretchability: f64 = stretch.iter().sum();
             let (mut ratio, mut left) = (0.0, remaining);
             if stretchability > 0.0 { ratio = (remaining / stretchability).min(1.0); left = (remaining - stretchability).max(0.0); }
-            let justifiables = spaces.iter().filter(|&&s| s).count();
+            // Typst's `Line::justifiables`: a middle dot that ends the line is not counted (it still takes the share).
+            let mut justifiables = justifiable.iter().filter(|&&j| j).count();
+            if (0..n).rev().find(|&i| is_kept[i]).is_some_and(|i| is_middle_dot(chars_of[i])) { justifiables -= 1; }
             let extra = if justifiables > 0 && left > 0.0 { left / justifiables as f64 } else { 0.0 };
-            for ((advance, stretch), &space) in advances.iter_mut().zip(&stretchable).zip(&spaces) { *advance += ratio * stretch + if space { extra } else { 0.0 }; }
+            for i in 0..n { advances[i] += ratio * stretch[i] + if justifiable[i] { extra } else { 0.0 }; }
             width = advances.iter().sum();
         }
-        Ok(LineRun { ids, advances, text: cs.iter().collect(), width, kept })
+        LineRun { ids, advances, offsets, text, width, kept: is_kept.iter().filter(|&&k| k).count(), hyphen_width }
     };
     // Every line but the last and lines before a hard break are justified (`line.rs`: `config.justify &&
     // breakpoint != Mandatory`; the end of the text is a mandatory break too).
-    let render = |l: &BrokenLine| run(&chars[l.start..l.shaping_end], l.layout_end - l.start, slot.justify && !l.mandatory);
+    let render = |l: &BrokenLine| -> Result<LineRun> { Ok(run(shaping.line(l.start, l.shaping_end)?, l.layout_end - l.start, slot.justify && !l.mandatory, l.hyphen, chars[l.start..l.shaping_end].iter().collect())) };
     let ellipsize = |l: &BrokenLine| -> Result<LineRun> {
         let ellipsis: Vec<char> = if font.glyph('…').is_some() { vec!['…'] } else { vec!['.', '.', '.'] };
         let mut kept: Vec<char> = chars[l.start..l.layout_end].to_vec();
-        let trim = |kept: &mut Vec<char>| while kept.last().is_some_and(|c| c.is_whitespace()) { kept.pop(); };
-        // The ellipsized line is the runtime's own and the last one shown: never stretched.
-        let shape = |kept: &[char]| -> Result<LineRun> { let cs: Vec<char> = kept.iter().chain(&ellipsis).copied().collect(); run(&cs, cs.len(), false) };
+        let trim = |kept: &mut Vec<char>| while kept.last().is_some_and(|&c| c.is_whitespace() || c == SHY) { kept.pop(); };
+        // The ellipsized line is the runtime's own and the last one shown: never stretched, never hyphenated.
+        let shape = |kept: &[char]| -> Result<LineRun> { let cs: Vec<char> = kept.iter().chain(&ellipsis).copied().collect(); Ok(run(shape_text(&cs, font, size, &trace_name)?, cs.len(), false, false, cs.iter().collect())) };
         trim(&mut kept);
         let mut shown = shape(&kept)?;
         while !fits(shown.width) && !kept.is_empty() { kept.pop(); trim(&mut kept); shown = shape(&kept)?; }
         Ok(shown)
     };
 
-    let broken = break_lines(&chars, &width_of, &fits);
+    let broken = break_lines(&chars, &width_of, &fits, hyphen.map_or(0.0, |h| h.1));
     let mut runs: Vec<LineRun> = broken.iter().map(render).collect::<Result<_>>()?;
     // Lines stack as Typst stacks them: a line is as tall as the line height, except that a line of nothing but
-    // trimmed whitespace has no height; `leading` separates lines. The first baseline is the slot's.
+    // trimmed whitespace (no kept glyph, no hyphen) has no height; `leading` separates lines. The first baseline is
+    // the slot's.
     let line_height = slot.baseline - slot.y;
     let leading = pitch - line_height;
     let baselines = |rs: &[LineRun]| -> Vec<f64> {
@@ -472,7 +565,9 @@ fn fill_lines(slot: &ir::Slot, text: &str, href: Href, font: &LoadedFont, trace_
                 if let Some(k) = overlong { bail!("slot `{trace_name}`: {:?} is {:.2} pt wide but the slot is {:.2} pt; declare an overflow policy or a smaller max-length", runs[k].text, runs[k].width, slot.width); }
                 bail!("slot `{trace_name}`: {text:?} needs {} lines but the slot holds {lines}; declare an overflow policy or a smaller max-length", runs.len());
             }
-            "clip" => runs.truncate(visible), // overlong lines stay, clipped by the box as in Typst
+            // Every line is drawn and the box clips, as in Typst: a line whose baseline is below the box may still
+            // show its top (after a whitespace-only line, which has no height, the lines sit one line height up).
+            "clip" => {}
             "ellipsis" => {
                 let cut = overlong.unwrap_or(visible - 1).min(visible - 1);
                 runs.truncate(cut + 1);
@@ -495,12 +590,19 @@ fn fill_lines(slot: &ir::Slot, text: &str, href: Href, font: &LoadedFont, trace_
             other => bail!("slot `{trace_name}`: unknown alignment {other:?}"),
         };
         let mut pen = x;
-        let glyphs: Vec<ir::Glyph> = line.ids.iter().zip(&line.advances).map(|(&id, &advance)| {
-            trace_glyphs.push(ReferenceGlyph { id, x: pen, y });
+        let glyphs: Vec<ir::Glyph> = (0..line.ids.len()).map(|i| {
+            let (id, advance, offset) = (line.ids[i], line.advances[i], line.offsets[i]);
+            trace_glyphs.push(ReferenceGlyph { id, x: pen + offset, y });
             pen += advance;
-            ir::Glyph { id, x_advance: advance, x_offset: 0.0, y_offset: 0.0, chars: None }
+            ir::Glyph { id, x_advance: advance, x_offset: offset, y_offset: 0.0, chars: None }
         }).collect();
-        if !glyphs.is_empty() { items.push(ir::Item::Text { x, y, font: slot.font, size, fill: slot.fill, text: line.text.clone(), glyphs, node: None }); drawn.push((x, y, line.width)); }
+        if !glyphs.is_empty() {
+            items.push(ir::Item::Text { x, y, font: slot.font, size, fill: slot.fill, text: line.text.clone(), glyphs, node: None });
+            // A link slot: Typst's hyphen is a text run of its own, with its own link rectangle.
+            let text_width = line.width - line.hyphen_width;
+            drawn.push((x, y, text_width));
+            if line.hyphen_width > 0.0 { drawn.push((x + text_width, y, line.hyphen_width)); }
+        }
     }
     // The trace reports the first line's baseline as Typst's frame has it: at the box top when that line is whitespace.
     let baseline = ys.first().copied().unwrap_or(slot.baseline);
@@ -969,15 +1071,16 @@ fn needed_lines(slot: &ir::Slot, text: &str, font: &LoadedFont, trace_name: &str
     let (pitch, size) = (slot.pitch, slot.size);
     if !(pitch > 0.0) { bail!("slot `{trace_name}`: a wrapping slot without a line pitch; export the document again"); }
     let chars: Vec<char> = text.chars().collect();
-    let ids: Vec<u16> = chars.iter().map(|&c| if is_mandatory_break(c) { Ok(0) } else { glyph_or_refuse(font, c, trace_name) }).collect::<Result<_>>()?;
-    let width_of = |from: usize, to: usize| -> f64 { ids[from..to].iter().map(|&id| font.advance(id) * size).sum() };
+    let shaping = Shaping::new(&chars, font, size, trace_name)?;
+    let hyphen_width = if chars.contains(&SHY) { font.advance(glyph_or_refuse(font, SHY, trace_name)?) * size } else { 0.0 };
+    let width_of = |from: usize, to: usize| -> f64 { shaping.width_of(from, to) };
     let fits = |width: f64| slot.width + 1e-4 >= width;
-    let broken = break_lines(&chars, &width_of, &fits);
+    let broken = break_lines(&chars, &width_of, &fits, hyphen_width);
     let line_height = slot.baseline - slot.y;
     let leading = pitch - line_height;
     let mut y = 0.0;
     for (k, l) in broken.iter().enumerate() {
-        let h = if l.shaping_end > l.start && l.layout_end == l.start { 0.0 } else { line_height };
+        let h = if l.shaping_end > l.start && l.layout_end == l.start && !l.hyphen { 0.0 } else { line_height };
         if k > 0 { y += leading; }
         y += h;
     }
