@@ -5,10 +5,13 @@ import { Chart } from '@tanstack/charts/react';
 import { scaleLinear } from '@tanstack/charts/scales/linear';
 import { tooltip } from '@tanstack/charts/tooltip';
 import { portal } from '@tanstack/charts/tooltip/portal';
+import type { Engine } from './batch.ts';
 import { median, medianRates, workerPaint, type RunRecord } from './runs.ts';
 
 interface RunsPanelProps {
   readonly runs: readonly RunRecord[];
+  /** Only this engine's runs are charted and listed: the two engines' rates are an order of magnitude apart. */
+  readonly engine: Engine;
   readonly running: boolean;
   readonly sweep?: { readonly at: number; readonly counts: readonly number[] };
   readonly onSweep: () => void;
@@ -16,8 +19,10 @@ interface RunsPanelProps {
 }
 
 /** Compares finished runs: how throughput scales with workers, how each run progressed, and the numbers. */
-export function RunsPanel({ runs, running, sweep, onSweep, onClear }: RunsPanelProps) {
+export function RunsPanel({ runs, engine, running, sweep, onSweep, onClear }: RunsPanelProps) {
   const cores = navigator.hardwareConcurrency || 0;
+  const shown = runs.filter(run => (run.engine ?? 'typst') === engine);
+  const other = runs.length - shown.length;
   return (
     <section className="panel runs" aria-labelledby="runs-title">
       <div className="list-head">
@@ -31,16 +36,16 @@ export function RunsPanel({ runs, running, sweep, onSweep, onClear }: RunsPanelP
       <p className="note">
         {sweep
           ? `Sweep: run ${sweep.at + 1} of ${sweep.counts.length} (${sweep.counts.join(', ')} workers).`
-          : 'Every finished run is kept here, in this browser only. Change the worker count and render again, or sweep.'}
+          : `Every finished run is kept here, in this browser only; these are the ${engine === 'paramdoc' ? 'paramdoc runtime' : 'Typst compiler'} runs${other ? ` (${other} more with the other engine)` : ''}. Change the worker count and render again, or sweep.`}
         {' '}This browser reports {cores} logical cores. Other work on the machine changes the numbers, so compare runs
         made close together.
       </p>
-      {runs.length ? (
+      {shown.length ? (
         <>
           <div className="runs-charts">
             <div>
               <h3>Throughput by workers</h3>
-              <ScalingChart runs={runs} />
+              <ScalingChart runs={shown} />
               <div className="legend" aria-hidden="true">
                 <span><i className="line" />Median of runs</span>
                 <span><i className="line dashed" />Perfect scaling from the fewest workers</span>
@@ -48,11 +53,11 @@ export function RunsPanel({ runs, running, sweep, onSweep, onClear }: RunsPanelP
             </div>
             <div>
               <h3>Progress, latest runs</h3>
-              <ProgressLines runs={runs} />
-              <WorkerLegend runs={runs.slice(-6)} />
+              <ProgressLines runs={shown} />
+              <WorkerLegend runs={shown.slice(-6)} />
             </div>
           </div>
-          <RunsTable runs={runs} />
+          <RunsTable runs={shown} />
         </>
       ) : null}
     </section>

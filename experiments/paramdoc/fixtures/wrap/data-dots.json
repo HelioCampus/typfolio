@@ -1,0 +1,6 @@
+{
+  "left": "Middle dots · between · words, a·b·c, two in a row··and three···in a row, pulled together as Typst does; the rest share a line's slack.",
+  "center": "Overfull·line·of·dotted·words·without··a·single·space·so·it·cannot·break·and·Typst·shrinks·every·dot···by·a·quarter·on·each·side\nno break spaces·and·dots share the shrink on an overfull line with both·kinds·of·glyph·in·it\na·short·last·line",
+  "right": "A first line ending on a dot · followed by the second line.",
+  "note": "Table · note · with · dots, a·b·c and d·e·f, that wraps onto a second line inside the table cell."
+}

@@ -1,0 +1,27 @@
+{
+  "student": "Ada Lovelace",
+  "programme": "BSc Mathematics",
+  "courses": [
+    {
+      "code": "PHYS201",
+      "title": "Classical Mechanics and the Calculus of Variations in the Lagrangian and Hamiltonian Formulations",
+      "credits": 6,
+      "grade": "B"
+    },
+    {
+      "code": "MATH210",
+      "title": "Real Analysis",
+      "credits": 6,
+      "grade": "A"
+    },
+    {
+      "code": "CS220",
+      "title": "Algorithms",
+      "credits": 5,
+      "grade": "A-"
+    }
+  ],
+  "total_credits": 17,
+  "gpa": "3.7",
+  "honours": false
+}

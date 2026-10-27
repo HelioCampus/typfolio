@@ -1,0 +1,16 @@
+<!doctype html><meta charset="utf-8"><title>paramdoc bench</title><pre id="result">running…</pre>
+<script type="module">
+import { Runtime } from './runtime.js';
+try {
+  const [doc, inputs] = await Promise.all([fetch('doc.json').then(r => r.arrayBuffer()), fetch('inputs.json').then(r => r.json())]);
+  const listed = JSON.parse(new TextDecoder().decode(doc));
+  const fonts = await Promise.all(listed.fonts.map(f => fetch('fonts/' + f.file).then(r => r.arrayBuffer()).then(b => new Uint8Array(b))));
+  const t0 = performance.now();
+  const runtime = await Runtime.create(new Uint8Array(doc), fonts);
+  const setup = performance.now() - t0;
+  const times = []; let bytes = 0; const start = performance.now();
+  for (const input of inputs) { const t = performance.now(); const out = await runtime.fill(input); times.push(performance.now() - t); bytes += out.pdf.length; }
+  const total = (performance.now() - start) / 1000; times.sort((a, b) => a - b);
+  document.getElementById('result').textContent = JSON.stringify({ documents: inputs.length, seconds: +total.toFixed(3), per_second: +(inputs.length / total).toFixed(1), median_ms: +times[Math.floor(times.length / 2)].toFixed(3), p95_ms: +times[Math.floor(times.length * 0.95)].toFixed(3), setup_ms: +setup.toFixed(1), avg_kb: +(bytes / inputs.length / 1000).toFixed(1) });
+} catch (e) { document.getElementById('result').textContent = 'error: ' + (e && e.stack || e); }
+</script>

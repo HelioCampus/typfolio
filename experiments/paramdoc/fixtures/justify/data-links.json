@@ -1,0 +1,6 @@
+{
+  "left": "Details are at https://example.org/handbook/2026/assessment-policy?lang=en#section-4 and in the office.",
+  "center": "See www.example.com/results (updated weekly), http://127.0.0.1:8080/status or www.example.com.",
+  "right": "Portal: https://portal.example.edu/login.",
+  "note": "Hash links break anywhere: https://example.org/c/0123456789abcdef0123456789abcdef and more text follows after it."
+}

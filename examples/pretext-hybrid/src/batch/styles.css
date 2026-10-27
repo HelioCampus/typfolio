@@ -17,6 +17,12 @@
   .controls output, .controls input[type=number] { color: var(--ink); font-variant-numeric: tabular-nums; }
   .controls output { display: inline-block; min-width: 2ch; font-weight: 600; }
   .controls input[type=number] { width: 7ch; padding: 4px 6px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); font: inherit; }
+  .controls .engine { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 14px; }
+  .controls .toggle { margin-bottom: 0; }
+  .controls .toggle button { padding: 5px 12px; font-size: 13px; }
+  .controls .toggle button:disabled { opacity: 0.6; cursor: default; }
+  .engine-note { margin: -4px 0 14px; color: var(--muted); font-size: 13px; max-width: 110ch; }
+  .engine-note code { font-size: 12px; }
   .controls input[type=range], .controls input[type=checkbox], .list-head input { accent-color: var(--accent); }
   .buttons { margin-left: auto; display: flex; gap: 8px; }
   button { font: inherit; font-weight: 600; padding: 7px 16px; border-radius: 8px; border: 1px solid var(--line); background: transparent; color: var(--ink); cursor: pointer; }

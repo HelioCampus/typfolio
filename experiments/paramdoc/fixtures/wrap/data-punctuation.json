@@ -1,0 +1,6 @@
+{
+  "left": "State-of-the-art hyphen-rich prose breaks after hyphens, en dashes 2019–2024 and em dashes — like this one — but not before them.",
+  "center": "Dates 12/05/2026 and ratios and/or slashes; “curly quotes” and ‘single ones’ and (parentheses) and [brackets] stay attached to their words.",
+  "right": "Numbers 1,000.50 and 50% and $5 or €5 and −3 keep together.",
+  "note": "Ellipsis… stays; semicolons; colons: and commas, too. A bullet • and a minus −5 and 3½ here."
+}

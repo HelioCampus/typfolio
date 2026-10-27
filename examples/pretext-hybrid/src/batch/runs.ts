@@ -1,4 +1,4 @@
-import { percentile, type BatchRun } from './batch.ts';
+import { percentile, type BatchRun, type Engine } from './batch.ts';
 
 /** A finished run, kept for comparison. Stored in this browser only. */
 export interface RunRecord {
@@ -8,6 +8,8 @@ export interface RunRecord {
   readonly workers: number;
   readonly total: number;
   readonly ua: boolean;
+  /** Absent in records from before the engine switch, which were all the Typst compiler's. */
+  readonly engine?: Engine;
   readonly seconds: number;
   /** PDFs per second. */
   readonly rate: number;
@@ -46,7 +48,7 @@ export function saveRuns(runs: readonly RunRecord[]): void {
 
 /** Builds the record for a run that rendered every document, or returns undefined. */
 export function recordRun(run: BatchRun, id: number): RunRecord | undefined {
-  const { total, workers, ua } = run.settings;
+  const { total, workers, ua, engine } = run.settings;
   if (run.done !== total || run.aborted || run.error || run.endedAt === undefined) return undefined;
   const seconds = run.elapsed();
   const cold = run.rows.filter(row => row.cold && row.ms !== undefined).map(row => row.ms!);
@@ -61,6 +63,7 @@ export function recordRun(run: BatchRun, id: number): RunRecord | undefined {
     workers,
     total,
     ua,
+    engine,
     seconds: round(seconds, 3),
     rate: round(run.done / seconds, 1),
     p50: round(percentile(run.durations, 0.5) ?? 0, 1),

@@ -1,0 +1,3 @@
+{
+  "notes": "Four or five tightly set lines of notes: the box holds three, and the top of the fourth line, its capitals and ascenders, shows inside the box because the leading is smaller than the descent; Typst clips the rest and so do the runtimes, line by line, glyph for glyph. Nothing of the fifth line shows."
+}

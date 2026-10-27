@@ -1,0 +1,261 @@
+{
+  "student": "Charles Babbage",
+  "programme": "BSc Mathematics and Computation",
+  "courses": [
+    {
+      "code": "MATH100",
+      "title": "Calculus I",
+      "credits": 5,
+      "grade": "C+"
+    },
+    {
+      "code": "MATH103",
+      "title": "Linear Algebra",
+      "credits": 8,
+      "grade": "A-"
+    },
+    {
+      "code": "MATH106",
+      "title": "Introduction to Analytical Engines",
+      "credits": 6,
+      "grade": "C+"
+    },
+    {
+      "code": "MATH109",
+      "title": "Discrete Mathematics, with Seminars on the History of the Subject and a Supervised Project",
+      "credits": 6,
+      "grade": "C+"
+    },
+    {
+      "code": "MATH112",
+      "title": "Probability and Statistics",
+      "credits": 5,
+      "grade": "C+"
+    },
+    {
+      "code": "MATH115",
+      "title": "Real Analysis: an Extended Course over Two Terms with Weekly Problem Classes, a Laboratory Component and a Written Dissertation",
+      "credits": 5,
+      "grade": "B"
+    },
+    {
+      "code": "MATH118",
+      "title": "Abstract Algebra",
+      "credits": 6,
+      "grade": "C+"
+    },
+    {
+      "code": "MATH121",
+      "title": "Numerical Methods",
+      "credits": 5,
+      "grade": "A-"
+    },
+    {
+      "code": "MATH124",
+      "title": "Topology",
+      "credits": 8,
+      "grade": "B"
+    },
+    {
+      "code": "MATH127",
+      "title": "Complex Analysis",
+      "credits": 8,
+      "grade": "C+"
+    },
+    {
+      "code": "MATH130",
+      "title": "Differential Equations, with Seminars on the History of the Subject and a Supervised Project",
+      "credits": 6,
+      "grade": "B"
+    },
+    {
+      "code": "MATH133",
+      "title": "Graph Theory",
+      "credits": 8,
+      "grade": "A-"
+    },
+    {
+      "code": "MATH136",
+      "title": "Number Theory",
+      "credits": 5,
+      "grade": "A-"
+    },
+    {
+      "code": "MATH139",
+      "title": "Logic and Set Theory",
+      "credits": 8,
+      "grade": "B"
+    },
+    {
+      "code": "MATH142",
+      "title": "Mathematical Modelling",
+      "credits": 8,
+      "grade": "A"
+    },
+    {
+      "code": "MATH145",
+      "title": "Optimisation",
+      "credits": 8,
+      "grade": "A"
+    },
+    {
+      "code": "MATH148",
+      "title": "Cryptography: an Extended Course over Two Terms with Weekly Problem Classes, a Laboratory Component and a Written Dissertation",
+      "credits": 5,
+      "grade": "C+"
+    },
+    {
+      "code": "MATH151",
+      "title": "Measure Theory, with Seminars on the History of the Subject and a Supervised Project",
+      "credits": 5,
+      "grade": "B+"
+    },
+    {
+      "code": "MATH154",
+      "title": "Functional Analysis",
+      "credits": 5,
+      "grade": "B+"
+    },
+    {
+      "code": "MATH157",
+      "title": "History of Mathematics",
+      "credits": 6,
+      "grade": "C+"
+    },
+    {
+      "code": "MATH160",
+      "title": "Calculus I",
+      "credits": 8,
+      "grade": "B"
+    },
+    {
+      "code": "MATH163",
+      "title": "Linear Algebra",
+      "credits": 8,
+      "grade": "B"
+    },
+    {
+      "code": "MATH166",
+      "title": "Introduction to Analytical Engines",
+      "credits": 6,
+      "grade": "C+"
+    },
+    {
+      "code": "MATH169",
+      "title": "Discrete Mathematics",
+      "credits": 6,
+      "grade": "A-"
+    },
+    {
+      "code": "MATH172",
+      "title": "Probability and Statistics, with Seminars on the History of the Subject and a Supervised Project",
+      "credits": 6,
+      "grade": "A"
+    },
+    {
+      "code": "MATH175",
+      "title": "Real Analysis",
+      "credits": 5,
+      "grade": "A-"
+    },
+    {
+      "code": "MATH178",
+      "title": "Abstract Algebra",
+      "credits": 6,
+      "grade": "A-"
+    },
+    {
+      "code": "MATH181",
+      "title": "Numerical Methods: an Extended Course over Two Terms with Weekly Problem Classes, a Laboratory Component and a Written Dissertation",
+      "credits": 6,
+      "grade": "B"
+    },
+    {
+      "code": "MATH184",
+      "title": "Topology",
+      "credits": 8,
+      "grade": "B+"
+    },
+    {
+      "code": "MATH187",
+      "title": "Complex Analysis",
+      "credits": 6,
+      "grade": "C+"
+    },
+    {
+      "code": "MATH190",
+      "title": "Differential Equations",
+      "credits": 6,
+      "grade": "C+"
+    },
+    {
+      "code": "MATH193",
+      "title": "Graph Theory, with Seminars on the History of the Subject and a Supervised Project",
+      "credits": 6,
+      "grade": "C+"
+    },
+    {
+      "code": "MATH196",
+      "title": "Number Theory",
+      "credits": 8,
+      "grade": "B"
+    },
+    {
+      "code": "MATH199",
+      "title": "Logic and Set Theory",
+      "credits": 8,
+      "grade": "A-"
+    },
+    {
+      "code": "MATH202",
+      "title": "Mathematical Modelling",
+      "credits": 6,
+      "grade": "A"
+    },
+    {
+      "code": "MATH205",
+      "title": "Optimisation",
+      "credits": 6,
+      "grade": "C+"
+    },
+    {
+      "code": "MATH208",
+      "title": "Cryptography",
+      "credits": 8,
+      "grade": "A-"
+    },
+    {
+      "code": "MATH211",
+      "title": "Measure Theory",
+      "credits": 8,
+      "grade": "B+"
+    },
+    {
+      "code": "MATH214",
+      "title": "Functional Analysis: an Extended Course over Two Terms with Weekly Problem Classes, a Laboratory Component and a Written Dissertation",
+      "credits": 8,
+      "grade": "C+"
+    },
+    {
+      "code": "MATH217",
+      "title": "History of Mathematics",
+      "credits": 8,
+      "grade": "A"
+    },
+    {
+      "code": "MATH220",
+      "title": "Calculus I",
+      "credits": 8,
+      "grade": "A-"
+    },
+    {
+      "code": "MATH223",
+      "title": "Linear Algebra",
+      "credits": 8,
+      "grade": "C+"
+    }
+  ],
+  "total_credits": 279,
+  "gpa": "3.4",
+  "honours": false
+}

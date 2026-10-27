@@ -1,0 +1,293 @@
+{
+  "portal": {
+    "text": "Open the student portal",
+    "href": "https://portal.example.edu/login",
+    "alt": "Student portal sign-in"
+  },
+  "notes": {
+    "text": "The full policy, with the appeals procedure and the deadlines for each term, is published on the faculty pages and updated every September.",
+    "href": "https://example.org/policy/appeals"
+  },
+  "courses": [
+    {
+      "title": "Algebra 1",
+      "resource": {
+        "text": "Problem sets",
+        "href": "https://example.org/course/1/sets"
+      }
+    },
+    {
+      "title": "Analysis 2",
+      "resource": {
+        "text": "Lecture notes",
+        "href": "https://example.org/course/2/notes"
+      }
+    },
+    {
+      "title": "Geometry 3",
+      "resource": {
+        "text": "Reading list",
+        "href": "https://example.org/course/3/reading"
+      }
+    },
+    {
+      "title": "Topology 4",
+      "resource": {
+        "text": "Past papers",
+        "href": "https://example.org/course/4/papers"
+      }
+    },
+    {
+      "title": "Number theory 5",
+      "resource": {
+        "text": "Problem sets",
+        "href": "https://example.org/course/5/sets"
+      }
+    },
+    {
+      "title": "Statistics 6",
+      "resource": {
+        "text": "Lecture notes",
+        "href": "https://example.org/course/6/notes"
+      }
+    },
+    {
+      "title": "Logic 7",
+      "resource": {
+        "text": "Reading list",
+        "href": "https://example.org/course/7/reading"
+      }
+    },
+    {
+      "title": "Combinatorics 8",
+      "resource": {
+        "text": "Past papers",
+        "href": "https://example.org/course/8/papers"
+      }
+    },
+    {
+      "title": "Mechanics 9",
+      "resource": {
+        "text": "Problem sets",
+        "href": "https://example.org/course/9/sets"
+      }
+    },
+    {
+      "title": "Optics 10",
+      "resource": {
+        "text": "Lecture notes",
+        "href": "https://example.org/course/10/notes"
+      }
+    },
+    {
+      "title": "Algebra 11",
+      "resource": {
+        "text": "Reading list",
+        "href": "https://example.org/course/11/reading"
+      }
+    },
+    {
+      "title": "Analysis 12",
+      "resource": {
+        "text": "Past papers",
+        "href": "https://example.org/course/12/papers"
+      }
+    },
+    {
+      "title": "Geometry 13",
+      "resource": {
+        "text": "Problem sets",
+        "href": "https://example.org/course/13/sets"
+      }
+    },
+    {
+      "title": "Topology 14",
+      "resource": {
+        "text": "Lecture notes",
+        "href": "https://example.org/course/14/notes"
+      }
+    },
+    {
+      "title": "Number theory 15",
+      "resource": {
+        "text": "Reading list",
+        "href": "https://example.org/course/15/reading"
+      }
+    },
+    {
+      "title": "Statistics 16",
+      "resource": {
+        "text": "Past papers",
+        "href": "https://example.org/course/16/papers"
+      }
+    },
+    {
+      "title": "Logic 17",
+      "resource": {
+        "text": "Problem sets",
+        "href": "https://example.org/course/17/sets"
+      }
+    },
+    {
+      "title": "Combinatorics 18",
+      "resource": {
+        "text": "Lecture notes",
+        "href": "https://example.org/course/18/notes"
+      }
+    },
+    {
+      "title": "Mechanics 19",
+      "resource": {
+        "text": "Reading list",
+        "href": "https://example.org/course/19/reading"
+      }
+    },
+    {
+      "title": "Optics 20",
+      "resource": {
+        "text": "Past papers",
+        "href": "https://example.org/course/20/papers"
+      }
+    },
+    {
+      "title": "Algebra 21",
+      "resource": {
+        "text": "Problem sets",
+        "href": "https://example.org/course/21/sets"
+      }
+    },
+    {
+      "title": "Analysis 22",
+      "resource": {
+        "text": "Lecture notes",
+        "href": "https://example.org/course/22/notes"
+      }
+    },
+    {
+      "title": "Geometry 23",
+      "resource": {
+        "text": "Reading list",
+        "href": "https://example.org/course/23/reading"
+      }
+    },
+    {
+      "title": "Topology 24",
+      "resource": {
+        "text": "Past papers",
+        "href": "https://example.org/course/24/papers"
+      }
+    },
+    {
+      "title": "Number theory 25",
+      "resource": {
+        "text": "Problem sets",
+        "href": "https://example.org/course/25/sets"
+      }
+    },
+    {
+      "title": "Statistics 26",
+      "resource": {
+        "text": "Lecture notes",
+        "href": "https://example.org/course/26/notes"
+      }
+    },
+    {
+      "title": "Logic 27",
+      "resource": {
+        "text": "Reading list",
+        "href": "https://example.org/course/27/reading"
+      }
+    },
+    {
+      "title": "Combinatorics 28",
+      "resource": {
+        "text": "Past papers",
+        "href": "https://example.org/course/28/papers"
+      }
+    },
+    {
+      "title": "Mechanics 29",
+      "resource": {
+        "text": "Problem sets",
+        "href": "https://example.org/course/29/sets"
+      }
+    },
+    {
+      "title": "Optics 30",
+      "resource": {
+        "text": "Lecture notes",
+        "href": "https://example.org/course/30/notes"
+      }
+    },
+    {
+      "title": "Algebra 31",
+      "resource": {
+        "text": "Reading list",
+        "href": "https://example.org/course/31/reading"
+      }
+    },
+    {
+      "title": "Analysis 32",
+      "resource": {
+        "text": "Past papers",
+        "href": "https://example.org/course/32/papers"
+      }
+    },
+    {
+      "title": "Geometry 33",
+      "resource": {
+        "text": "Problem sets",
+        "href": "https://example.org/course/33/sets"
+      }
+    },
+    {
+      "title": "Topology 34",
+      "resource": {
+        "text": "Lecture notes",
+        "href": "https://example.org/course/34/notes"
+      }
+    },
+    {
+      "title": "Number theory 35",
+      "resource": {
+        "text": "Reading list",
+        "href": "https://example.org/course/35/reading"
+      }
+    },
+    {
+      "title": "Statistics 36",
+      "resource": {
+        "text": "Past papers",
+        "href": "https://example.org/course/36/papers"
+      }
+    },
+    {
+      "title": "Logic 37",
+      "resource": {
+        "text": "Problem sets",
+        "href": "https://example.org/course/37/sets"
+      }
+    },
+    {
+      "title": "Combinatorics 38",
+      "resource": {
+        "text": "Lecture notes",
+        "href": "https://example.org/course/38/notes"
+      }
+    },
+    {
+      "title": "Mechanics 39",
+      "resource": {
+        "text": "Reading list",
+        "href": "https://example.org/course/39/reading"
+      }
+    },
+    {
+      "title": "Optics 40",
+      "resource": {
+        "text": "Past papers",
+        "href": "https://example.org/course/40/papers"
+      }
+    }
+  ]
+}
