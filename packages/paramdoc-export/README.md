@@ -13,8 +13,7 @@ the experiment's `check.sh` compare them). The document format is unstable until
 runtime version that matches the exporter that wrote it.
 
 The dialect, the contract and what is refused are described in `experiments/paramdoc/HANDOVER.md` and
-`GAPS.md` in the repository; the runtime that reads the documents is `experiments/paramdoc/ts/runtime.ts`
-(a package of its own follows).
+`GAPS.md` in the repository; the runtime that reads the documents is `@typfolio/paramdoc`.
 
 ## Command line
 
