@@ -6,6 +6,8 @@ node_modules/
 packages/*/dist/
 packages/wasm/generated/*
 !packages/wasm/generated/.gitkeep
+packages/paramdoc-export/generated/*
+!packages/paramdoc-export/generated/.gitkeep
 *.tgz
 .DS_Store
 .idea/

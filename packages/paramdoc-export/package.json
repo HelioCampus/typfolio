@@ -1,0 +1,41 @@
+{
+  "name": "@typfolio/paramdoc-export",
+  "version": "0.0.1",
+  "description": "Experimental: exports a Typst template in the paramdoc slot dialect as a parametric document, with the proof that nothing outside its slots depends on the data; the Typst compiler built to WebAssembly, no Rust needed",
+  "type": "module",
+  "license": "Apache-2.0",
+  "keywords": ["typst", "pdf", "pdf-ua", "wasm", "webassembly", "template", "paramdoc"],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/HelioCampus/typfolio.git",
+    "directory": "packages/paramdoc-export"
+  },
+  "homepage": "https://github.com/HelioCampus/typfolio#readme",
+  "bugs": { "url": "https://github.com/HelioCampus/typfolio/issues" },
+  "files": [
+    "dist",
+    "generated",
+    "README.md"
+  ],
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./node": {
+      "types": "./dist/node.d.ts",
+      "import": "./dist/node.js"
+    },
+    "./paramdoc_export.wasm": "./generated/paramdoc_export.wasm",
+    "./provenance": "./generated/provenance.json"
+  },
+  "bin": {
+    "paramdoc-export": "./dist/cli.js"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "engines": { "node": ">=22" },
+  "sideEffects": false
+}

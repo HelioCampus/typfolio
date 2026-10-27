@@ -456,6 +456,25 @@ Defaults: fonts from `../../fixtures/fonts`, output under `../../.build/paramdoc
 
 ## Status log
 
+- **The exporter as a library, in wasm, as a Node package (2026-10-27).** The first step of the release plan:
+  template authors need no Rust. `export/src/main.rs` became `lib.rs` plus a thin command line: everything in
+  memory (template files, data, fonts and references in; `doc.json`, fonts, images, `baseline.pdf`, references
+  and fuzz samples out, with the log), no clock, no arguments, no standard output, and a C ABI (`ffi`) with one
+  framed call. Built for wasm32 with the workspace's release profile (`./build-export-wasm.sh`):
+  25,355,603 B raw, 8,909,445 B gzipped, in the class of the compiler package. `packages/paramdoc-export`
+  (`@typfolio/paramdoc-export` 0.0.1, experimental) wraps it: `createExporter` (anywhere WebAssembly runs),
+  `exportDirectory`, `loadWasm` and a `paramdoc-export` command line mirroring the Rust one, with `provenance.json`
+  (commit, Typst and Rust versions, profile, SHA-256). Proof: the package's tests export the report fixture
+  through the wasm and compare `doc.json` and the subset fonts byte for byte with the checked-in native export,
+  check a refusal's message, the directory flow and `plainPdf` (the upstream report's reproduction fails with
+  Typst's own message); `check.sh` exports `wrap` through the wasm command line and compares `doc.json`, the
+  references and a font with the native export. Found on the way: Typst's memoization caches outlive an export
+  in one process and hand back frames holding the previous export's font objects, so the exporter evicts them
+  (`comemo::evict(0)`) at the start of every export; the command line never saw it (one export per process).
+  Timings in wasm (Node 24, M-series Mac): instantiate 18 ms; `wrap` without fuzz 62 ms, with 100 fuzz samples
+  and two references 328 ms; `charset` with 100 fuzz samples 427 ms; the report (a flow document with variants)
+  with 100 fuzz samples 4.7 s. The native command line is unchanged in behaviour and
+  output (the whole proof, 192 checks, and the checked-in report document, byte for byte).
 - **Soft hyphens, the middle dot and clipped lines (2026-10-26).** The two ports M12 left open, and a gap the
   new fuzz found. Soft hyphens (G44): no glyph of their own (Typst shapes with `REMOVE_DEFAULT_IGNORABLES`), a
   break opportunity after them, and where a line's full text ends on one, at the end of the text too, the

@@ -53,6 +53,14 @@ if cargo run -q -p paramdoc-export -- fixtures/rotatedlink --fuzz 1 > "$B/.last.
 if cargo run -q -p paramdoc-export -- fixtures/smooth --fuzz 1 > "$B/.last.log" 2>&1; then fail "export smooth: image(scaling: smooth) was accepted"; else ok "export smooth: refused ($(grep -o 'scaling: "smooth") is not supported' "$B/.last.log" | head -1))"; fi
 run "export wrapfuzz: 0 leaks, Typst references for $SAMPLES random samples of the default repertoire" cargo run -q -p paramdoc-export -- fixtures/wrapfuzz --fuzz "$FUZZ" --fuzz-references "$SAMPLES" --reference fixtures/wrapfuzz/data.json
 run "export charset: Turkish, Greek and Cyrillic proven, Typst references for $SAMPLES random samples" cargo run -q -p paramdoc-export -- fixtures/charset --fuzz "$FUZZ" --fuzz-references "$SAMPLES" --reference fixtures/charset/data.json
+# The exporter's wasm build (packages/paramdoc-export, `./build-export-wasm.sh`) must export what the native
+# one exports, byte for byte; skipped when it or the package's build is missing.
+if [ -f ../../packages/paramdoc-export/generated/paramdoc_export.wasm ] && [ -f ../../packages/paramdoc-export/dist/cli.js ]; then
+  if node ../../packages/paramdoc-export/dist/cli.js fixtures/wrap --fonts ../../fixtures/fonts --out "$B/wrap-wasm" --fuzz 5 --reference fixtures/wrap/data.json --reference fixtures/wrap/data-hyphens.json > "$B/.last.log" 2>&1 \
+     && cmp -s "$B/wrap-wasm/doc.json" "$B/wrap/doc.json" && cmp -s "$B/wrap-wasm/reference.json" "$B/wrap/reference.json" && cmp -s "$B/wrap-wasm/reference-data-hyphens.json" "$B/wrap/reference-data-hyphens.json" && cmp -s "$B/wrap-wasm/reference-data-hyphens.pdf" "$B/wrap/reference-data-hyphens.pdf" && cmp -s "$B/wrap-wasm/fonts/LibertinusSerif-Regular.subset.otf" "$B/wrap/fonts/LibertinusSerif-Regular.subset.otf"; then
+    ok "export wrap through the wasm exporter in Node: doc.json, references and fonts byte-identical to the native export"
+  else fail "export wrap through the wasm exporter in Node differs from the native export"; sed 's/^/        /' "$B/.last.log" | tail -5; fi
+else skip "the exporter's wasm build or packages/paramdoc-export/dist is missing (./build-export-wasm.sh, npm run build)"; fi
 for dir in documents/*/; do
   f=$(basename "$dir")
   [ -f "$B/$f/doc.json" ] || cargo run -q -p paramdoc-export -- "fixtures/$f" --fuzz 1 > /dev/null 2>&1

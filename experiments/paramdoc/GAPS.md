@@ -159,7 +159,8 @@ with the reason.
   for itself (`paramdoc.worker.ts`, the pool in `batch.ts`).
 - **G38 Export as a Vite plugin** fed by `defineTemplate`, with the schema's `maxLength` and `pattern` sizing
   slots and repertoires. Status: missing; this is where the experiment meets the real packages. Design with the
-  maintainers first.
+  maintainers first. Since 2026-10-27 the exporter itself runs in Node without Rust (`packages/paramdoc-export`,
+  the Rust crate built to wasm, byte-identical to the native export), so the plugin has its tool.
 - **G39 The wasm C ABI takes no image files.** Status: missing. A document with static images cannot be opened
   through `paramdoc_open`; the Rust and TypeScript APIs can.
 - **G40 The Rust runtime deflates every stream per document**, which makes it slower than the TypeScript one.

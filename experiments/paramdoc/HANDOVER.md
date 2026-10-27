@@ -44,12 +44,12 @@ Commits, oldest first:
 |---|---|
 | `PLAN.md` | Principle, architecture, milestones, findings, measurements, re-evaluations. Read it first. |
 | `GAPS.md` | The one inventory of what paramdoc cannot do yet, for application developers: status (refused at export, refused at fill, silent, missing, rule), workaround, fix and cost. Add every new gap there; the open-items list below is only the order. |
-| `check.sh` | The whole proof below as one script: build, exports with fuzzing, checked-in documents against a fresh export, both runtimes against Typst and each other, pixels, text, structure, veraPDF, and with `DEMO_URL` set the demo page. 191 checks, a few minutes. |
+| `check.sh` | The whole proof below as one script: build, exports with fuzzing, checked-in documents against a fresh export, the wasm exporter against the native one, both runtimes against Typst and each other, pixels, text, structure, veraPDF, and with `DEMO_URL` set the demo page. 192 checks, a few minutes. |
 | `export-documents.sh` | Exports a fixture and copies what a browser runtime needs, `doc.json` and the subset fonts, into `documents/<fixture>/`. |
 | `documents/report/` | The report fixture exported, checked in (152 kB) because the demo page cannot run the exporter at build time. Regenerate after changing the fixture, the dialect or the exporter. |
 | `Cargo.toml`, `Cargo.lock`, `.cargo/config.toml` | Rust workspace; build output goes to `../../.build/paramdoc-target` (gitignored), never in-tree. |
 | `ir/` | The parametric document format (`doc.json`), serde types, version 8 (links and link-slot geometry since 2026-10-26), plus `geometry`: the ports of Typst's rounded rectangle and image placement both the exporter and the runtimes use. |
-| `export/` | `paramdoc-export`: links Typst 0.15.1 as a library (crates.io), compiles a fixture with sample data, walks the frames, exports the document, subsets fonts, dumps Typst's layout as a reference, fuzzes the data and diffs the contract. |
+| `export/` | `paramdoc-export`: links Typst 0.15.1 as a library (crates.io), compiles a fixture with sample data, walks the frames, exports the document, subsets fonts, dumps Typst's layout as a reference and fuzzes the data. Since 2026-10-27 a library (`src/lib.rs`: everything in memory, files in and files out, `export` and `plain_pdf`, the C ABI `ffi` for the wasm build) and a thin command line over it (`src/main.rs`); `./build-export-wasm.sh` builds the library for wasm32 (25 MB, 9 MB gzipped) into `packages/paramdoc-export/generated/`. |
 | `runtime/` | `paramdoc-runtime`: Rust library + CLI (`fill`, `bench`) + C ABI (`paramdoc_open/render/close`, `paramdoc_fill`) for the wasm32 cdylib build. Depends on pdf-writer, flate2, serde_json, sha2 only. |
 | `ts/runtime.ts`, `ts/cli.ts` | The same runtime in dependency-free erasable TypeScript; Node 22 runs it with `--experimental-strip-types`; Vite bundles it with the demo's worker into 39 kB minified, 15 kB gzipped (16 kB before images, bars and links). |
 | `fixtures/*/` | Templates in the slot dialect, each with `paramdoc.typ` (the dialect helper, identical copies), `main.typ`, `data.json`: `certificate` (fixed page), `policies` (overflow policies), `leak` (deliberately broken, must fail the check), `transcript` (flow: table bands, 42-row `data-long.json`), `report` (the worker-batch benchmark's report in the dialect), `wrap` and `wrapfuzz` (wrapping slots, one data case per breaking rule, random texts), `justify` (the `wrap` template with every wrapping slot justified, the same data cases), `figures` (image slots), `links` (static links and link slots, 40-row `data-long.json`), `charset` (a declared Turkish, Greek and Cyrillic repertoire under `lang: "tr"`, random texts), `leading` (a clipping slot whose next line shows its top inside the box), and the ones that must fail the export: `linkbad` (an internal link), `charsetbad` (an Arabic letter in a charset), `stylebad` (a show rule recolouring part of a slot), `rotatedlink`, `smooth` (`scaling: "smooth"`). |
@@ -59,7 +59,9 @@ Commits, oldest first:
 ## How to prove it still works (do this first after any change)
 
 ```sh
-cd experiments/paramdoc && ./check.sh      # 191 checks, a few minutes after the first build; FUZZ=20 ./check.sh is quicker
+cd experiments/paramdoc && ./check.sh      # 192 checks, a few minutes after the first build; FUZZ=20 ./check.sh is quicker
+# With ./build-export-wasm.sh run and npm run build done, check.sh also exports through the wasm exporter in Node
+# (packages/paramdoc-export) and compares with the native export byte for byte; otherwise it says SKIP.
 # After a runtime change, measure what it cost, as the status log in PLAN.md records per milestone: the sizes
 # (the release wasm; the demo's worker bundle through vite build) and the throughput (ts/cli.ts bench and
 # paramdoc-runtime bench on documents/report with notes/bench/gen-inputs.mjs's 1000 inputs, --repeat 3).
@@ -230,7 +232,10 @@ through link slots (`slot(name, (text:, href:))`), with rectangles equal to typs
    use it. A compact binary form of `doc.json` if its 87 kB raw (6.5 kB gzip) ever matters.
 2. **Export as a Vite plugin** fed by `defineTemplate`, with the schema's `maxLength` and `pattern` sizing
    slots and setting repertoires. This is where the experiment would meet the real packages; design it with the
-   repository's maintainers before writing it.
+   repository's maintainers before writing it. Since 2026-10-27 the exporter runs in Node without Rust:
+   `packages/paramdoc-export` (`@typfolio/paramdoc-export`, experimental) wraps its wasm build with a library
+   API (`createExporter`, `exportDirectory`) and a command line, byte-identical to the native export; the plugin
+   is what is left of this item.
 3. The Rust runtime still deflates every stream per document, which is why it is slower than the TypeScript
    one; writing small streams uncompressed and caching the font streams would even them out.
 4. **Justified wrapping slots**: done (M11, 2026-10-26). `slot(..., justify: true)`; the breaks do not move
