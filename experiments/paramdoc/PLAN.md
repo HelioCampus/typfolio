@@ -456,19 +456,23 @@ Defaults: fonts from `../../fixtures/fonts`, output under `../../.build/paramdoc
 
 ## Status log
 
-- **The runtime as a package (2026-10-27).** `packages/paramdoc` (`@typfolio/paramdoc` 0.0.1, experimental):
-  `ts/runtime.ts` moved to `packages/paramdoc/src/runtime.ts` and the experiment's file re-exports it, so the
-  command line, `check.sh` and the demo's worker prove the package's code unchanged (`check.sh` 192 checks,
-  191 passed, the demo check skipped; the worker bundle 39,143 B / 15,112 B gzipped, +115 B for the
-  re-export). The public API (`src/index.ts`): `createRuntime({ document, fonts, images })` returns the parsed
-  document, the format version, the names the data binds to (slots, bars, image slots, bands) and
-  `fill(data)` with the PDF and the page count; `ParamdocError` carries `code: 'document'` (a version this
-  runtime does not read, a font whose hash is not the document's, a missing image) or `'fill'` (data Typst
-  would lay out differently, refused with the slot and the fix). `@typfolio/paramdoc/internal` re-exports the
-  runtime as the proof uses it (`Runtime`, `compare`, the types). Tests: the report document filled twice to
-  the same bytes, a declared PDF/UA-1, a float and an Arabic comment refused with their messages, swapped fonts
-  and an old version refused, the internal trace compared with itself and with a moved copy. Both new packages
-  are in the lock file, the root build, test and pack scripts. Notes in `packages/paramdoc/README.md`.
+- **Released: `@typfolio/paramdoc` 0.0.1 and `@typfolio/paramdoc-export` 0.0.1 (2026-10-27).** The branch merged as
+  pull request 12 (`fd917be`); the release by hand from `main` (`d75cd06`), because the release workflow cannot run
+  while the GitHub account is locked for billing (the pull request's checks never started either). The two
+  changesets were applied to 0.0.0 so that the first version is 0.0.1 with a changelog entry; the two pending
+  `@typfolio/dev-tools` changesets were held aside for the next release; the exporter's README now names the
+  runtime package. Verified before publishing: `build-export-wasm.sh --check` (the same hash, the provenance naming
+  the release commit), `npm ci`, the build, `tools/check-package.ts`, `npm test` (231 passed), `npm run
+  test:packed`, and the exporter's tarball installed in a scratch project exporting the report byte-identical to
+  `documents/report`. Published with `npx changeset publish` (2FA by web login in a terminal; npm answers 202 now
+  and the packages resolved about two minutes later; its normalizer warned that `bin` `./dist/cli.js` "was invalid
+  and removed" but only rewrote it to `dist/cli.js`, which the registry shows). Verified from the registry with a
+  fresh install: the installed `paramdoc-export` exports the report byte-identical, the installed runtime fills it
+  (one page, 66,793 B) and refuses the float. The tags `@typfolio/paramdoc@0.0.1` and
+  `@typfolio/paramdoc-export@0.0.1` are pushed, each with a GitHub release made from its changelog (the
+  repository's first; the earlier tags have none). Left for the pipeline's return: the trusted-publisher setup
+  for both packages (its validation window is two days, so not before the workflow runs again), and
+  `test:packed` covering the exporter package.
 - **The worker client, and the demo on the packages (2026-10-27).** G37 closed in `packages/paramdoc`:
   `src/protocol.ts` (the messages both ways, `open` with the document, fonts and images by structured clone,
   `fill` by id, `ready`/`result` with the PDF transferred/`failure` with a code, each decoded field by field),
@@ -495,6 +499,19 @@ Defaults: fonts from `../../fixtures/fonts`, output under `../../.build/paramdoc
   resolution; `tools/test-vite-builds.ts` (every example built, the static demo verified) passes; `check.sh`
   with `DEMO_URL` set to the dev server: 192 passed, 0 failed, 0 skipped, the demo step through headless
   Chromium "200 PDFs in 0.1 s on 4 workers with the paramdoc runtime (1955.0 per second)".
+- **The runtime as a package (2026-10-27).** `packages/paramdoc` (`@typfolio/paramdoc` 0.0.1, experimental):
+  `ts/runtime.ts` moved to `packages/paramdoc/src/runtime.ts` and the experiment's file re-exports it, so the
+  command line, `check.sh` and the demo's worker prove the package's code unchanged (`check.sh` 192 checks,
+  191 passed, the demo check skipped; the worker bundle 39,143 B / 15,112 B gzipped, +115 B for the
+  re-export). The public API (`src/index.ts`): `createRuntime({ document, fonts, images })` returns the parsed
+  document, the format version, the names the data binds to (slots, bars, image slots, bands) and
+  `fill(data)` with the PDF and the page count; `ParamdocError` carries `code: 'document'` (a version this
+  runtime does not read, a font whose hash is not the document's, a missing image) or `'fill'` (data Typst
+  would lay out differently, refused with the slot and the fix). `@typfolio/paramdoc/internal` re-exports the
+  runtime as the proof uses it (`Runtime`, `compare`, the types). Tests: the report document filled twice to
+  the same bytes, a declared PDF/UA-1, a float and an Arabic comment refused with their messages, swapped fonts
+  and an old version refused, the internal trace compared with itself and with a moved copy. Both new packages
+  are in the lock file, the root build, test and pack scripts. Notes in `packages/paramdoc/README.md`.
 - **The exporter as a library, in wasm, as a Node package (2026-10-27).** The first step of the release plan:
   template authors need no Rust. `export/src/main.rs` became `lib.rs` plus a thin command line: everything in
   memory (template files, data, fonts and references in; `doc.json`, fonts, images, `baseline.pdf`, references

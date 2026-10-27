@@ -13,11 +13,11 @@ and fixed-height repeating rows (forms, certificates, statements, transcripts, r
 flowing narrative documents. The boundary is precise and enforced by a build-time check.
 
 It started as an experiment wired into nothing. Since 2026-10-27 its runtime and its exporter are experimental
-packages (`packages/paramdoc` and `packages/paramdoc-export`, 0.0.x; the files here re-export or wrap them, so
-the proof in this folder covers the packages' code), and the performance demo page in `examples/pretext-hybrid`
-renders through `@typfolio/paramdoc`'s worker pool with the exported report document from here (see "The demo
-page" below). `AGENTS.md`'s rule that the compiler contract lives in `README.md` is untouched, and the existing
-packages are unchanged.
+packages (`packages/paramdoc` and `packages/paramdoc-export`, on npm as 0.0.1 since 2026-10-27; the files here
+re-export or wrap them, so the proof in this folder covers the packages' code), and the performance demo page in
+`examples/pretext-hybrid` renders through `@typfolio/paramdoc`'s worker pool with the exported report document
+from here (see "The demo page" below). `AGENTS.md`'s rule that the compiler contract lives in `README.md` is
+untouched, and the existing packages are unchanged.
 
 ## The branch
 
