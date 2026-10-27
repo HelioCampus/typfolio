@@ -16,12 +16,22 @@ function clampCount(value: number): number {
   return Math.max(1, Math.min(maxCount, Math.floor(value) || 1000));
 }
 
-export function BatchWorkbench() {
+/** The engine the URL asks for (`?engine=paramdoc`), the Typst compiler otherwise. */
+export function engineFromUrl(): Engine {
+  return new URLSearchParams(location.search).get('engine') === 'paramdoc' ? 'paramdoc' : 'typst';
+}
+
+interface BatchWorkbenchProps {
+  // The page owns the engine: its introduction changes with it.
+  readonly engine: Engine;
+  readonly onEngineChange: (engine: Engine) => void;
+}
+
+export function BatchWorkbench({ engine, onEngineChange }: BatchWorkbenchProps) {
   const [params] = useState(() => new URLSearchParams(location.search));
   const [workers, setWorkers] = useState(() => Math.max(1, Math.min(maxWorkers,
     Math.floor(Number(params.get('workers'))) || Math.min(4, cores - 1))));
   const [count, setCount] = useState(() => clampCount(Number(params.get('count') ?? 1000)));
-  const [engine, setEngine] = useState<Engine>(() => params.get('engine') === 'paramdoc' ? 'paramdoc' : 'typst');
   const [ua, setUa] = useState(true);
   const [keep, setKeep] = useState(true);
   const [follow, setFollow] = useState(true);
@@ -122,7 +132,7 @@ export function BatchWorkbench() {
           <span>Engine</span>
           <div className="toggle">
             {(['typst', 'paramdoc'] as const).map(choice => (
-              <button key={choice} type="button" aria-pressed={engine === choice} disabled={running} onClick={() => setEngine(choice)}
+              <button key={choice} type="button" aria-pressed={engine === choice} disabled={running} onClick={() => onEngineChange(choice)}
                 title={choice === 'paramdoc' ? 'Experimental: the report typeset once by Typst, filled in the browser without the compiler' : 'The Typst compiler in Web Workers'}>
                 {choice === 'typst' ? 'Typst compiler' : 'paramdoc runtime'}
               </button>
