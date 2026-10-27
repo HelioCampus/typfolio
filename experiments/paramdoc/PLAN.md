@@ -456,6 +456,19 @@ Defaults: fonts from `../../fixtures/fonts`, output under `../../.build/paramdoc
 
 ## Status log
 
+- **The runtime as a package (2026-10-27).** `packages/paramdoc` (`@typfolio/paramdoc` 0.0.1, experimental):
+  `ts/runtime.ts` moved to `packages/paramdoc/src/runtime.ts` and the experiment's file re-exports it, so the
+  command line, `check.sh` and the demo's worker prove the package's code unchanged (`check.sh` 192 checks,
+  191 passed, the demo check skipped; the worker bundle 39,143 B / 15,112 B gzipped, +115 B for the
+  re-export). The public API (`src/index.ts`): `createRuntime({ document, fonts, images })` returns the parsed
+  document, the format version, the names the data binds to (slots, bars, image slots, bands) and
+  `fill(data)` with the PDF and the page count; `ParamdocError` carries `code: 'document'` (a version this
+  runtime does not read, a font whose hash is not the document's, a missing image) or `'fill'` (data Typst
+  would lay out differently, refused with the slot and the fix). `@typfolio/paramdoc/internal` re-exports the
+  runtime as the proof uses it (`Runtime`, `compare`, the types). Tests: the report document filled twice to
+  the same bytes, a declared PDF/UA-1, a float and an Arabic comment refused with their messages, swapped fonts
+  and an old version refused, the internal trace compared with itself and with a moved copy. Both new packages
+  are in the lock file, the root build, test and pack scripts. Notes in `packages/paramdoc/README.md`.
 - **The exporter as a library, in wasm, as a Node package (2026-10-27).** The first step of the release plan:
   template authors need no Rust. `export/src/main.rs` became `lib.rs` plus a thin command line: everything in
   memory (template files, data, fonts and references in; `doc.json`, fonts, images, `baseline.pdf`, references
