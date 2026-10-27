@@ -469,6 +469,32 @@ Defaults: fonts from `../../fixtures/fonts`, output under `../../.build/paramdoc
   the same bytes, a declared PDF/UA-1, a float and an Arabic comment refused with their messages, swapped fonts
   and an old version refused, the internal trace compared with itself and with a moved copy. Both new packages
   are in the lock file, the root build, test and pack scripts. Notes in `packages/paramdoc/README.md`.
+- **The worker client, and the demo on the packages (2026-10-27).** G37 closed in `packages/paramdoc`:
+  `src/protocol.ts` (the messages both ways, `open` with the document, fonts and images by structured clone,
+  `fill` by id, `ready`/`result` with the PDF transferred/`failure` with a code, each decoded field by field),
+  `src/worker-runtime.ts` (`installParamdocWorker(scope)`: one `createRuntime` per worker, one PDF per fill) and
+  `src/worker.ts` (the module worker entry, `@typfolio/paramdoc/worker`), `src/client.ts` (`createWorkerClient`:
+  the pool of `@typfolio/workers`' client in plain code, lazily started workers, a FIFO queue with a limit,
+  per-fill timeouts that terminate the worker, `AbortSignal`s, idempotent `dispose`; cancelling a running fill
+  rejects it and keeps the worker, since a fill is sub-millisecond and a restart compresses the fonts again) and
+  `src/batch.ts` (`fillBatch`: at most `workerCount` in flight, outcomes in completion order, progress callbacks,
+  an early exit cancels what is in flight; `collectBatch` in input order). `ParamdocError` gained the codes
+  `worker`, `timeout`, `queue-full`, `aborted`, `disposed`. Tests (`test/client.test.ts`, 7): fake workers that
+  run the real worker runtime in-process with cloned and transferred messages, so the whole path is exercised in
+  Node: the same bytes as on the calling thread, lazy workers, a refusal as one job's error with the worker kept,
+  a document that cannot open, cancellation of a batch, a waiting and a running fill, a timeout that replaces the
+  worker, the queue limit, a crashed worker, a junk message, dispose, option checks. The demo page switched:
+  `batch.ts` renders the paramdoc engine through the package's client and batch, with the compiler's shape (one
+  `timed` helper for both), `paramdoc.worker.ts` and the page's pool are deleted, the captions name the package.
+  Sizes: the demo's worker chunk 41,310 B / 15,708 B gzipped (was 39,143 / 15,112: +2,167 / +596 for the
+  protocol and the worker runtime); the client and batch on the page 7.1 kB minified, 3.0 kB gzipped. The
+  page in the dev server, 200 reports on four workers through the built-in browser: 200 of 200, 2,103 per
+  second, 1 ms median fill, 20 ms cold start, 67 kB per PDF, no console errors. Root `npm test` (the build
+  reordered so the packages compile before the examples) 231 passed; `tools/test-packed.ts` now installs the
+  runtime's tarball and fills the report from it, with its declarations checked under NodeNext and node
+  resolution; `tools/test-vite-builds.ts` (every example built, the static demo verified) passes; `check.sh`
+  with `DEMO_URL` set to the dev server: 192 passed, 0 failed, 0 skipped, the demo step through headless
+  Chromium "200 PDFs in 0.1 s on 4 workers with the paramdoc runtime (1955.0 per second)".
 - **The exporter as a library, in wasm, as a Node package (2026-10-27).** The first step of the release plan:
   template authors need no Rust. `export/src/main.rs` became `lib.rs` plus a thin command line: everything in
   memory (template files, data, fonts and references in; `doc.json`, fonts, images, `baseline.pdf`, references
@@ -649,7 +675,9 @@ Defaults: fonts from `../../fixtures/fonts`, output under `../../.build/paramdoc
   has its spaces shrunk by a third before it overflows. Not covered: justified text, hyphenation, links (refused),
   East Asian and Hebrew rules, digits outside ASCII (letters to the breaker in both runtimes).
 - **Demo page (2026-10-24).** The performance page of `examples/pretext-hybrid` has an engine switch: the
-  TypeScript runtime runs in a pool of Web Workers (one runtime each, `src/batch/paramdoc.worker.ts`), fed by
+  TypeScript runtime runs in a pool of Web Workers (one runtime each; then the page's own
+  `src/batch/paramdoc.worker.ts`, since 2026-10-27 the package's worker through `@typfolio/paramdoc`'s
+  `createWorkerClient` and `fillBatch`), fed by
   the page's own synthetic inputs mapped to the slot names, from `documents/report/` (the report fixture exported
   and checked in, 152 kB). Same machine, same page, same conditions (headless Chromium through
   `notes/bench/bench-browser.mjs`, tab visible), 1000 reports, 10-core M-series Mac:

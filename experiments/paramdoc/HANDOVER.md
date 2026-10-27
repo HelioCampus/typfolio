@@ -12,10 +12,12 @@ be typeset once by Typst at build time and finished in the browser by a runtime 
 and fixed-height repeating rows (forms, certificates, statements, transcripts, record tables), and no for
 flowing narrative documents. The boundary is precise and enforced by a build-time check.
 
-It is an experiment: nothing here is wired into the Typfolio packages, no API is public, and `AGENTS.md`'s rule
-that the compiler contract lives in `README.md` is untouched. The packages are unchanged. The one place outside
-this folder that knows about it is the performance demo page in `examples/pretext-hybrid`, whose engine switch
-imports the TypeScript runtime and the exported report from here (see "The demo page" below).
+It started as an experiment wired into nothing. Since 2026-10-27 its runtime and its exporter are experimental
+packages (`packages/paramdoc` and `packages/paramdoc-export`, 0.0.x; the files here re-export or wrap them, so
+the proof in this folder covers the packages' code), and the performance demo page in `examples/pretext-hybrid`
+renders through `@typfolio/paramdoc`'s worker pool with the exported report document from here (see "The demo
+page" below). `AGENTS.md`'s rule that the compiler contract lives in `README.md` is untouched, and the existing
+packages are unchanged.
 
 ## The branch
 
@@ -51,7 +53,7 @@ Commits, oldest first:
 | `ir/` | The parametric document format (`doc.json`), serde types, version 8 (links and link-slot geometry since 2026-10-26), plus `geometry`: the ports of Typst's rounded rectangle and image placement both the exporter and the runtimes use. |
 | `export/` | `paramdoc-export`: links Typst 0.15.1 as a library (crates.io), compiles a fixture with sample data, walks the frames, exports the document, subsets fonts, dumps Typst's layout as a reference and fuzzes the data. Since 2026-10-27 a library (`src/lib.rs`: everything in memory, files in and files out, `export` and `plain_pdf`, the C ABI `ffi` for the wasm build) and a thin command line over it (`src/main.rs`); `./build-export-wasm.sh` builds the library for wasm32 (25 MB, 9 MB gzipped) into `packages/paramdoc-export/generated/`. |
 | `runtime/` | `paramdoc-runtime`: Rust library + CLI (`fill`, `bench`) + C ABI (`paramdoc_open/render/close`, `paramdoc_fill`) for the wasm32 cdylib build. Depends on pdf-writer, flate2, serde_json, sha2 only. |
-| `ts/runtime.ts`, `ts/cli.ts` | The same runtime in dependency-free erasable TypeScript; Node 22 runs it with `--experimental-strip-types`; Vite bundles it with the demo's worker into 39 kB minified, 15 kB gzipped (16 kB before images, bars and links). Since 2026-10-27 the source of truth is `packages/paramdoc/src/runtime.ts` (`@typfolio/paramdoc`); `ts/runtime.ts` re-exports it, so the command line, `check.sh` and the demo's worker keep proving the package's code. |
+| `ts/runtime.ts`, `ts/cli.ts` | The same runtime in dependency-free erasable TypeScript; Node 22 runs it with `--experimental-strip-types`; Vite bundles it into 39 kB minified, 15 kB gzipped (16 kB before images, bars and links; the package's worker with its protocol is 41 kB, 16 kB gzipped). Since 2026-10-27 the source of truth is `packages/paramdoc/src/runtime.ts` (`@typfolio/paramdoc`); `ts/runtime.ts` re-exports it, so the command line and `check.sh` keep proving the package's code, and the demo page runs the package's own worker. |
 | `fixtures/*/` | Templates in the slot dialect, each with `paramdoc.typ` (the dialect helper, identical copies), `main.typ`, `data.json`: `certificate` (fixed page), `policies` (overflow policies), `leak` (deliberately broken, must fail the check), `transcript` (flow: table bands, 42-row `data-long.json`), `report` (the worker-batch benchmark's report in the dialect), `wrap` and `wrapfuzz` (wrapping slots, one data case per breaking rule, random texts), `justify` (the `wrap` template with every wrapping slot justified, the same data cases), `figures` (image slots), `links` (static links and link slots, 40-row `data-long.json`), `charset` (a declared Turkish, Greek and Cyrillic repertoire under `lang: "tr"`, random texts), `leading` (a clipping slot whose next line shows its top inside the box), and the ones that must fail the export: `linkbad` (an internal link), `charsetbad` (an Arabic letter in a charset), `stylebad` (a show rule recolouring part of a slot), `rotatedlink`, `smooth` (`scaling: "smooth"`). |
 | `notes/wasm-size-report.md` | Where the 24 MB compiler's bytes go (crate by crate, data blobs, dependency paths). |
 | `notes/bench/` | Scripts: `gen-inputs.mjs` (1000 inputs from the repo's `data.ts`), `bench-wasm.mjs` (Rust wasm in Node), `bench-browser.mjs` (drives the repo's `/performance` page headlessly), `bench-ts.html` + `bench-ts-browser.mjs` (TypeScript runtime in Chromium), `inspect.mjs` (structure via the repo's `inspectPdf`), `ppmdiff.mjs` (pixel diff of two PPMs, used by `check.sh`), `write-all.mjs` (every benchmark input as a PDF, for veraPDF over the set). |
@@ -171,13 +173,16 @@ the same synthetic batch through this experiment. `?engine=paramdoc&count=1000&a
 
 - `examples/pretext-hybrid/src/batch/paramdoc.ts` downloads `documents/report/doc.json` and its fonts once per page
   (`?url` imports and an `import.meta.glob` over the fonts folder, so Vite bundles them; the static build and
-  `tools/check-static-demo.ts` pass), maps the page's `ReportInput` to the slot names the way `notes/bench/gen-inputs.mjs`
-  does, and wraps one Web Worker per runtime.
-- `examples/pretext-hybrid/src/batch/paramdoc.worker.ts` imports `ts/runtime.ts` from this folder by relative path,
-  creates the runtime on `init` and transfers one PDF back per `fill`.
-- `examples/pretext-hybrid/src/batch/batch.ts` runs the pool like the compiler pool: each worker takes the next
-  document until none is left, a worker's first job is its cold one, the PDF/UA-1 box is forced on (the runtime always
-  tags), and the runs panel shows one engine's runs at a time because the rates are an order of magnitude apart.
+  `tools/check-static-demo.ts` pass) and maps the page's `ReportInput` to the slot names the way `notes/bench/gen-inputs.mjs`
+  does.
+- `examples/pretext-hybrid/src/batch/batch.ts` renders through `@typfolio/paramdoc`'s `createWorkerClient` (one
+  module worker per runtime, started lazily, the document and fonts copied into each) and `fillBatch`, driven
+  exactly like the compiler's `createWorkerClient` and `compileBatch`: one `timed` helper marks a row as rendering
+  when its job is handed to the client and records its time when the result is back, a worker's first job is its
+  cold one, the PDF/UA-1 box is forced on (the runtime always tags), and the runs panel shows one engine's runs at a
+  time because the rates are an order of magnitude apart. Until 2026-10-27 the page had its own worker
+  (`paramdoc.worker.ts`) and pool; both are gone, the package's worker (`@typfolio/paramdoc/worker`, 41 kB,
+  16 kB gzipped as Vite ships it) took their place.
 
 Measured under the same conditions, headless Chromium through `notes/bench/bench-browser.mjs` with the tab visible,
 1000 reports on a 10-core M-series Mac (the compiler's time includes its 23 MB download on the first run):
@@ -227,9 +232,12 @@ through link slots (`slot(name, (text:, href:))`), with rectangles equal to typs
 `docs/2026-10-26-refusals.md`), and so are justified wrapping slots (M11, 2026-10-26, item 4 below and
 `docs/2026-10-26-justified-slots.md`).
 
-1. **A Worker wrapper** for the TypeScript runtime as something reusable: the demo page has one (`paramdoc.worker.ts`
-   and the pool in `batch.ts`), written for that page; moving it under `ts/` with a small API would let other pages
-   use it. A compact binary form of `doc.json` if its 87 kB raw (6.5 kB gzip) ever matters.
+1. **A Worker wrapper** for the TypeScript runtime as something reusable: done (2026-10-27, G37).
+   `@typfolio/paramdoc` has `createWorkerClient` and `fillBatch`/`collectBatch` with the shape and the rules of
+   `@typfolio/workers`' client, in plain code (the package has no dependencies), its own worker entry
+   (`@typfolio/paramdoc/worker`) and a message protocol checked on both sides; the demo page uses them and its
+   own worker is gone. Still open from this item: a compact binary form of `doc.json` if its 87 kB raw (6.5 kB
+   gzip) ever matters.
 2. **Export as a Vite plugin** fed by `defineTemplate`, with the schema's `maxLength` and `pattern` sizing
    slots and setting repertoires. This is where the experiment would meet the real packages; design it with the
    repository's maintainers before writing it. Since 2026-10-27 the exporter runs in Node without Rust:
@@ -238,8 +246,9 @@ through link slots (`slot(name, (text:, href:))`), with rectangles equal to typs
    is what is left of this item. The runtime is a package too since the same day: `packages/paramdoc`
    (`@typfolio/paramdoc`, experimental): `createRuntime({ document, fonts, images })`, `fill(data)`,
    `ParamdocError` with `code` `document` or `fill`, `names`; `@typfolio/paramdoc/internal` is the `Runtime`
-   class with its trace and `compare`, for the proof. Left for the release: the worker client (G37) and the
-   demo switched to the packages.
+   class with its trace and `compare`, for the proof. The worker client (G37) and the demo on the packages
+   followed the same day (item 1); the packed-consumer test (`tools/test-packed.ts`) installs the runtime's
+   tarball too.
 3. The Rust runtime still deflates every stream per document, which is why it is slower than the TypeScript
    one; writing small streams uncompressed and caching the font streams would even them out.
 4. **Justified wrapping slots**: done (M11, 2026-10-26). `slot(..., justify: true)`; the breaks do not move

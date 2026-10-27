@@ -1,9 +1,10 @@
 import { defineTemplate, type TemplateDefinition } from '@typfolio/core';
+import { createWorkerClient as createParamdocClient, fillBatch, type ParamdocWorkerClient } from '@typfolio/paramdoc';
 import { compileBatch, createWorkerClient, type PdfBatchJob, type PdfWorkerClient } from '@typfolio/workers';
 import { fontUrls, loadWasm } from '../assets.ts';
 import template from './report/main.typ?raw';
 import { fileName, reportInput, type ReportInput } from './data.ts';
-import { loadParamdocDocument, paramdocData, ParamdocWorker } from './paramdoc.ts';
+import { loadParamdocDocument, paramdocData } from './paramdoc.ts';
 
 const report: TemplateDefinition<ReportInput> = defineTemplate({
   files: { 'main.typ': template },
@@ -185,10 +186,11 @@ export class BatchRun {
   }
 
   /**
-   * The paramdoc runtime in its own workers, one runtime each: every worker takes the next document until
-   * none is left. A worker's first job waits for its start (the worker, then the runtime with its fonts), so
-   * it is the cold one, as with the compiler pool. The document and fonts download once per page, like the
-   * compiler module; that time counts too.
+   * The paramdoc runtime of `@typfolio/paramdoc` in its own worker pool, one runtime each, through the same
+   * batch shape as the compiler: `fillBatch` keeps `workerCount` fills in flight and yields outcomes as they
+   * settle. Workers start lazily, so a worker's first job waits for its start (the worker, then the runtime
+   * with its fonts) and is the cold one, as with the compiler pool. The document and fonts download once per
+   * page, like the compiler module; that time counts too.
    */
   private async runParamdoc(cancelledStartup: Promise<undefined>): Promise<void> {
     const { workers, keep } = this.settings;
@@ -197,63 +199,69 @@ export class BatchRun {
       this.cancelRest();
       return;
     }
-    const pool = Array.from({ length: workers }, () => new ParamdocWorker(exported));
-    this.cleanup = () => { for (const worker of pool) worker.terminate(); };
-    let next = 0;
-    await Promise.all(pool.map(async worker => {
-      let cold = true;
-      while (!this.aborted) {
-        const index = next++;
-        if (index >= this.inputs.length) return;
-        const at = performance.now();
-        this.rows[index] = { ...this.rows[index]!, state: 'rendering', cold };
-        cold = false;
-        this.notify();
-        try {
-          const pdf = await worker.fill(paramdocData(this.inputs[index]!));
-          const ms = performance.now() - at;
-          this.durations.push(ms);
-          this.firstAt ??= performance.now();
-          this.done++;
-          this.bytes += pdf.length;
-          if (keep) this.pdfs[index] = pdf;
-          this.rows[index] = { ...this.rows[index]!, state: 'done', ms, bytes: pdf.length };
-        } catch (error) {
-          this.failed++;
-          this.rows[index] = { ...this.rows[index]!, state: 'error', error: (error as Error).message };
-          console.error(this.rows[index]!.file, error);
-        }
-        this.notify();
+    const client = createParamdocClient({
+      document: { document: exported.doc, fonts: exported.fonts },
+      workerCount: workers,
+      timeoutMs: 60_000,
+    });
+    this.cleanup = () => client.dispose();
+    const jobs = this.inputs.map((input, index) => ({ id: index, data: paramdocData(input) }));
+    for await (const outcome of fillBatch(this.trackedParamdoc(client), jobs, { signal: this.controller.signal })) {
+      const row = this.rows[outcome.index]!;
+      if (outcome.status === 'success') {
+        this.firstAt ??= performance.now();
+        this.done++;
+        this.bytes += outcome.result.pdf.length;
+        if (keep) this.pdfs[outcome.index] = outcome.result.pdf;
+        this.rows[outcome.index] = { ...row, state: 'done', bytes: outcome.result.pdf.length };
+      } else if (outcome.status === 'error') {
+        this.failed++;
+        this.rows[outcome.index] = { ...row, state: 'error', error: outcome.error.message };
+        console.error(row.file, outcome.error);
+      } else {
+        this.cancelled++;
+        this.rows[outcome.index] = { ...row, state: 'cancelled' };
       }
-    }));
-    this.cancelRest();
+      this.notify();
+    }
   }
 
   /**
-   * Wraps the client to see when each job is handed to a worker: `compileBatch` submits at most `workerCount`
-   * jobs at a time, so a call here means "now rendering". Workers start lazily, one per concurrent job, so the
-   * first `workerCount` calls each land on a fresh worker and carry its start cost.
+   * Marks row `index` as rendering the moment its job is handed to the client, and records its time once the
+   * result is back. Both batch helpers submit at most `workerCount` jobs at a time, in input order, so a call
+   * here means "now rendering"; workers start lazily, one per concurrent job, so the first `workerCount` calls
+   * each land on a fresh worker and carry its start cost: those are the cold ones.
    */
+  private timed<T>(index: number, workerCount: number, work: () => Promise<T>): Promise<T> {
+    const cold = index < workerCount;
+    const at = performance.now();
+    this.rows[index] = { ...this.rows[index]!, state: 'rendering', cold };
+    this.notify();
+    return work().then(result => {
+      const ms = performance.now() - at;
+      this.durations.push(ms);
+      this.rows[index] = { ...this.rows[index]!, ms };
+      return result;
+    });
+  }
+
+  /** The compiler client, watched. The submission index is tracked here, without inspecting the worker's private request snapshot. */
   private tracked(client: PdfWorkerClient): PdfWorkerClient {
     let started = 0;
     return {
       workerCount: client.workerCount,
       dispose: () => client.dispose(),
-      compile: (request, options) => {
-        // The batch submits these valid jobs in input order and yields in completion order.
-        // Track the submission index without inspecting the worker's private request snapshot.
-        const index = started++;
-        const cold = index < client.workerCount;
-        const at = performance.now();
-        this.rows[index] = { ...this.rows[index]!, state: 'rendering', cold };
-        this.notify();
-        return client.compile(request, options).then(result => {
-          const ms = performance.now() - at;
-          this.durations.push(ms);
-          this.rows[index] = { ...this.rows[index]!, ms };
-          return result;
-        });
-      },
+      compile: (request, options) => this.timed(started++, client.workerCount, () => client.compile(request, options)),
+    };
+  }
+
+  /** The paramdoc client, watched the same way. */
+  private trackedParamdoc(client: ParamdocWorkerClient): ParamdocWorkerClient {
+    let started = 0;
+    return {
+      workerCount: client.workerCount,
+      dispose: () => client.dispose(),
+      fill: (data, options) => this.timed(started++, client.workerCount, () => client.fill(data, options)),
     };
   }
 

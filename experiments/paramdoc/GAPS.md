@@ -155,8 +155,14 @@ with the reason.
 
 ## Integration, runtimes and tooling
 
-- **G37 A reusable Worker wrapper** for the TypeScript runtime. Status: missing; the demo page has one written
-  for itself (`paramdoc.worker.ts`, the pool in `batch.ts`).
+- **G37 A reusable Worker wrapper** for the TypeScript runtime. Status: done (2026-10-27). `@typfolio/paramdoc`'s
+  `createWorkerClient` (a pool of module workers, one runtime each, started lazily; `fill` with a signal and a
+  timeout; `dispose`) and `fillBatch`/`collectBatch` have the shape and the rules of `@typfolio/workers`' client,
+  in plain code since the package has no dependencies; the worker is `@typfolio/paramdoc/worker`, the messages
+  are checked on both sides. One rule differs: cancelling a running fill rejects it and keeps the worker (a fill
+  is sub-millisecond, a restart compresses the fonts again); a timeout still terminates. The demo page's own
+  worker and pool are gone; it uses these. Node has no Web Worker: `workerFactory` is the way in, and the tests
+  drive the worker side in-process through it.
 - **G38 Export as a Vite plugin** fed by `defineTemplate`, with the schema's `maxLength` and `pattern` sizing
   slots and repertoires. Status: missing; this is where the experiment meets the real packages. Design with the
   maintainers first. Since 2026-10-27 the exporter itself runs in Node without Rust (`packages/paramdoc-export`,

@@ -1,7 +1,7 @@
 {
   "name": "@typfolio/paramdoc",
   "version": "0.0.1",
-  "description": "Experimental: fills a parametric document exported from a Typst template with data and writes tagged PDF/UA-1, without a compiler, in a few hundred microseconds; dependency-free, for browsers, workers and Node",
+  "description": "Experimental: fills a parametric document exported from a Typst template with data and writes tagged PDF/UA-1, without a compiler, in a few hundred microseconds; dependency-free, for browsers, Node and a pool of Web Workers",
   "type": "module",
   "license": "Apache-2.0",
   "keywords": ["typst", "pdf", "pdf-ua", "accessibility", "template", "browser", "web-worker", "paramdoc"],
@@ -25,11 +25,17 @@
     "./internal": {
       "types": "./dist/internal.d.ts",
       "import": "./dist/internal.js"
+    },
+    "./worker": {
+      "types": "./dist/worker.d.ts",
+      "import": "./dist/worker.js"
     }
   },
   "publishConfig": {
     "access": "public"
   },
   "engines": { "node": ">=22" },
-  "sideEffects": false
+  "sideEffects": [
+    "./dist/worker.js"
+  ]
 }

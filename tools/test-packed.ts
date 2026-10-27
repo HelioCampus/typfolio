@@ -11,7 +11,7 @@ const tarballPath = async (name: string) => {
   const { version } = JSON.parse(await readFile(join(root, 'packages', name, 'package.json'), 'utf8'));
   return join(root, `.build/typfolio-${name}-${version}.tgz`);
 };
-const tarballs = Object.fromEntries(await Promise.all(['wasm', 'core', 'workers', 'react', 'dev-tools'].map(async name => [name, await tarballPath(name)])));
+const tarballs = Object.fromEntries(await Promise.all(['wasm', 'core', 'workers', 'react', 'dev-tools', 'paramdoc'].map(async name => [name, await tarballPath(name)])));
 const run = (command: string, args: string[]) => {
   const r = spawnSync(command, args, { cwd: dir, stdio: 'inherit' });
   if (r.error || r.status !== 0) throw r.error ?? new Error(`${command} exited ${r.status}`);
@@ -23,6 +23,7 @@ run('npm', ['install', '--offline', '--ignore-scripts', '--no-audit', '--no-fund
   tarballs['workers'],
   tarballs['react'],
   tarballs['dev-tools'],
+  tarballs['paramdoc'],
   'react@19.3.0',
   'react-dom@19.3.0',
   '@types/react@19.3.0',
@@ -64,7 +65,7 @@ for (const name of packageFiles) {
 }
 // Every tarball must carry the licence; the wasm tarball also carries the NOTICE and third-party notices and licence texts.
 // npm adds LICENSE/NOTICE from a package's own root, so this guards the per-package copies.
-for (const [name, extra] of [['wasm', ['NOTICE', 'THIRD_PARTY_NOTICES.md', 'THIRD_PARTY_LICENSES.md', 'generated/LICENSE.typst-ts']], ['core', []], ['workers', []], ['react', []], ['dev-tools', ['THIRD_PARTY_NOTICES.md', 'dist/panel.js']]] as [string, string[]][]) {
+for (const [name, extra] of [['wasm', ['NOTICE', 'THIRD_PARTY_NOTICES.md', 'THIRD_PARTY_LICENSES.md', 'generated/LICENSE.typst-ts']], ['core', []], ['workers', []], ['react', []], ['dev-tools', ['THIRD_PARTY_NOTICES.md', 'dist/panel.js']], ['paramdoc', ['dist/worker.js']]] as [string, string[]][]) {
   const listing = spawnSync('tar', ['-tzf', tarballs[name]], { encoding: 'utf8' });
   if (listing.error || listing.status !== 0) throw listing.error ?? new Error('tar exited ' + listing.status);
   const files = listing.stdout.split('\n');
@@ -96,6 +97,7 @@ import { readFile } from 'node:fs/promises';
 import assert from 'node:assert/strict';
 import { createAttachments, createCompiler, createLazyCompiler, definePartial, defineTemplate } from '@typfolio/core';
 import { createWorkerClient } from '@typfolio/workers';
+import { createRuntime, ParamdocError } from '@typfolio/paramdoc';
 import * as react from '@typfolio/react';
 import { usePdf } from '@typfolio/react';
 import * as coreMain from '@typfolio/core';
@@ -241,11 +243,39 @@ try {
   ]);
   console.log('Packed @typfolio/dev-tools checks a template against a schema in both sample modes, and its structure.');
 } finally { await checker.dispose(); }
+{
+  // The experimental runtime fills the checked-in report without a compiler, from the installed package alone.
+  const report = root + '/experiments/paramdoc/documents/report/';
+  const document = new Uint8Array(await readFile(report + 'doc.json'));
+  const listed = JSON.parse(Buffer.from(document).toString());
+  const fonts = await Promise.all(listed.fonts.map(f => readFile(report + 'fonts/' + f.file).then(b => new Uint8Array(b))));
+  const data = JSON.parse(await readFile(root + '/experiments/paramdoc/fixtures/report/data.json', 'utf8'));
+  const runtime = await createRuntime({ document, fonts });
+  const filled = await runtime.fill(data);
+  assert.equal(filled.pages, 1);
+  assert.equal(Buffer.from(filled.pdf.subarray(0, 5)).toString(), '%PDF-');
+  await assert.rejects(runtime.fill({ ...data, average: 97.5 }), error => error instanceof ParamdocError && error.code === 'fill');
+  console.log('Packed @typfolio/paramdoc fills the report without a compiler and refuses what Typst would lay out differently.');
+}
 `);
 await writeFile(join(dir, 'consumer.ts'), `
 import { createCompiler, createLazyCompiler, type Assets, type CompileOptions, type CompilerOptions, type FontSource, type LazyCompiler, type PdfClient, type PdfDocument } from '@typfolio/core';
 import { createAttachments, definePartial, defineTemplate, type AnyTemplate, type PartialDefinition, type StandardSchemaV1, type TemplateDefinition } from '@typfolio/core';
 import { collectBatch, compileBatch, createWorkerClient, type PdfBatchJob, type PdfWorkerClient, type WorkerCompileOptions } from '@typfolio/workers';
+import {
+  collectBatch as collectFills,
+  createRuntime,
+  createWorkerClient as createParamdocClient,
+  fillBatch,
+  ParamdocError,
+  type CreateWorkerClientOptions as ParamdocClientOptions,
+  type DocumentInput,
+  type FillJob,
+  type FillOutcome,
+  type FillResult,
+  type ParamdocRuntime,
+  type ParamdocWorkerClient,
+} from '@typfolio/paramdoc';
 import {
   usePdf,
   type AttachFile,
@@ -568,6 +598,22 @@ serializeSvg satisfies (svg: SVGSVGElement, options?: SvgSerializeOptions) => Ui
 // @ts-expect-error removeSelectors was replaced by beforeSerialize
 svgCapture({ removeSelectors: ['.tooltip'] });
 void [useReport, useChartedReport, useMistakes, source, sourceFunction, attachFile, usePdfOptions, renderChart];
+// The experimental runtime: on the calling thread, and in a worker pool through the same batch shape as the compiler's.
+declare const paramdocDocument: DocumentInput;
+const paramdocRuntime: ParamdocRuntime = await createRuntime(paramdocDocument);
+const filled: FillResult = await paramdocRuntime.fill({ name: 'Ada' });
+filled.pdf satisfies Uint8Array;
+paramdocRuntime.names satisfies readonly string[];
+const paramdocOptions: ParamdocClientOptions = { document: paramdocDocument, workerCount: 4, timeoutMs: 60_000 };
+const paramdocClient: ParamdocWorkerClient = createParamdocClient(paramdocOptions);
+const fillJobs: readonly FillJob<number>[] = [{ id: 1, data: { name: 'Ada' } }];
+for await (const outcome of fillBatch(paramdocClient, fillJobs, { signal: new AbortController().signal })) {
+  outcome satisfies FillOutcome<number>;
+  if (outcome.status === 'error') outcome.error satisfies ParamdocError;
+  if (outcome.status === 'success') outcome.result satisfies FillResult;
+}
+(await collectFills(paramdocClient, fillJobs)) satisfies readonly FillOutcome<number>[];
+await paramdocClient.dispose();
 `);
 run(process.execPath, ['smoke.mjs', root]);
 const tsc = join(root, 'node_modules/typescript/bin/tsc');

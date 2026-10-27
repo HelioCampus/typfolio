@@ -1,9 +1,9 @@
-// The paramdoc engine of the batch demo, from the experiment in experiments/paramdoc: Typst typeset the report
-// once at export time into a document with slots (`doc.json` and two subset fonts, checked in under
-// experiments/paramdoc/documents/report), and a runtime of about 39 kB (15 kB gzipped) fills the slots and writes each PDF in a
-// Web Worker without a compiler. Its output is tagged PDF/UA-1. The exported report is the slot dialect's version
-// of ./report/main.typ: the same text, boxes, table and score bars, but a static title and a tutor comment of up to
-// three lines.
+// The paramdoc engine of the batch demo: Typst typeset the report once at export time into a document with slots
+// (`doc.json` and two subset fonts, checked in under experiments/paramdoc/documents/report), and the runtime of
+// `@typfolio/paramdoc` fills the slots and writes each PDF in a pool of Web Workers without a compiler (its
+// `createWorkerClient` and `fillBatch`, driven from ./batch.ts like the compiler's). Its output is tagged
+// PDF/UA-1. The exported report is the slot dialect's version of ./report/main.typ: the same text, boxes, table
+// and score bars, but a static title and a tutor comment of up to three lines.
 import docUrl from '../../../../experiments/paramdoc/documents/report/doc.json?url';
 import type { ReportInput } from './data.ts';
 
@@ -71,46 +71,4 @@ export function paramdocData(input: ReportInput): ParamdocReport {
     courses: input.courses.map(course => ({ code: course.code, title: course.title, score: course.score, grade: course.grade })),
     comment: input.comment,
   };
-}
-
-type Reply = { type: 'ready' } | { type: 'done'; pdf: Uint8Array } | { type: 'error'; message: string };
-
-/** One worker holding one runtime. `fill` renders one document at a time; the first call waits for the start. */
-export class ParamdocWorker {
-  private readonly worker: Worker;
-  private readonly ready: Promise<void>;
-  private pending: { resolve: (pdf: Uint8Array) => void; reject: (error: Error) => void } | undefined;
-
-  constructor(exported: ParamdocDocument) {
-    this.worker = new Worker(new URL('./paramdoc.worker.ts', import.meta.url), { type: 'module' });
-    this.worker.addEventListener('message', (event: MessageEvent<Reply>) => {
-      const pending = this.pending;
-      this.pending = undefined;
-      const reply = event.data;
-      if (reply.type === 'error') pending?.reject(new Error(reply.message));
-      else pending?.resolve(reply.type === 'done' ? reply.pdf : new Uint8Array());
-    });
-    this.worker.addEventListener('error', event => {
-      const pending = this.pending;
-      this.pending = undefined;
-      pending?.reject(new Error(event.message || 'The paramdoc worker failed'));
-    });
-    this.ready = new Promise<Uint8Array>((resolve, reject) => { this.pending = { resolve, reject }; }).then(() => undefined);
-    this.ready.catch(() => undefined);
-    this.worker.postMessage({ type: 'init', doc: exported.doc, fonts: exported.fonts });
-  }
-
-  async fill(data: ParamdocReport): Promise<Uint8Array> {
-    await this.ready;
-    return new Promise<Uint8Array>((resolve, reject) => {
-      this.pending = { resolve, reject };
-      this.worker.postMessage({ type: 'fill', data });
-    });
-  }
-
-  terminate(): void {
-    this.worker.terminate();
-    this.pending?.reject(new Error('The worker was terminated'));
-    this.pending = undefined;
-  }
 }

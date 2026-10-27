@@ -149,10 +149,10 @@ export function BatchWorkbench() {
       </section>
       {paramdoc && (
         <p className="note engine-note">
-          Experimental, from <code>experiments/paramdoc</code>: Typst typeset this report once at export time into a document
-          with slots. Each worker fills the slots and writes the PDF with a 39 kB runtime and no compiler, from a 150 kB document
-          with two subset fonts; the output is tagged PDF/UA-1. The layout is the slot dialect's version of the report: a static
-          title, a tutor comment of up to three lines.
+          Experimental, <code>@typfolio/paramdoc</code>: Typst typeset this report once at export time into a document with
+          slots. Each worker fills the slots and writes the PDF with a 41 kB worker (16 kB gzipped) and no compiler, from a 150 kB
+          document with two subset fonts; the output is tagged PDF/UA-1. The layout is the slot dialect's version of the report:
+          a static title, a tutor comment of up to three lines.
         </p>
       )}
 
