@@ -601,6 +601,10 @@ Defaults: fonts from `../../fixtures/fonts`, output under `../../.build/paramdoc
   1.2 % smaller, as the size report predicted: the binary is Typst's. Speed within noise (outcome-sets with a new
   title 3.6 ms against 3.4 ms, identical 0.6 against 0.5 ms, Node, median of 30). Not in this step: the runtime and
   the exporter behind the same wasm-bindgen surface (they keep their C ABI builds), and any Typst patch for size.
+  Released the same day by hand (pull request 13, `e4d475f`; the workflow still cannot run): `@typfolio/wasm` 0.2.0,
+  `@typfolio/core` 0.4.0 and, with it, `@typfolio/dev-tools` (the two held-over structure changesets), `@typfolio/workers`
+  and `@typfolio/react` 0.4.0, tagged, with a GitHub release each from its changelog; verified from the registry with a
+  fresh install compiling the basic fixture to PDF/UA-1 and reporting `file-not-found` and `missing-glyph`.
 - **Released: `@typfolio/paramdoc` 0.0.1 and `@typfolio/paramdoc-export` 0.0.1 (2026-10-27).** The branch merged as
   pull request 12 (`fd917be`); the release by hand from `main` (`d75cd06`), because the release workflow cannot run
   while the GitHub account is locked for billing (the pull request's checks never started either). The two
