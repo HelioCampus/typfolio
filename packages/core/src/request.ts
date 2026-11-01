@@ -109,6 +109,6 @@ export function prepareRequest(request: ResolvedRequest, options: PrepareRequest
   if (pdf.creationTimestamp !== undefined && !Number.isSafeInteger(pdf.creationTimestamp)) invalid('creationTimestamp must be Unix seconds as a safe integer');
   return {
     entrypoint, files,
-    pdf: { pdf_standard: standards[0], pdf_tags: pdf.tags ?? true, creation_timestamp: pdf.creationTimestamp },
+    pdf: { standard: standards[0], tags: pdf.tags ?? true, creationTimestamp: pdf.creationTimestamp },
   };
 }

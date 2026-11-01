@@ -1,0 +1,4 @@
+# Keeps Cargo's output out of the source tree; .build/ is gitignored. tools/build-wasm.ts and
+# experiments/paramdoc/build-export-wasm.sh set their own CARGO_TARGET_DIR.
+[build]
+target-dir = ".build/cargo-target"

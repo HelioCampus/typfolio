@@ -1,23 +1,33 @@
+// Verifies packages/wasm/generated/ before it is packed or tested: the artifact's hashes match its provenance, the
+// provenance matches the pins in compiler-source.json and the sources in the checkout, and the build reproduced the
+// pinned artifact hashes. `npm run pack:wasm` and the CI `compiler` job run this.
 import { readFile, access } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
+import { fileURLToPath } from 'node:url';
+import { compilerSourceSha256 } from './compiler-source.ts';
 import type { CompilerPin, Provenance } from './types.ts';
 const root = new URL('../', import.meta.url);
 const file = (path: string) => readFile(new URL(path, root));
 const provenance: Provenance = JSON.parse((await file('packages/wasm/generated/provenance.json')).toString());
 const pin: CompilerPin = JSON.parse((await file('compiler-source.json')).toString());
-if (provenance.revision !== pin.revision) throw new Error('WASM source revision does not match the pin');
-if (!Number.isSafeInteger(provenance.reproducibleBuild?.sourceDateEpoch) ||
-    JSON.stringify(provenance.reproducibleBuild.remappedPathPrefixes) !== JSON.stringify(['/typfolio', '/cargo', '/rustup'])) {
+if (provenance.crate !== pin.crate || provenance.crateDirectory !== pin.crateDirectory) throw new Error('WASM provenance does not name the pinned crate');
+if (provenance.typst !== pin.typst) throw new Error(`WASM provenance records Typst ${provenance.typst}, but compiler-source.json pins ${pin.typst}`);
+if (provenance.sourceSha256 !== compilerSourceSha256(fileURLToPath(root), pin)) {
+  throw new Error('The WASM artifact was built from other sources than this checkout (Cargo.toml, Cargo.lock or crates/compiler changed). Run npm run build:wasm.');
+}
+if (JSON.stringify(provenance.reproducibleBuild?.remappedPathPrefixes) !== JSON.stringify(['/typfolio', '/cargo', '/rustup'])) {
   throw new Error('WASM provenance does not contain the required reproducible-build policy');
 }
 if (provenance.profile !== pin.profile || provenance.crateType !== pin.crateType || provenance.wasmOpt !== pin.wasmOpt ||
-    JSON.stringify(provenance.cargoProfile) !== JSON.stringify(pin.cargoProfile)) {
-  throw new Error('WASM provenance does not record the pinned build profile, crate type, and wasm-opt setting');
+    JSON.stringify(provenance.cargoProfile) !== JSON.stringify(pin.cargoProfile) || JSON.stringify(provenance.features) !== JSON.stringify(pin.features)) {
+  throw new Error('WASM provenance does not record the pinned build profile, features, crate type, and wasm-opt setting');
 }
 const profileEnv = {
   CARGO_PROFILE_RELEASE_OPT_LEVEL: String(pin.cargoProfile.optLevel),
   CARGO_PROFILE_RELEASE_LTO: String(pin.cargoProfile.lto),
   CARGO_PROFILE_RELEASE_CODEGEN_UNITS: String(pin.cargoProfile.codegenUnits),
+  CARGO_PROFILE_RELEASE_PANIC: String(pin.cargoProfile.panic),
+  CARGO_PROFILE_RELEASE_STRIP: String(pin.cargoProfile.strip),
 };
 if (JSON.stringify(provenance.cargoProfileEnv) !== JSON.stringify(profileEnv)) {
   throw new Error('WASM provenance cargo profile environment does not match the pinned profile');
@@ -39,7 +49,10 @@ for (const [label, key, actual] of [['compiler_bg.wasm', 'wasmSha256', provenanc
       'If the compiler was changed on purpose, update the pins in the same commit; otherwise the toolchain, platform or dependencies differ from the pinned build.');
   }
 }
-for (const path of ['compiler.d.ts', 'LICENSE.typst-ts']) {
-  await access(new URL(`packages/wasm/generated/${path}`, root));
+// The loader must not construct code (js_sys::Function, eval): a page may then load the compiler under a Content
+// Security Policy that allows only 'wasm-unsafe-eval'.
+if (/\bnew Function\(|\beval\(/.test((await file('packages/wasm/generated/compiler.js')).toString())) {
+  throw new Error('compiler.js constructs JavaScript code; the compiler crate must not import js_sys::Function or eval');
 }
-console.log('WASM package artifact hashes, pinned artifact hashes, pinned build profile, reproducible-build policy, declarations, and upstream license verified.');
+await access(new URL('packages/wasm/generated/compiler.d.ts', root));
+console.log('WASM package artifact hashes, pinned artifact hashes, pinned build profile, source hash, reproducible-build policy, CSP-safe loader and declarations verified.');

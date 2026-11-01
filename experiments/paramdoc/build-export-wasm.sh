@@ -20,7 +20,7 @@ if [ "${1:-}" = "--check" ] && [ -f "$OUT/provenance.json" ]; then
 fi
 mkdir -p "$OUT"
 cp "$WASM" "$OUT/paramdoc_export.wasm"
-TYPST=$(grep -o '^typst = "[0-9.]*"' export/Cargo.toml | grep -o '[0-9.]*')
+TYPST=$(grep -o '^typst = "[0-9.]*"' ../../Cargo.toml | grep -o '[0-9.]*')  # the workspace pins Typst for every crate
 cat > "$OUT/provenance.json" <<EOF
 {
   "crate": "paramdoc-export",

@@ -1,3 +1,0 @@
-# Keep build output out of the source tree; .build/ is gitignored.
-[build]
-target-dir = "../../.build/paramdoc-target"

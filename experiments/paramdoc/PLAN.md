@@ -335,7 +335,7 @@ Exit: `./check.sh` green with the two new fixtures; the default repertoire fuzze
 entry of the Text, Links and Images sections of `GAPS.md` closed, refused or reduced to a documented cosmetic
 rule; status-log entry, `HANDOVER.md` item 6 and the contract paragraph, the note. Then M11.
 
-### M13: one Typst binding for the compiler, the exporter and the runtime (plan, not built)
+### M13: one Typst binding for the compiler, the exporter and the runtime (built for the compiler 2026-11-01)
 
 Written 2026-10-27. The idea is lever 3 of `.idea/TODO/07-wasm-size.md` (an own minimal binding crate, typst and
 typst-pdf bound directly, without typst.ts's reflexo and tinymist layers), with what paramdoc has since added
@@ -578,6 +578,29 @@ Defaults: fonts from `../../fixtures/fonts`, output under `../../.build/paramdoc
 
 ## Status log
 
+- **M13, the compiler half: `@typfolio/wasm` is Typfolio's own binding (2026-11-01).** `crates/compiler`
+  (`typfolio-compiler`) binds `typst`, `typst-pdf` and `typst-layout` 0.15.1 from crates.io directly: an in-memory
+  world with mounted files, packages served from mounts (`@local/typfolio:0.1.0` from `/@typfolio/packages/...`), a
+  cached standard library per `sys.inputs`, the caller's clock for the PDF date and `datetime.today()`, PDF options as
+  core offers them, and diagnostics as data (severity, message, hints, path, zero-based range, package; a trace entry
+  is a `hint`). The wasm-bindgen surface is `Compiler` (`addFont`, `mount`, `mountPackage`, `reset`, `compile`) and
+  `Compiled` (`takePdf`, `diagnostics`, `title`, `ok`), 16 kB of loader with no `new Function` or `eval`, so
+  `'wasm-unsafe-eval'` is enough under a Content Security Policy (checked by hand, not kept as a test: a page and a worker served with `default-src 'self'; script-src 'self' 'wasm-unsafe-eval'` compiled in the three engines; the typst.ts artifact failed there with an `EvalError` in all three; `check-package` keeps the loader free of `new Function` and `eval`). The Rust workspace moved to the repository root
+  (`Cargo.toml`, `Cargo.lock`, `.cargo/config.toml` with `.build/cargo-target`); the exporter's Typst dependencies are
+  the workspace's, so one lockfile resolves one Typst for both. `tools/build-wasm.ts` builds the crate instead of an
+  upstream checkout, pins `panic = "abort"` and `strip = "symbols"` next to the profile (without the strip,
+  wasm-bindgen leaves a 2.4 MB `name` section), records `sourceSha256` over `Cargo.toml`, `Cargo.lock` and
+  `crates/compiler/**` in `provenance.json`, and `check-package` recomputes it; CI caches the artifact by the same files.
+  `engine.ts` lost the Rust-debug-text parser; `explain.ts` reads Typst's `file not found (searched at /x)`.
+  Proofs: `npm test` 231 passed (one sanity threshold in the licence test lowered: the graph is 283 crates now);
+  the fixtures `basic` and `outcome-sets` under five PDF option sets give byte-identical PDFs through the typst.ts
+  artifact and the new one (10 of 10, same titles, equivalent diagnostics, the export failures now with a range);
+  `tools/check-compiler-parity.ts` (a step of `check.sh`) compiles 16 paramdoc fixtures through the compiler and the
+  exporter's plain mode to the same bytes (`figures` skipped: its images are data URLs the exporter rewrites). Size:
+  24,136,677 raw, 8,834,473 gzip, 6,421,860 Brotli against 24,325,868 / 8,941,574 / 6,481,591 before, so 0.8 to
+  1.2 % smaller, as the size report predicted: the binary is Typst's. Speed within noise (outcome-sets with a new
+  title 3.6 ms against 3.4 ms, identical 0.6 against 0.5 ms, Node, median of 30). Not in this step: the runtime and
+  the exporter behind the same wasm-bindgen surface (they keep their C ABI builds), and any Typst patch for size.
 - **Released: `@typfolio/paramdoc` 0.0.1 and `@typfolio/paramdoc-export` 0.0.1 (2026-10-27).** The branch merged as
   pull request 12 (`fd917be`); the release by hand from `main` (`d75cd06`), because the release workflow cannot run
   while the GitHub account is locked for billing (the pull request's checks never started either). The two

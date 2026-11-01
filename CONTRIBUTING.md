@@ -12,7 +12,7 @@ Thanks for helping. This file covers what you need to build, test and submit a c
 ```sh
 npm ci
 npm run setup:wasm   # pinned Rust toolchain, wasm-bindgen-cli and cargo-about, into .build/tools
-npm run build:wasm   # fetches the pinned compiler source and builds packages/wasm/generated/
+npm run build:wasm   # builds crates/compiler to WebAssembly into packages/wasm/generated/
 ```
 
 The compiler build takes minutes and is only needed once, and again when the pins change. [docs/compiler-build.md](./docs/compiler-build.md) explains every step, the reproducibility rules and how to bump the compiler. The generated files are not committed; CI builds them from the pinned source and does not use anyone's local artifacts.

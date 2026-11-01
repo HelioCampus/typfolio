@@ -58,7 +58,7 @@ Typst does that: a heading is a heading, a table a table, and its PDF/UA-1 expor
 
 **Native, tagged PDF, not a screenshot of a web page.** The document is produced by Typst's own PDF writer, in one pass, from the template's markup: real text, real fonts, and the headings, tables and figures you wrote in the structure tree, with nothing to patch afterwards. Ask for PDF/UA-1 or PDF/A and the exporter refuses output that breaks the standard, such as an image without alternative text. With a fixed creation timestamp the bytes are identical on every run, so a PDF can be snapshot-tested like any other build artifact.
 
-**Fast enough that a server adds nothing.** On a laptop, a 50-page PDF/UA report with a table on every page compiles in about 220 ms, and a 100-page one in about 360 ms, with fresh data each time; one-page documents take 5–50 ms in the browser. Re-rendering the same data again is incremental and takes about 20 ms. The compiler is a 24 MB WASM asset (6.5 MB with Brotli) that the browser downloads once and caches.
+**Fast enough that a server adds nothing.** On a laptop, a 50-page PDF/UA report with a table on every page compiles in about 220 ms, and a 100-page one in about 360 ms, with fresh data each time; one-page documents take 5–50 ms in the browser. Re-rendering the same data again is incremental and takes about 20 ms. The compiler is a 24 MB WASM asset (6.4 MB with Brotli) that the browser downloads once and caches.
 
 **The data never leaves the page.** The browser already holds the records, the charts and the user's session. Compiling there means nothing is uploaded, nothing is queued, and the feature keeps working offline.
 
@@ -215,15 +215,15 @@ Several projects run the Typst compiler from JavaScript. They solve different pr
 | Typed input and schema-driven editor completion | Yes | No | No | No | No |
 | Reproducible, pinned build with verified provenance | Yes | Published packages | Published packages | Pinned to Typst 0.15.1 | Pinned binaries |
 | Licence | Apache-2.0 | Apache-2.0 | MIT | MIT (binary includes Apache-2.0 Typst) | See project |
-| Compiler asset, raw / Brotli (measured 13 Oct 2026, Brotli q11, 16 MB window) | 24.3 MB / 6.5 MB | 30.2 MB / 7.6 MB (`@myriaddreamin/typst-ts-web-compiler` 0.8.0-rc3) | 22.8 MB / 6.2 MB (`typst-wasm` 1.0.0) | 33.8 MB / 10.0 MB (release v0.3.1, fonts embedded) | Native binaries, not comparable |
+| Compiler asset, raw / Brotli (measured 1 Nov 2026, Brotli q11, 16 MB window) | 24.1 MB / 6.4 MB | 30.2 MB / 7.6 MB (`@myriaddreamin/typst-ts-web-compiler` 0.8.0-rc3) | 22.8 MB / 6.2 MB (`typst-wasm` 1.0.0) | 33.8 MB / 10.0 MB (release v0.3.1, fonts embedded) | Native binaries, not comparable |
 
-Typfolio's compiler binary is built from a pinned revision of typst.ts's compiler crate (Typst 0.15.1). If you need SVG or canvas rendering, incremental preview or Typst package imports, typst.ts is the right tool. If you need one PDF per data record with a typed contract and no network access, that is what Typfolio is for.
+Typfolio's compiler binary is its own binding of Typst 0.15.1 (`crates/compiler`, built to WebAssembly with pinned sources and tools, and loadable under a strict Content Security Policy). If you need SVG or canvas rendering, incremental preview or Typst package imports, typst.ts is the right tool. If you need one PDF per data record with a typed contract and no network access, that is what Typfolio is for.
 
 ### Other ways to make PDFs in a web application
 
 | Approach | Layout quality | Where it runs | Accessibility | Trade-off |
 |---|---|---|---|---|
-| **Typfolio** | Full typesetter | In the user's browser, no service (Node too) | Tagged PDF, PDF/UA-1 and PDF/A on request | 24 MB compiler asset (6.5 MB with Brotli) to host and cache |
+| **Typfolio** | Full typesetter | In the user's browser, no service (Node too) | Tagged PDF, PDF/UA-1 and PDF/A on request | 24 MB compiler asset (6.4 MB with Brotli) to host and cache |
 | HTML to PDF via headless Chrome (Puppeteer, Playwright) | Browser layout, good | A server process per job | Tagged PDF only with care; no PDF/UA validation | Needs a service and Chrome; slow and heavy per document |
 | `@react-pdf/renderer` | Flexbox subset of CSS | Browser or Node | No tagging | Re-implements layout; tables and typography are basic |
 | pdfmake, jsPDF, PDFKit | Manual layout primitives | Browser or Node | Untagged, or a tag tree you build by hand (PDFKit) | You write the page-breaking and text flow yourself |
@@ -255,7 +255,7 @@ Sizes from the production Vite builds:
 
 | Artifact | Size |
 |---|---|
-| Compiler WASM | 24,325,868 bytes; about 8.9 MB gzip, 6.5 MB Brotli |
+| Compiler WASM | 24,136,677 bytes; about 8.8 MB gzip, 6.4 MB Brotli |
 | Worker application JavaScript (host + worker runtime) | 47.7 kB + 33.3 kB |
 | Core-only library build | about 40 kB |
 

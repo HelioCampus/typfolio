@@ -29,12 +29,6 @@ ignore-dev-dependencies = true
 # back to the standard SPDX text and drop the copyright line. A clarification uses the crate's own file; the
 # checksum makes it stop applying (and the generator fall back to the SPDX text) when a new release changes the
 # file, so review these when a pinned crate version changes.
-[chrono.clarify]
-license = "MIT OR Apache-2.0"
-[[chrono.clarify.files]]
-path = "LICENSE.txt"
-checksum = "946c9835d8034d24404f8cfec5f4654cee5dad17e944afc3d06d742cf2882831"
-
 [libm.clarify]
 license = "MIT"
 [[libm.clarify.files]]

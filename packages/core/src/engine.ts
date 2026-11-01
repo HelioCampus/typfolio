@@ -1,7 +1,7 @@
-import init, { TypstCompilerBuilder, type TypstCompiler, type TypstCompileWorld } from '@typfolio/wasm';
+import init, { Compiler } from '@typfolio/wasm';
 import { errorLink, TypstPdfError, type Diagnostic, type FontSource, type PdfResult, type WasmSource } from './types.js';
 import type { prepareRequest } from './request.js';
-import { resolvePackage } from './typst-package.js';
+import { bundledPackageDirectory, bundledPackageSpec } from './typst-package.js';
 
 let initialization: Promise<unknown> | undefined;
 let loadedSource: WasmSource | undefined;
@@ -28,24 +28,23 @@ function message(error: unknown): string {
   try { return JSON.stringify(error) ?? String(error); } catch { return String(error); }
 }
 
-const quoted = /"((?:[^"\\]|\\.)*)"/g;
-const unquote = (text: string) => { try { return JSON.parse(`"${text}"`) as string; } catch { return text; } };
+/** A diagnostic as the compiler reports it (`crates/compiler/src/diagnostics.rs`): hints apart from the message. */
+interface RawDiagnostic {
+  severity: 'error' | 'warning' | 'hint';
+  message: string;
+  hints?: string[];
+  path?: string;
+  range?: string;
+  package?: string;
+}
 
-// The binding reports a failed PDF export as Rust debug text,
-// `[SourceDiagnostic { severity: Error, span: …, message: "…", trace: [], hints: ["…"] }]`:
-// one diagnostic per message, its hints appended. A character no loaded font can display (refused
-// by a PDF standard) is `missing-glyph`. Anything else is kept as it is.
-function exportDiagnostics(text: string): Diagnostic[] {
-  const found = text.split('SourceDiagnostic {').slice(1).flatMap((part): Diagnostic[] => {
-    const [, said] = /message: "((?:[^"\\]|\\.)*)"/.exec(part) ?? [];
-    if (said === undefined) return [];
-    const message = unquote(said);
-    const [, glyph] = /^PDF\/\S+ error: the text `"(.*)"` could not be displayed with font/.exec(message) ?? [];
-    if (glyph !== undefined) return [{ severity: 'error', code: 'missing-glyph', text: glyph, message: `${message}. See ${errorLink('missing-glyph')}` }];
-    const hints = [...(/hints: \[(.*)\]/s.exec(part)?.[1] ?? '').matchAll(quoted)].map(([, hint]) => `\nhint: ${unquote(hint)}`);
-    return [{ severity: 'error', message: message + hints.join('') }];
-  });
-  return found.length ? found : [{ severity: 'error', message: text }];
+// The hints follow the message, one per line. A character no loaded font can display (refused by a PDF standard) is
+// `missing-glyph`, with the text as data.
+function diagnostic({ severity, message, hints = [], path, range, package: pkg }: RawDiagnostic): Diagnostic {
+  const where = { ...(path === undefined ? {} : { path }), ...(range === undefined ? {} : { range }), ...(pkg === undefined ? {} : { package: pkg }) };
+  const [, glyph] = /^PDF\/\S+ error: the text `"(.*)"` could not be displayed with font/.exec(message) ?? [];
+  if (glyph !== undefined) return { severity, code: 'missing-glyph', text: glyph, message: `${message}. See ${errorLink('missing-glyph')}`, ...where };
+  return { severity, message: message + hints.map(hint => `\nhint: ${hint}`).join(''), ...where };
 }
 
 /** What differs between compile flavors: extra files to mount and the `sys.inputs` to set. */
@@ -117,54 +116,46 @@ export function resolveFonts(fonts: readonly FontSource[]): Promise<Uint8Array[]
 }
 
 export async function createEngine(fonts: readonly Uint8Array[]) {
-  let builder: TypstCompilerBuilder | undefined;
+  let compiler: Compiler | undefined;
   try {
-    builder = new TypstCompilerBuilder();
-    // All resource bytes must come from the request; never access host files or a registry.
-    await builder.set_access_model(undefined, () => 0, () => false, (path: string) => path,
-      (path: string) => { throw new Error(`Resource is not supplied in this request: ${path}`); });
-    // Only the package bundled with core is served (from the request's virtual file system); no registry or network.
-    await builder.set_package_registry(undefined, resolvePackage);
-    for (const font of fonts) await builder.add_raw_font(font);
-    const consumed = builder;
-    builder = undefined; // build() consumes the Rust builder, including on rejection.
-    return new Engine(await consumed.build());
+    compiler = new Compiler();
+    // Every face of every font, in the order given; a file without a readable face is an error, not a silent gap.
+    for (const font of fonts) compiler.addFont(font);
+    const engine = new Engine(compiler);
+    compiler = undefined;
+    return engine;
   } catch (error) {
     throw new TypstPdfError('INITIALIZATION', `Could not create compiler: ${message(error)}`, [], { cause: error });
-  } finally { builder?.free(); }
+  } finally { compiler?.free(); }
 }
 
 class Engine {
-  constructor(private readonly compiler: TypstCompiler) {}
+  constructor(private readonly compiler: Compiler) {}
 
   compile(request: ReturnType<typeof prepareRequest>, extras: CompileExtras): PdfResult {
-    let world: TypstCompileWorld | undefined;
-    let diagnostics: Diagnostic[] = [];
+    let compiled: ReturnType<Compiler['compile']> | undefined;
     try {
-      this.compiler.reset_shadow();
+      this.compiler.reset();
       // The request's files (the template's, its data by path and the assets), then the extras: the helper
-      // package's files.
-      for (const [path, bytes] of [...request.files, ...extras.mounts]) {
-        if (!this.compiler.map_shadow(path, bytes)) throw new TypstPdfError('ENGINE', `Could not mount ${path}`);
+      // package's files, served as the bundled package.
+      for (const [path, bytes] of [...request.files, ...extras.mounts]) this.compiler.mount(path, bytes);
+      this.compiler.mountPackage(bundledPackageSpec, bundledPackageDirectory);
+      // The clock: the PDF's creation date when the request sets none, and `datetime.today()`.
+      const now = { unixSeconds: Math.floor(Date.now() / 1000), utcOffsetMinutes: -new Date().getTimezoneOffset() };
+      compiled = this.compiler.compile(request.entrypoint, JSON.stringify({ inputs: Object.fromEntries(extras.inputs), pdf: request.pdf, now }));
+      const diagnostics = (JSON.parse(compiled.diagnostics) as RawDiagnostic[]).map(diagnostic);
+      const bytes = compiled.takePdf();
+      if (bytes === undefined) {
+        const errors = diagnostics.filter(d => d.severity === 'error');
+        throw new TypstPdfError('COMPILATION', errors.map(d => d.message).join('\n') || 'Typst compilation failed', diagnostics);
       }
-      world = this.compiler.snapshot('/', request.entrypoint, extras.inputs.map(entry => [...entry]));
-      world.set_pdf_opts(request.pdf);
-      // Compile separately because get_artifact() omits warnings on successful output.
-      const compiled = world.compile(0, 3) as { hasError: boolean; diagnostics: Diagnostic[] };
-      diagnostics = compiled.diagnostics ?? [];
-      if (compiled.hasError) throw new TypstPdfError('COMPILATION', diagnostics.map(d => d.message).join('\n') || 'Typst compilation failed', diagnostics);
-      const bytes = world.get_artifact(1, 0) as Uint8Array;
-      if (!(bytes instanceof Uint8Array) || new TextDecoder().decode(bytes.subarray(0, 5)) !== '%PDF-') {
-        throw new TypstPdfError('ENGINE', 'The compiler did not return PDF bytes', diagnostics);
-      }
-      return { bytes, diagnostics, metadata: { title: world.title(0) } };
+      return { bytes, diagnostics, metadata: { title: compiled.title } };
     } catch (error) {
       if (error instanceof TypstPdfError) throw error;
-      // Upstream export failures (a PDF standard's checks) lack source locations.
-      const failures = exportDiagnostics(message(error));
-      throw new TypstPdfError('COMPILATION', failures.map(d => d.message).join('\n'), [...diagnostics, ...failures], { cause: error });
+      // The binding refuses a malformed request (an unmounted entrypoint, an unknown standard); core checks those first.
+      throw new TypstPdfError('ENGINE', `The compiler refused the request: ${message(error)}`, [], { cause: error });
     } finally {
-      try { world?.free(); } finally { this.compiler.reset_shadow(); }
+      try { compiled?.free(); } finally { this.compiler.reset(); }
     }
   }
 
