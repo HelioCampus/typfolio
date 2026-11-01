@@ -248,7 +248,8 @@ through link slots (`slot(name, (text:, href:))`), with rectangles equal to typs
    `ParamdocError` with `code` `document` or `fill`, `names`; `@typfolio/paramdoc/internal` is the `Runtime`
    class with its trace and `compare`, for the proof. The worker client (G37) and the demo on the packages
    followed the same day (item 1); the packed-consumer test (`tools/test-packed.ts`) installs the runtime's
-   tarball too.
+   tarball too. The plugin is planned as `PLAN.md` M14 (2026-10-28): a `?paramdoc` import on the entry file, a
+   cached export at build time, the JSON Schema file feeding the fuzz, the repertoires and a sizing check.
 3. The Rust runtime still deflates every stream per document, which is why it is slower than the TypeScript
    one; writing small streams uncompressed and caching the font streams would even them out.
 4. **Justified wrapping slots**: done (M11, 2026-10-26). `slot(..., justify: true)`; the breaks do not move
