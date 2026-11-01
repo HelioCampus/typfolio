@@ -10,10 +10,10 @@ crate-type = ["rlib"]
 
 [dependencies]
 paramdoc-ir = { path = "../ir" }
-typst = "0.15.1"
-typst-pdf = "0.15.1"
-typst-layout = "0.15.1"
-comemo = "0.5.1"
+typst.workspace = true
+typst-pdf.workspace = true
+typst-layout.workspace = true
+comemo.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 anyhow.workspace = true

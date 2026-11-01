@@ -17,7 +17,7 @@ env:
   NODE_VERSION: '22'
 
 jobs:
-  # Builds the Wasm compiler from the pinned source (compiler-source.json) on a clean runner. Nothing from a
+  # Builds the Wasm compiler (crates/compiler, with the pins in compiler-source.json) on a clean runner. Nothing from a
   # developer's machine is used. The result is handed to the other jobs as the `compiler` artifact.
   compiler:
     name: compiler
@@ -41,11 +41,10 @@ jobs:
           const pin = JSON.parse(readFileSync('compiler-source.json', 'utf8'));
           const { optLevel, lto, codegenUnits } = pin.cargoProfile;
           const outputs = {
-            revision: pin.revision,
             rust: pin.rust,
             'wasm-bindgen': pin.wasmBindgen,
             'cargo-about': pin.cargoAbout,
-            profile: `${pin.profile}-o${optLevel}-lto${lto}-cgu${codegenUnits}`,
+            profile: `${pin.profile}-o${optLevel}-lto${lto}-cgu${codegenUnits}-${pin.cargoProfile.panic}-strip${pin.cargoProfile.strip}`,
           };
           appendFileSync(process.env.GITHUB_OUTPUT, Object.entries(outputs).map(([k, v]) => `${k}=${v}`).join('\n') + '\n');
           EOF
@@ -54,11 +53,10 @@ jobs:
       # before the reproducibility check below. A plain actions/cache step saves only when the whole job succeeds, so
       # a build that fails the pinned-hash check would throw away a 20+ minute cold build every time.
       #
-      # Cargo.lock is not available before the pinned revision is exported, and it is fully determined by that
-      # revision (the build uses --locked), so the revision stands in for it in the keys.
-      # The finished artifact is cached by the content of compiler-source.json. A pull request that does not change
-      # the pin restores it in seconds and skips the Rust build entirely; the cache is saved only after the
-      # reproducibility check below has passed, so a non-reproducing build is never reused.
+      # The finished artifact is cached by the content of everything it is built from: the pins, the workspace manifest,
+      # the lockfile and the compiler crate's files (the same set tools/build-wasm.ts hashes into provenance.json). A pull
+      # request that changes none of them restores it in seconds and skips the Rust build entirely; the cache is saved
+      # only after the reproducibility check below has passed, so a non-reproducing build is never reused.
       - name: Restore the compiler artifact
         id: cache-artifact
         uses: actions/cache/restore@v6
@@ -67,7 +65,7 @@ jobs:
             packages/wasm/generated
             packages/wasm/THIRD_PARTY_NOTICES.md
             packages/wasm/THIRD_PARTY_LICENSES.md
-          key: compiler-artifact-${{ runner.os }}-${{ hashFiles('compiler-source.json') }}
+          key: compiler-artifact-${{ runner.os }}-${{ hashFiles('compiler-source.json', 'Cargo.toml', 'Cargo.lock', 'crates/compiler/**') }}
 
       - name: Restore the Cargo registry and git caches
         if: steps.cache-artifact.outputs.cache-hit != 'true'
@@ -78,7 +76,7 @@ jobs:
             ~/.cargo/registry/index
             ~/.cargo/registry/cache
             ~/.cargo/git/db
-          key: cargo-registry-${{ runner.os }}-${{ steps.pins.outputs.revision }}
+          key: cargo-registry-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
           restore-keys: |
             cargo-registry-${{ runner.os }}-
 
@@ -96,7 +94,7 @@ jobs:
         uses: actions/cache/restore@v6
         with:
           path: .build/target
-          key: target-${{ runner.os }}-${{ runner.arch }}-rust${{ steps.pins.outputs.rust }}-${{ steps.pins.outputs.profile }}-${{ steps.pins.outputs.revision }}
+          key: target-${{ runner.os }}-${{ runner.arch }}-rust${{ steps.pins.outputs.rust }}-${{ steps.pins.outputs.profile }}-${{ hashFiles('Cargo.lock') }}
           restore-keys: |
             target-${{ runner.os }}-${{ runner.arch }}-rust${{ steps.pins.outputs.rust }}-${{ steps.pins.outputs.profile }}-
 
@@ -110,9 +108,8 @@ jobs:
       - run: npm ci
         if: steps.cache-artifact.outputs.cache-hit != 'true'
 
-      # Exports the pinned commit into .build/upstream, builds the compiler, generates the bindings, the provenance
-      # file and the third-party notices. The job runner's core count is used for Cargo; the job count does not
-      # change the output.
+      # Builds the compiler crate, generates the bindings, the provenance file and the third-party notices. The job
+      # runner's core count is used for Cargo; the job count does not change the output.
       - name: Build the compiler
         if: steps.cache-artifact.outputs.cache-hit != 'true'
         id: build
@@ -162,7 +159,7 @@ jobs:
             ];
             lines.push('| File | Built SHA-256 | Pinned SHA-256 | Match |', '|---|---|---|---|');
             for (const [file, built, pinned] of rows) lines.push(`| ${file} | \`${built}\` | \`${pinned}\` | ${built === pinned ? 'yes' : '**no**'} |`);
-            lines.push('', `Typst.ts revision \`${provenance.revision}\`, ${provenance.rustc}, ${provenance.wasmBindgenVersion}, ${provenance.wasm.bytes} bytes.`);
+            lines.push('', `${provenance.crate} ${provenance.crateVersion} on Typst ${provenance.typst}, ${provenance.rustc}, ${provenance.wasmBindgenVersion}, ${provenance.wasm.bytes} bytes.`);
           }
           const text = lines.join('\n') + '\n';
           console.log(text);

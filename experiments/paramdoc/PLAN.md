@@ -335,7 +335,7 @@ Exit: `./check.sh` green with the two new fixtures; the default repertoire fuzze
 entry of the Text, Links and Images sections of `GAPS.md` closed, refused or reduced to a documented cosmetic
 rule; status-log entry, `HANDOVER.md` item 6 and the contract paragraph, the note. Then M11.
 
-### M13: one Typst binding for the compiler, the exporter and the runtime (plan, not built)
+### M13: one Typst binding for the compiler, the exporter and the runtime (built for the compiler 2026-11-01)
 
 Written 2026-10-27. The idea is lever 3 of `.idea/TODO/07-wasm-size.md` (an own minimal binding crate, typst and
 typst-pdf bound directly, without typst.ts's reflexo and tinymist layers), with what paramdoc has since added
@@ -414,6 +414,128 @@ Exit: all suites green on the new binding; the pinned hashes refreshed with revi
 or every difference explained; the paramdoc `check.sh` green with the exporter on the shared pin; a size and
 speed table in this log. Then G38 can put the exporter into a build.
 
+### M14: the export step as a Vite plugin (plan, not built)
+
+Written 2026-10-28; G38. Since 2026-10-27 the exporter runs in Node (`@typfolio/paramdoc-export`), so an
+application can export in a script and bundle `doc.json` and the fonts by hand, which is what the demo page
+does: `?url` imports, an `import.meta.glob` over the fonts, a loader of thirty lines, and the document checked
+in under `documents/report`. The plugin makes the export a build step: the template and its sample are the
+source, the document and its fonts are build output, and the proof runs on every build with the data contract,
+the schema, feeding it.
+
+**What it builds on.**
+- Core's `defineTemplate` names a template's files, its Standard Schema and the `schemaPath` where the data is
+  mounted and read with `input(json.with("./report.schema.json"))`; the authoring guide keeps the JSON Schema
+  file next to the template for the editor, generated from the schema by `@typfolio/dev-tools`'
+  `inputSchemaFiles` and kept in sync by a test in the application.
+- The exporter's request is files in (`template`, `data`, `fonts`, `references`, `fuzz`) and files out
+  (`doc.json`, `fonts/*`, `images/*`, the references). The sample is mounted at `/data.json`. The fuzz mutates
+  the sample: strings up to twice the sample's length from the slot's repertoire, arrays up to twice the rows,
+  numbers up to 1000. `max-length` is carried into `doc.json` and used by nothing; `charset` sets the
+  repertoire and is proven on every export.
+- The runtime binds flat (`Scope` in `runtime.ts`): a slot's value is the property of the slot's name in the
+  data, a band's rows are the array of the band's name, a row's slots are its properties; a link value is
+  `{ text, href }`. So a schema maps to slots by property name, one level deep per scope.
+- Vite 8 in the repository (the environment API; `emitFile`, `addWatchFile`, `this.error` are all the plugin
+  needs), and the demo's loader as the "before".
+
+**Shape.**
+1. A directory convention, no evaluation of application code. The unit is the entry file:
+   `import { load } from './templates/report/main.typ?paramdoc'`. The plugin reads from disk: every file under
+   its `root` option (default the Vite root; partials in `common/` then resolve as they do for the compiler) is
+   the template, `sample.json` next to the entry is the sample (required: the sample decides link slots, row
+   counts and variants), `sample-<name>.json` files are references, the fonts are the plugin's `fonts` option
+   (a directory or files), the dialect `paramdoc.typ` is the package's own when the directory has none, and
+   the schema is the JSON Schema file the entry names in `json.with("…")` or `json("…")`, read from the
+   entry's text; without one the export runs as today. Weighed and set aside for now: a definition module
+   (`defineParamdoc({ template, sample, … })` over core's `defineTemplate`) evaluated with Vite's module
+   runner, the typed form, which means running application code in Node during a build (an internal server in
+   build mode), binary assets through the module graph, and a second definition next to core's; it can be
+   layered on later if a live schema is wanted.
+2. The data where the template reads it. Core mounts the data at `schemaPath` and templates read it through
+   `@local/typfolio`'s `input()`; the exporter mounts it at `/data.json`. The request gains `dataPath` (where
+   the sample is mounted; default `data.json`) and `packages` (files of `@local/typfolio:0.1.0`, which the plugin
+   takes from `@typfolio/core`, mounted under the package's `FileId`; `MemWorld` learns package ids and sets
+   `sys.inputs.typfolio`), so one dialect template compiles under the exporter and under core without a change,
+   with editor completion. The command line gets `--data-path` and `--package`.
+3. The schema's part. From the JSON Schema, per slot (top-level properties; a band's array `items`
+   properties; a link's `text`): `maxLength`; `pattern` and `enum` as the repertoire (simple patterns only:
+   character classes, literals, alternations and quantifiers; `enum` is the union of its strings' characters);
+   `maxItems` as the longest band; `minimum` and `maximum` for bars. The plugin passes them as a `schema` entry
+   of the request (a map name → constraints; `--schema file.json` on the command line), and the exporter uses
+   them three ways. (a) The fuzz draws from them: strings up to `maxLength` from the derived repertoire, enum
+   values verbatim, arrays up to `maxItems`, numbers in range, so the proof covers the valid data space instead
+   of a guess from the sample. (b) The sizing check: a slot whose policy is `error`, and the line count of a
+   wrapping slot, is laid out with its worst case, `maxLength` of its widest character, and refused at export
+   when the policy would fire: "slot `name`: 40 characters of `W` need 52 mm, the slot is 46 mm: widen it, lower
+   `maxLength`, or use `ellipsis` or `shrink`". (c) Agreement: a declared `max-length` or `charset` that
+   contradicts the schema is refused; where a schema exists the dialect's `max-length` is redundant. `doc.json`
+   records the effective constraints per slot, for inspection.
+4. The emitted module. `?paramdoc` resolves to a small module: `document` (the URL of `doc.json`, a hashed
+   asset), `fonts` and `images` (URLs in the document's order), `names`, `provenance` (the exporter's), and
+   `load()`, which fetches them once into the runtime's `DocumentInput`, so
+   `createWorkerClient({ document: await load() })` is the whole integration. `*?paramdoc` is declared by
+   `@typfolio/paramdoc-export/vite-env`. The files go through `emitFile`, hashed and cached like any asset; in
+   dev they are served from the plugin's cache.
+5. Dev and build. The export runs when the module is first requested and is cached under
+   `node_modules/.vite/paramdoc` by a hash of everything it read (files, sample, references, fonts, the schema
+   file, the options, the wasm's provenance), so a restart or a repeated build without changes costs nothing
+   (the report with 100 fuzz samples takes 4.7 s, 0.3 s without). `fuzz` defaults to 100 in build and 10 in dev.
+   Every file read is a watch file: a change invalidates the module and reloads the page (workers hold the old
+   document, so a reload is the honest update). A refusal is `this.error` with the exporter's message verbatim:
+   the overlay in dev, a failed build in build; the exporter's log goes to Vite's logger.
+6. Where it lives. `@typfolio/paramdoc-export/vite` (`dist/vite.js`), `vite` a peer dependency for its types
+   (nothing of Vite is imported at runtime). The runtime package stays dependency-free; `load()`'s result type
+   is declared in the plugin with the shape of `DocumentInput`. The dialect `paramdoc.typ` ships in the exporter
+   package and is mounted by the plugin and by the command line when a template has none, so the fixtures'
+   eight identical copies become one source (`check.sh`'s md5 check becomes "the fixtures use the package's").
+7. The demo and the proof. `examples/pretext-hybrid` imports its dialect report with `?paramdoc`, with a
+   `sample.json` and the schema file of the dialect's flat data; `paramdoc.ts` shrinks to `load()` and the data
+   mapping (the page's data is nested, the dialect template's is flat: the mapping is the application's, as
+   AEFIS's `buildExportPayload` is). `documents/report` stays checked in for `check.sh` and the benchmark.
+   Tests: `tools/test-vite-builds.ts` gets a fixture application with the plugin (the emitted files are the
+   exporter's bytes; a narrowed slot fails the build with the refusal in the output; a second build is a cache
+   hit); `test:packed` installs the exporter's tarball and builds that fixture (the coverage the release left
+   open); the exporter's tests cover `dataPath`, `packages` and the `schema` entry; `check.sh` gets a fixture
+   whose schema narrows the fuzz and one whose `maxLength` does not fit its slot.
+
+Not in scope: choosing the engine at fill time (the application tries `fill` and compiles on a `fill`
+refusal; a helper for that belongs to the runtime package, later); `width: fit`, a slot sized by the exporter
+from `maxLength` and the widest glyph through `sys.inputs` (the natural step after the sizing check); the typed
+definition module; a compact `doc.json` (G41); M13 (the plugin runs the exporter's Typst; when the binding is
+shared, the plugin changes nothing).
+
+**Open before building** (the maintainer's calls).
+- Directory convention (above) or the definition module: the convention needs no evaluation of application
+  code and reads the schema file the editor already uses; the module is typed and has no conventions.
+- Core's `input()` in the exporter (step 2) in the first version, or `json("/data.json")` templates only, with
+  `dataPath` alone.
+- The sizing check as a refusal or as a warning in the log. The experiment's rule says refusal: what would be
+  laid out differently is refused; a slot that can overflow on valid data is such a thing.
+- The package: a subpath of `@typfolio/paramdoc-export`, or its own `@typfolio/vite-plugin-paramdoc`.
+
+**Risks.**
+- Two Typsts at build time: the exporter's crates.io 0.15.1 and the application's compiler (typst.ts's patched
+  0.15.1), the same layout by inspection (M13). The emitted module carries the exporter's provenance so a
+  mismatch can be seen.
+- Deriving a repertoire from a regular expression is sound only for simple patterns; anything else is ignored
+  with a log line and the slot keeps its declared or default repertoire. A narrower pattern is safe (the proof
+  covers more than the data can be); the risk is a false sense of coverage, so the log names the patterns used.
+- The schema file is generated from the application's schema and can be stale; the application's test guards
+  it, the plugin cannot. Documented with the convention.
+- Package resolution in `MemWorld` is new Rust code; small, but on the path of every export.
+- A cold build of an application with ten templates spends a minute in the proof (seconds per template with
+  100 fuzz samples); the cache makes the common path free and the fuzz count is the lever.
+- Written for the client environment and `emitFile`; an SSR build gets the same module (URLs) but is not
+  tested at first.
+
+Exit: the demo builds and runs from the plugin's output (`npm run build:pretext`, `check-static-demo`) with its
+loader and the `?url` imports gone; `test:vite` and `test:packed` cover the plugin; a refusal fails a build
+with the message; in `check.sh` a schema narrows the fuzz and a slot too narrow for its `maxLength` is refused;
+the exporter README has a "Vite" section and the authoring guide a paramdoc paragraph; export times per
+template and the cache hit in this log.
+
+
 ## Running
 
 ```sh
@@ -456,6 +578,29 @@ Defaults: fonts from `../../fixtures/fonts`, output under `../../.build/paramdoc
 
 ## Status log
 
+- **M13, the compiler half: `@typfolio/wasm` is Typfolio's own binding (2026-11-01).** `crates/compiler`
+  (`typfolio-compiler`) binds `typst`, `typst-pdf` and `typst-layout` 0.15.1 from crates.io directly: an in-memory
+  world with mounted files, packages served from mounts (`@local/typfolio:0.1.0` from `/@typfolio/packages/...`), a
+  cached standard library per `sys.inputs`, the caller's clock for the PDF date and `datetime.today()`, PDF options as
+  core offers them, and diagnostics as data (severity, message, hints, path, zero-based range, package; a trace entry
+  is a `hint`). The wasm-bindgen surface is `Compiler` (`addFont`, `mount`, `mountPackage`, `reset`, `compile`) and
+  `Compiled` (`takePdf`, `diagnostics`, `title`, `ok`), 16 kB of loader with no `new Function` or `eval`, so
+  `'wasm-unsafe-eval'` is enough under a Content Security Policy (checked by hand, not kept as a test: a page and a worker served with `default-src 'self'; script-src 'self' 'wasm-unsafe-eval'` compiled in the three engines; the typst.ts artifact failed there with an `EvalError` in all three; `check-package` keeps the loader free of `new Function` and `eval`). The Rust workspace moved to the repository root
+  (`Cargo.toml`, `Cargo.lock`, `.cargo/config.toml` with `.build/cargo-target`); the exporter's Typst dependencies are
+  the workspace's, so one lockfile resolves one Typst for both. `tools/build-wasm.ts` builds the crate instead of an
+  upstream checkout, pins `panic = "abort"` and `strip = "symbols"` next to the profile (without the strip,
+  wasm-bindgen leaves a 2.4 MB `name` section), records `sourceSha256` over `Cargo.toml`, `Cargo.lock` and
+  `crates/compiler/**` in `provenance.json`, and `check-package` recomputes it; CI caches the artifact by the same files.
+  `engine.ts` lost the Rust-debug-text parser; `explain.ts` reads Typst's `file not found (searched at /x)`.
+  Proofs: `npm test` 231 passed (one sanity threshold in the licence test lowered: the graph is 283 crates now);
+  the fixtures `basic` and `outcome-sets` under five PDF option sets give byte-identical PDFs through the typst.ts
+  artifact and the new one (10 of 10, same titles, equivalent diagnostics, the export failures now with a range);
+  `tools/check-compiler-parity.ts` (a step of `check.sh`) compiles 16 paramdoc fixtures through the compiler and the
+  exporter's plain mode to the same bytes (`figures` skipped: its images are data URLs the exporter rewrites). Size:
+  24,136,677 raw, 8,834,473 gzip, 6,421,860 Brotli against 24,325,868 / 8,941,574 / 6,481,591 before, so 0.8 to
+  1.2 % smaller, as the size report predicted: the binary is Typst's. Speed within noise (outcome-sets with a new
+  title 3.6 ms against 3.4 ms, identical 0.6 against 0.5 ms, Node, median of 30). Not in this step: the runtime and
+  the exporter behind the same wasm-bindgen surface (they keep their C ABI builds), and any Typst patch for size.
 - **Released: `@typfolio/paramdoc` 0.0.1 and `@typfolio/paramdoc-export` 0.0.1 (2026-10-27).** The branch merged as
   pull request 12 (`fd917be`); the release by hand from `main` (`d75cd06`), because the release workflow cannot run
   while the GitHub account is locked for billing (the pull request's checks never started either). The two

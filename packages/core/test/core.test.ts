@@ -155,7 +155,7 @@ test('prepareRequest mounts each piece of data as JSON at its path and checks th
   const decoder = new TextDecoder();
   assert.equal(decoder.decode(prepared.files.get('/input.json')), '{"title":"T"}');
   assert.equal(decoder.decode(prepared.files.get('/common/header.schema.json')), '["a"]');
-  assert.deepEqual(prepared.pdf, { pdf_standard: undefined, pdf_tags: true, creation_timestamp: undefined });
+  assert.deepEqual(prepared.pdf, { standard: undefined, tags: true, creationTimestamp: undefined });
 
   assert.throws(() => prepareRequest({ ...resolved, entrypoint: 'other.typ' }), failsWith('INVALID_REQUEST', /The entrypoint \/other\.typ must be one of the template's files/));
   assert.throws(() => prepareRequest({ ...resolved, files: { 'main.typ': 'x', 'b.typ': 1 as unknown as string } }), failsWith('INVALID_REQUEST', /Template file b\.typ must be a string/));

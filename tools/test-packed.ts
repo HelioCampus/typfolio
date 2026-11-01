@@ -65,7 +65,7 @@ for (const name of packageFiles) {
 }
 // Every tarball must carry the licence; the wasm tarball also carries the NOTICE and third-party notices and licence texts.
 // npm adds LICENSE/NOTICE from a package's own root, so this guards the per-package copies.
-for (const [name, extra] of [['wasm', ['NOTICE', 'THIRD_PARTY_NOTICES.md', 'THIRD_PARTY_LICENSES.md', 'generated/LICENSE.typst-ts']], ['core', []], ['workers', []], ['react', []], ['dev-tools', ['THIRD_PARTY_NOTICES.md', 'dist/panel.js']], ['paramdoc', ['dist/worker.js']]] as [string, string[]][]) {
+for (const [name, extra] of [['wasm', ['NOTICE', 'THIRD_PARTY_NOTICES.md', 'THIRD_PARTY_LICENSES.md']], ['core', []], ['workers', []], ['react', []], ['dev-tools', ['THIRD_PARTY_NOTICES.md', 'dist/panel.js']], ['paramdoc', ['dist/worker.js']]] as [string, string[]][]) {
   const listing = spawnSync('tar', ['-tzf', tarballs[name]], { encoding: 'utf8' });
   if (listing.error || listing.status !== 0) throw listing.error ?? new Error('tar exited ' + listing.status);
   const files = listing.stdout.split('\n');

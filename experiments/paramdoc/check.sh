@@ -53,6 +53,11 @@ if cargo run -q -p paramdoc-export -- fixtures/rotatedlink --fuzz 1 > "$B/.last.
 if cargo run -q -p paramdoc-export -- fixtures/smooth --fuzz 1 > "$B/.last.log" 2>&1; then fail "export smooth: image(scaling: smooth) was accepted"; else ok "export smooth: refused ($(grep -o 'scaling: "smooth") is not supported' "$B/.last.log" | head -1))"; fi
 run "export wrapfuzz: 0 leaks, Typst references for $SAMPLES random samples of the default repertoire" cargo run -q -p paramdoc-export -- fixtures/wrapfuzz --fuzz "$FUZZ" --fuzz-references "$SAMPLES" --reference fixtures/wrapfuzz/data.json
 run "export charset: Turkish, Greek and Cyrillic proven, Typst references for $SAMPLES random samples" cargo run -q -p paramdoc-export -- fixtures/charset --fuzz "$FUZZ" --fuzz-references "$SAMPLES" --reference fixtures/charset/data.json
+# One Typst (M13): the compiler (`@typfolio/wasm`, crates/compiler) and the exporter are built from this workspace, so a
+# fixture compiled through either gives the same PDF bytes; skipped when either wasm build or the package build is missing.
+if [ -f ../../packages/wasm/generated/compiler_bg.wasm ] && [ -f ../../packages/paramdoc-export/generated/paramdoc_export.wasm ] && [ -f ../../packages/paramdoc-export/dist/index.js ]; then
+  run "compiler parity: every fixture compiles to the same bytes through the compiler and the exporter" node ../../tools/check-compiler-parity.ts
+else skip "compiler parity (build the compiler wasm, the exporter wasm and the packages first)"; fi
 # The exporter's wasm build (packages/paramdoc-export, `./build-export-wasm.sh`) must export what the native
 # one exports, byte for byte; skipped when it or the package's build is missing.
 if [ -f ../../packages/paramdoc-export/generated/paramdoc_export.wasm ] && [ -f ../../packages/paramdoc-export/dist/cli.js ]; then

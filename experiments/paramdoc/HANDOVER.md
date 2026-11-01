@@ -49,7 +49,7 @@ Commits, oldest first:
 | `check.sh` | The whole proof below as one script: build, exports with fuzzing, checked-in documents against a fresh export, the wasm exporter against the native one, both runtimes against Typst and each other, pixels, text, structure, veraPDF, and with `DEMO_URL` set the demo page. 192 checks, a few minutes. |
 | `export-documents.sh` | Exports a fixture and copies what a browser runtime needs, `doc.json` and the subset fonts, into `documents/<fixture>/`. |
 | `documents/report/` | The report fixture exported, checked in (152 kB) because the demo page cannot run the exporter at build time. Regenerate after changing the fixture, the dialect or the exporter. |
-| `Cargo.toml`, `Cargo.lock`, `.cargo/config.toml` | Rust workspace; build output goes to `../../.build/paramdoc-target` (gitignored), never in-tree. |
+| (repository root) `Cargo.toml`, `Cargo.lock`, `.cargo/config.toml` | The Rust workspace moved to the repository root on 2026-11-01, shared with the compiler crate `crates/compiler` (M13), so the exporter and the compiler resolve the same Typst; build output goes to `.build/cargo-target` (gitignored), never in-tree. |
 | `ir/` | The parametric document format (`doc.json`), serde types, version 8 (links and link-slot geometry since 2026-10-26), plus `geometry`: the ports of Typst's rounded rectangle and image placement both the exporter and the runtimes use. |
 | `export/` | `paramdoc-export`: links Typst 0.15.1 as a library (crates.io), compiles a fixture with sample data, walks the frames, exports the document, subsets fonts, dumps Typst's layout as a reference and fuzzes the data. Since 2026-10-27 a library (`src/lib.rs`: everything in memory, files in and files out, `export` and `plain_pdf`, the C ABI `ffi` for the wasm build) and a thin command line over it (`src/main.rs`); `./build-export-wasm.sh` builds the library for wasm32 (25 MB, 9 MB gzipped) into `packages/paramdoc-export/generated/`. |
 | `runtime/` | `paramdoc-runtime`: Rust library + CLI (`fill`, `bench`) + C ABI (`paramdoc_open/render/close`, `paramdoc_fill`) for the wasm32 cdylib build. Depends on pdf-writer, flate2, serde_json, sha2 only. |
@@ -248,7 +248,8 @@ through link slots (`slot(name, (text:, href:))`), with rectangles equal to typs
    `ParamdocError` with `code` `document` or `fill`, `names`; `@typfolio/paramdoc/internal` is the `Runtime`
    class with its trace and `compare`, for the proof. The worker client (G37) and the demo on the packages
    followed the same day (item 1); the packed-consumer test (`tools/test-packed.ts`) installs the runtime's
-   tarball too.
+   tarball too. The plugin is planned as `PLAN.md` M14 (2026-10-28): a `?paramdoc` import on the entry file, a
+   cached export at build time, the JSON Schema file feeding the fuzz, the repertoires and a sizing check.
 3. The Rust runtime still deflates every stream per document, which is why it is slower than the TypeScript
    one; writing small streams uncompressed and caching the font streams would even them out.
 4. **Justified wrapping slots**: done (M11, 2026-10-26). `slot(..., justify: true)`; the breaks do not move
@@ -270,7 +271,7 @@ through link slots (`slot(name, (text:, href:))`), with rectangles equal to typs
    half of hyphenation: the data producer hyphenates, the runtime draws Typst's `-` where a line ends on one)
    and the middle dot's CJK shrinkability (G51), see `docs/2026-10-26-soft-hyphens-and-middle-dot.md`. The
    decision on hyphenation itself (G2) stands: off, unless it comes without tables.
-7. **One Typst binding for the compiler, the exporter and the runtime**: planned, `PLAN.md` M13 (2026-10-27).
+7. **One Typst binding for the compiler, the exporter and the runtime**: done for the compiler (M13, 2026-11-01): `@typfolio/wasm` is built from `crates/compiler`, which binds the crates.io Typst the exporter uses from the same workspace lockfile; `tools/check-compiler-parity.ts` (a step of `check.sh`) proves the fixtures compile to the same PDF bytes both ways. What follows is the history of the item.
    Today `@typfolio/wasm` is typst.ts's compiler crate over a patched Typst 0.15.1 and the exporter is the
    crates.io 0.15.1 crates; the patch changes no layout (checked), but the agreement is by inspection. An own
    binding crate in the paramdoc workspace, grown from the exporter's `MemWorld` and `--plain-pdf`, gives one

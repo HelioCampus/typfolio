@@ -69,7 +69,7 @@ One active call is allowed per compiler. Concurrent calls reject with `TypstPdfE
 
 `TypstPdfError` provides `code`, `message`, `diagnostics`, and (when relevant) `cause`. A diagnostic Typfolio recognises carries a `code` of its own (`file-not-found` with `file`, `missing-glyph` with `text`) and a one-line message that links to what to do; switch on the codes, not the messages. [docs/errors.md](../../docs/errors.md) lists them all. Compile diagnostic ranges use upstream zero-based line/column notation. Export diagnostics can have only text.
 
-Remote Typst packages (everything except the bundled one), page ranges, experimental feature flags, and simultaneous PDF standards are not implemented. The pinned upstream builder requires dynamic function construction, so a strict CSP that forbids `unsafe-eval` needs a future binding change. Importing the JS module alone does not instantiate WASM or fetch resources.
+Remote Typst packages (everything except the bundled one), page ranges, experimental feature flags, and simultaneous PDF standards are not implemented. The compiler makes no JavaScript calls of its own, so a page can load it under a Content Security Policy that allows `'wasm-unsafe-eval'` and no `'unsafe-eval'`. Importing the JS module alone does not instantiate WASM or fetch resources.
 
 ## Bundled Typst package
 

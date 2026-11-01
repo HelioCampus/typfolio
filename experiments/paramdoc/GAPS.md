@@ -164,9 +164,11 @@ with the reason.
   worker and pool are gone; it uses these. Node has no Web Worker: `workerFactory` is the way in, and the tests
   drive the worker side in-process through it.
 - **G38 Export as a Vite plugin** fed by `defineTemplate`, with the schema's `maxLength` and `pattern` sizing
-  slots and repertoires. Status: missing; this is where the experiment meets the real packages. Design with the
-  maintainers first. Since 2026-10-27 the exporter itself runs in Node without Rust (`packages/paramdoc-export`,
-  the Rust crate built to wasm, byte-identical to the native export), so the plugin has its tool.
+  slots and repertoires. Status: planned, `PLAN.md` M14 (2026-10-28): a `?paramdoc` import on the template's
+  entry, the export as a cached build step with the JSON Schema file feeding the fuzz, the repertoires and a
+  sizing check that refuses a slot too narrow for its `maxLength`; open decisions listed there. Since
+  2026-10-27 the exporter itself runs in Node without Rust (`packages/paramdoc-export`, the Rust crate built to
+  wasm, byte-identical to the native export), so the plugin has its tool.
 - **G39 The wasm C ABI takes no image files.** Status: missing. A document with static images cannot be opened
   through `paramdoc_open`; the Rust and TypeScript APIs can.
 - **G40 The Rust runtime deflates every stream per document**, which makes it slower than the TypeScript one.

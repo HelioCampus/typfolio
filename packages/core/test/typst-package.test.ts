@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { after, before, test } from 'node:test';
 import { readdir, readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
-import init, { TypstCompilerBuilder } from '@typfolio/wasm';
+import init, { Compiler } from '@typfolio/wasm';
 import { capabilities, createCompiler, defineTemplate, TypstPdfError } from '../dist/index.js';
 import type { ErrorCode, PdfCompiler, PdfResult } from '../dist/index.js';
 import { typfolioPackage } from '../dist/typst-package.generated.js';
@@ -38,25 +38,23 @@ let raw!: RawCompiler;
 // binding like engine.ts does, but with no marker and every shipped package file (including sample.typ) read from disk.
 async function createRaw(): Promise<RawCompiler> {
   const packageDir = '/@editor/typfolio';
-  const builder = new TypstCompilerBuilder();
-  await builder.set_access_model(undefined, () => 0, () => false, (path: string) => path, (path: string) => { throw new Error(`Not supplied: ${path}`); });
-  await builder.set_package_registry(undefined, () => packageDir);
-  await builder.add_raw_font(new Uint8Array(await file('fixtures/fonts/LibertinusSerif-Regular.otf')));
-  const compiler = await builder.build();
+  const compiler = new Compiler();
+  compiler.addFont(new Uint8Array(await file('fixtures/fonts/LibertinusSerif-Regular.otf')));
   const sources = Object.fromEntries(await Promise.all(['typst.toml', 'lib.typ', 'sample.typ'].map(async (name): Promise<[string, Buffer]> =>
     [name, await readFile(new URL(`local/typfolio/0.1.0/${name}`, packageRoot))])));
   return {
     compile(files, entrypoint = '/main.typ', inputs = []) {
-      compiler.reset_shadow();
+      compiler.reset();
       try {
-        for (const [name, bytes] of Object.entries(sources)) compiler.map_shadow(`${packageDir}/${name}`, new Uint8Array(bytes));
-        for (const [path, source] of Object.entries(files)) assert.ok(compiler.map_shadow(path, encoder.encode(source)));
-        const world = compiler.snapshot('/', entrypoint, inputs);
+        for (const [name, bytes] of Object.entries(sources)) compiler.mount(`${packageDir}/${name}`, new Uint8Array(bytes));
+        for (const [path, source] of Object.entries(files)) compiler.mount(path, encoder.encode(source));
+        compiler.mountPackage('@local/typfolio:0.1.0', packageDir);
+        const compiled = compiler.compile(entrypoint, JSON.stringify({ inputs: Object.fromEntries(inputs) }));
         try {
-          const compiled = world.compile(0, 3);
-          return { ok: !compiled.hasError, message: compiled.diagnostics.map((d: { message: string }) => d.message).join('\n'), title: world.title(0) };
-        } finally { world.free(); }
-      } finally { compiler.reset_shadow(); }
+          const diagnostics = JSON.parse(compiled.diagnostics) as { message: string }[];
+          return { ok: compiled.ok, message: diagnostics.map(d => d.message).join('\n'), title: compiled.title };
+        } finally { compiled.free(); }
+      } finally { compiler.reset(); }
     },
   };
 }

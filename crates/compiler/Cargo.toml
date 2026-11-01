@@ -1,0 +1,23 @@
+[package]
+name = "typfolio-compiler"
+description = "Typfolio's Typst compiler for WebAssembly: an in-memory world, PDF export and structured diagnostics behind a small wasm-bindgen surface"
+repository = "https://github.com/HelioCampus/typfolio"
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+version.workspace = true
+
+[lib]
+# tools/build-wasm.ts builds a `cdylib` only (`cargo rustc --crate-type cdylib`), so link-time optimization applies to
+# the whole binary; the `rlib` is for native tests and tools.
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+typst.workspace = true
+typst-pdf.workspace = true
+typst-layout.workspace = true
+comemo.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+# Exactly the wasm-bindgen CLI version pinned in compiler-source.json: the generated loader and the binary must match.
+wasm-bindgen = "=0.2.118"

@@ -38,7 +38,8 @@ test('THIRD_PARTY_LICENSES.md matches the shipped Cargo.lock and covers every cr
   assert.ok(notices.includes(`Cargo.lock SHA-256: \`${provenance.cargoLockSha256}\``), 'the notices must be generated from the Cargo.lock recorded in provenance.json');
 
   const crates = [...notices.matchAll(/^\| (?!Crate \||--- \|)([^|]+) \| ([^|]+) \|/gm)].map(m => `${m[1]} ${m[2]}`);
-  assert.ok(crates.length > 300, `expected the notices table to list the crates of the dependency graph, found ${crates.length}`);
+  // The compiler's dependency graph (Typst, typst-pdf and what they pull in) is a few hundred crates.
+  assert.ok(crates.length > 200, `expected the notices table to list the crates of the dependency graph, found ${crates.length}`);
   assert.equal(new Set(crates).size, crates.length, 'the notices table must not repeat a crate');
   assert.equal(notices.match(/^- (\d+) crates\.$/m)?.[1], String(crates.length), 'the notices crate count must match its table');
 

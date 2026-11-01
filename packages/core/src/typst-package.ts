@@ -10,16 +10,6 @@ export const bundledPackageDirectory = `${reservedDirectory}/packages/${namespac
 
 export const isReservedPath = (path: string) => path === reservedDirectory || path.startsWith(`${reservedDirectory}/`);
 
-/** Answers the compiler's package registry hook: the virtual directory, or an error naming what is supported. */
-export function resolvePackage(spec: { namespace?: string; name?: string; version?: string } | string): string {
-  if (typeof spec === 'object' && spec !== null && spec.namespace === namespace && spec.name === name && spec.version === version) {
-    return bundledPackageDirectory;
-  }
-  const requested = typeof spec === 'string' ? spec : `@${spec?.namespace}/${spec?.name}:${spec?.version}`;
-  // A string, not an Error: the binding wraps a thrown Error together with its JS stack trace in the diagnostic.
-  throw `Only ${bundledPackageSpec} is available; remote Typst packages are not supported (requested ${requested})`;
-}
-
 const encoder = new TextEncoder();
 
 /** The package sources as mounts in its virtual directory. */

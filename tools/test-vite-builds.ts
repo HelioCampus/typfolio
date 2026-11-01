@@ -11,7 +11,8 @@ const vite = fileURLToPath(new URL('../node_modules/vite/bin/vite.js', import.me
 const provenance: Provenance = JSON.parse(await readFile(new URL('../packages/wasm/generated/provenance.json', import.meta.url), 'utf8'));
 
 const pin: CompilerPin = JSON.parse(await readFile(new URL('../compiler-source.json', import.meta.url), 'utf8'));
-assert.equal(provenance.revision, pin.revision, 'provenance must record the pinned source revision');
+assert.equal(provenance.crate, pin.crate, 'provenance must record the pinned crate');
+assert.equal(provenance.typst, pin.typst, 'provenance must record the pinned Typst version');
 assert.equal(provenance.crateType, pin.crateType, 'provenance must record the pinned crate type');
 assert.equal(provenance.wasmOpt, pin.wasmOpt, 'provenance must record the pinned wasm-opt setting');
 assert.deepEqual(provenance.cargoProfile, pin.cargoProfile, 'provenance must record the pinned cargo profile');

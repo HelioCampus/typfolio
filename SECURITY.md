@@ -22,6 +22,6 @@ Security fixes are made in the latest release line only. If you use an older ver
 
 ## Scope
 
-The packages compile Typst templates and JSON data to PDF, in the browser or in Node. Reports about the compile boundary are in scope, for example a template reading files or reaching the network, a request escaping its isolation, or the packed artifacts differing from their pinned build. Vulnerabilities in the upstream Typst compiler or in typst.ts should be reported to those projects; tell us too if Typfolio's pinned build is affected.
+The packages compile Typst templates and JSON data to PDF, in the browser or in Node. Reports about the compile boundary are in scope, for example a template reading files or reaching the network, a request escaping its isolation, or the packed artifacts differing from their pinned build. Vulnerabilities in the Typst compiler itself should be reported to the Typst project; tell us too if Typfolio's pinned build is affected.
 
 There is no bug bounty programme, and we cannot offer rewards for reports.
