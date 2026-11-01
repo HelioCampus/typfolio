@@ -1,11 +1,32 @@
 # @typfolio/dev-tools
 
+## 0.4.0
+
+### Minor Changes
+
+- a46a755: Structure panel: a PDF's tags in the page while you work on a template.
+
+  - `@typfolio/dev-tools/panel`: `mountStructureDevtools(options)` adds a button with the number of structure problems found (in the corner `buttonPosition` names) that opens a panel along a side of the page (`position`: bottom, top, left or right; its toolbar moves it); `mountStructurePanel(element, options)` shows the panel in an element of yours. The panel lists each page's tags in reading order, the structure warnings with the tag each is about, and the selected tag's text, alt text and language, with a filter by role or text.
+  - React is bundled into the entry, so a page needs no React of its own; the page passes its own pdf.js. `THIRD_PARTY_NOTICES.md` carries React's licence.
+
+- a46a755: Structure warnings: what a screen reader user would trip over, including what a PDF/UA-1 compile accepts.
+
+  - `@typfolio/dev-tools/pdf`: `inspectPdf` reports `structure`, each page's tags in reading order with their text, alt text and language.
+  - `@typfolio/dev-tools/pdf`: `structureWarnings(pages)` lists a table without header cells, several pages without a heading, headings that skip a level and a figure without alt text, each with its page and element. A PDF/UA-1 compile refuses the last two but accepts the first two. `checkStructure(bytes)` reads a PDF and returns them, or one `untagged` warning for a PDF that is not tagged. `readStructure(document)` reads the pages from a pdf.js document you already loaded, without loading pdf.js itself.
+  - `@typfolio/dev-tools`: `check` and `checkTemplate` take `structure`, a function such as `checkStructure`. A mode whose PDF has warnings is not `ok`, and its result lists them in `structure`. The main entry still never loads pdf.js.
+  - `@typfolio/dev-tools/pdf`: a heading's text no longer includes text that an artifact draws inside it.
+
+### Patch Changes
+
+- Updated dependencies [2815e1a]
+  - @typfolio/core@0.4.0
+
 ## 0.3.0
 
 ### Minor Changes
 
 - A template is a function that takes its data: `compile(report(data, { header: headerData }), { assets, pdf })`. One way to define a template, one way to compile it, and the same in React.
-  
+
   - `@typfolio/core` (breaking): `defineTemplate({ entrypoint?, files, schema?, schemaPath?, partials? })` and `definePartial({ files, schema?, schemaPath, partials? })` take the schema and the path its file reads the data at directly; `defineInput` is removed. A template is a function: called with its data, and its partials' data by key, it returns the document to compile (`report(data)` without partials, `report()` without data). The call is typed by the schemas: a missing or unknown partial key, or data of the wrong shape, is a type error. `TemplateDefinition<T, P>` can be called with a generic `T` (an application's own export hook) without a cast.
   - `@typfolio/core` (breaking): `compile(document, { assets?, pdf?, signal?, validate? })` replaces `compile({ template, input, partials, assets, pdf }, { signal })`. Plain templates are removed: a template string, `{ entrypoint, files }` requests, `templateFromFiles`, the reserved `/input.json`, and the `PdfRequest`, `PdfTemplate`, `AnyPdfRequest`, `TemplateRequest` and `JsonValue` types. A template that reads `json("/input.json")` works with `schemaPath: 'input.json'`. Under Typfolio, `@local/typfolio`'s `input()` takes only `json.with(...)`.
   - `@typfolio/core`: `validate: false` skips the schemas (the types still apply); missing data is still an `INVALID_REQUEST`. Data passed to a template that has no `schemaPath` is an `INVALID_REQUEST` instead of being dropped.
@@ -25,7 +46,7 @@
 ### Minor Changes
 
 - 4971d15: A PDF kept up to date with its inputs, with charts drawn at the template's size; templates whose parts have data of their own, each checked by its schema.
-  
+
   - `@typfolio/core`: `defineTemplate`, `definePartial` and `defineInput` describe a template whose parts read data of their own, such as a shared header with the institution and its logo. Each input pairs a Standard Schema (Zod, Valibot, ArkType, …) with the path of its JSON Schema file; the Typst file reads its data with `input(json.with("./header.schema.json"))`, a sample in the editor and the request's data under Typfolio. A request is `{ template, input, partials: { header: … } }`, typed by the schemas (`TemplateRequest`), and every `compile` (core, worker, React) type-checks it. Data is checked before compiling; data that does not match rejects with the new error code `INVALID_INPUT`, which lists the issues. Such a template compiles only the files it declares, and a file it imports without declaring it fails with a `file-not-found` diagnostic. Plain templates and `/input.json` work as before.
   - `@typfolio/core`: diagnostic codes. A diagnostic Typfolio recognises carries a `code`, the facts as fields and a one-line message linking to `docs/errors.md`: `file-not-found` (with `file`: a missing import, JSON file or image, where Typst only said "failed to load file (is a directory)") and `missing-glyph` (with `text`: a character no loaded font can draw, refused by a PDF standard). Switch on `code` rather than on messages.
   - `@typfolio/core`: a PDF standard's failure (an image without alt text, a missing glyph) reads as its message, one diagnostic per failure, instead of the binding's Rust debug text.

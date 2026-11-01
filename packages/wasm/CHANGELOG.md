@@ -1,11 +1,21 @@
 # @typfolio/wasm
 
+## 0.2.0
+
+### Minor Changes
+
+- 2815e1a: The compiler is Typfolio's own binding of Typst.
+
+  - `@typfolio/wasm` is now built from `crates/compiler` in the repository, which binds the Typst crates directly (Typst 0.15.1, unchanged) instead of typst.ts's compiler crate. The JavaScript surface is two classes, `Compiler` and `Compiled`, made for `@typfolio/core`; `compiler-source.json` pins the crate, the Typst version, the toolchain and the expected output hashes, and `provenance.json` records the source hash the binary was built from. `LICENSE.typst-ts` is gone from the package; the third-party notices cover the Typst crates.
+  - The compiler makes no JavaScript calls of its own and the loader constructs no code, so a page can load it under a Content Security Policy that allows `'wasm-unsafe-eval'` without `'unsafe-eval'` (checked in Chromium, Firefox and WebKit, where the previous build failed with an `EvalError`).
+  - `@typfolio/core`: diagnostics come from the compiler as data. A diagnostic's hints follow its message, one per `hint:` line (compile diagnostics used to carry them as `, hints: …`); a trace entry is a diagnostic of severity `hint`. A missing file is reported by Typst as `file not found (searched at /the/path)` and still becomes `file-not-found` with `file` and `path`. The PDF's creation date defaults to the time of the compile when `creationTimestamp` is not set, as before, and `datetime.today()` uses the page's local date.
+
 ## 0.1.1
 
 ### Patch Changes
 
 - 4971d15: A PDF kept up to date with its inputs, with charts drawn at the template's size; templates whose parts have data of their own, each checked by its schema.
-  
+
   - `@typfolio/core`: `defineTemplate`, `definePartial` and `defineInput` describe a template whose parts read data of their own, such as a shared header with the institution and its logo. Each input pairs a Standard Schema (Zod, Valibot, ArkType, …) with the path of its JSON Schema file; the Typst file reads its data with `input(json.with("./header.schema.json"))`, a sample in the editor and the request's data under Typfolio. A request is `{ template, input, partials: { header: … } }`, typed by the schemas (`TemplateRequest`), and every `compile` (core, worker, React) type-checks it. Data is checked before compiling; data that does not match rejects with the new error code `INVALID_INPUT`, which lists the issues. Such a template compiles only the files it declares, and a file it imports without declaring it fails with a `file-not-found` diagnostic. Plain templates and `/input.json` work as before.
   - `@typfolio/core`: diagnostic codes. A diagnostic Typfolio recognises carries a `code`, the facts as fields and a one-line message linking to `docs/errors.md`: `file-not-found` (with `file`: a missing import, JSON file or image, where Typst only said "failed to load file (is a directory)") and `missing-glyph` (with `text`: a character no loaded font can draw, refused by a PDF standard). Switch on `code` rather than on messages.
   - `@typfolio/core`: a PDF standard's failure (an image without alt text, a missing glyph) reads as its message, one diagnostic per failure, instead of the binding's Rust debug text.

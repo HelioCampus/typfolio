@@ -1,6 +1,6 @@
 {
   "name": "@typfolio/dev-tools",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Dev-time tools for Typfolio templates: schema-based template checks, PDF inspection and an in-page structure panel (install as a devDependency)",
   "type": "module",
   "license": "Apache-2.0",
@@ -26,7 +26,7 @@
     }
   },
   "dependencies": {
-    "@typfolio/core": "^0.3.0"
+    "@typfolio/core": "^0.4.0"
   },
   "peerDependencies": {
     "pdfjs-dist": "^6.3.0"
