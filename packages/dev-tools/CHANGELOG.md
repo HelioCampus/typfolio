@@ -1,5 +1,12 @@
 # @typfolio/dev-tools
 
+## 0.5.0
+
+### Patch Changes
+
+- Updated dependencies [bdb7fc5]
+  - @typfolio/core@0.5.0
+
 ## 0.4.0
 
 ### Minor Changes

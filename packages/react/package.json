@@ -1,6 +1,6 @@
 {
   "name": "@typfolio/react",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "Headless React bindings for Typfolio PDF clients",
   "type": "module",
   "license": "Apache-2.0",
@@ -33,7 +33,7 @@
     }
   },
   "dependencies": {
-    "@typfolio/core": "^0.4.0"
+    "@typfolio/core": "^0.5.0"
   },
   "peerDependencies": {
     "react": ">=18.2.0",
