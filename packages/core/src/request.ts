@@ -98,7 +98,7 @@ export function prepareRequest(request: ResolvedRequest, options: PrepareRequest
     put(name, bytes);
   }
   const pdf = value.pdf === undefined ? {} : record(value.pdf, 'pdf');
-  keys(pdf, ['standards', 'tags', 'creationTimestamp'], 'pdf');
+  keys(pdf, ['standards', 'tags', 'creationTimestamp', 'a11yExtras'], 'pdf');
   const standards = pdf.standards ?? [];
   if (!Array.isArray(standards) || standards.some(s => !pdfStandards.includes(s))) {
     throw new TypstPdfError('UNSUPPORTED_OPTION', 'Unsupported PDF standard');
@@ -107,8 +107,11 @@ export function prepareRequest(request: ResolvedRequest, options: PrepareRequest
   if (pdf.tags !== undefined && typeof pdf.tags !== 'boolean') invalid('pdf.tags must be boolean');
   if (pdf.tags === false && ['ua-1', 'a-1a', 'a-2a', 'a-3a'].includes(standards[0])) invalid(`${standards[0]} requires PDF tags`);
   if (pdf.creationTimestamp !== undefined && !Number.isSafeInteger(pdf.creationTimestamp)) invalid('creationTimestamp must be Unix seconds as a safe integer');
+  if (pdf.a11yExtras !== undefined && typeof pdf.a11yExtras !== 'boolean') invalid('pdf.a11yExtras must be boolean');
   return {
     entrypoint, files,
+    // Typst's in-development features, by the names the binding takes.
+    features: pdf.a11yExtras === false ? [] : ['a11y-extras'],
     pdf: { standard: standards[0], tags: pdf.tags ?? true, creationTimestamp: pdf.creationTimestamp },
   };
 }

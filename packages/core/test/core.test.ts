@@ -235,7 +235,7 @@ test('each advertised single PDF standard reaches the exporter', async () => {
 
 test('rejects unsupported options, data path collisions and unsafe paths', async () => {
   // Options the types do not allow (unknown fields, a made-up standard, two standards); the cast keeps them reachable at run time.
-  const unsupported = [{ pages: '1' }, { standards: ['ua-1', 'a-2b'] }, { standards: ['imaginary'] }, { features: ['a11y-extras'] }] as unknown as PdfOptions[];
+  const unsupported = [{ pages: '1' }, { standards: ['ua-1', 'a-2b'] }, { standards: ['imaginary'] }, { features: ['a11y-extras'] }, { html: true }] as unknown as PdfOptions[];
   for (const pdf of unsupported) {
     await assert.rejects(compile({ ...request, pdf }), hasCode('UNSUPPORTED_OPTION'));
   }
@@ -277,4 +277,44 @@ test('dispose waits for accepted work, is idempotent and closes the client', asy
   assert.ok((await pending).bytes.length);
   await disposal;
   await own.dispose();
+});
+
+const rowHeaders = `#set document(title: "Row headers")
+#set text(lang: "en")
+#table(columns: 2, table.header[Student][Score], pdf.header-cell(scope: "row")[Ada], [9], pdf.header-cell(scope: "row")[Lin], [8])`;
+
+test('a11y-extras is on by default and pdf.a11yExtras turns it off', async () => {
+  assert.equal(compiler.capabilities.a11yExtras, true);
+  for (const pdf of [undefined, { a11yExtras: true }, { standards: ['ua-1'] }] as PdfOptions[]) {
+    assert.ok((await compiler.compile(bare(rowHeaders), { pdf })).bytes.length);
+  }
+  await assert.rejects(compiler.compile(bare(rowHeaders), { pdf: { a11yExtras: false } }), failsWith('COMPILATION', /header-cell/));
+  // The feature is part of the cached standard library: switching it back on takes effect.
+  assert.ok((await compiler.compile(bare(rowHeaders))).bytes.length);
+  await assert.rejects(compiler.compile(bare(rowHeaders), { pdf: { a11yExtras: 'yes' } as unknown as PdfOptions }), hasCode('INVALID_REQUEST'));
+});
+
+test('the WASM binding takes every Typst feature by name', async () => {
+  const { Compiler } = await import('@typfolio/wasm');
+  const engine = new Compiler();
+  try {
+    for (const font of fonts) engine.addFont(font);
+    const ok = (source: string, features?: string[]) => {
+      engine.reset();
+      engine.mount('/main.typ', new TextEncoder().encode(source));
+      const compiled = engine.compile('/main.typ', JSON.stringify({ features }));
+      try { return compiled.ok || compiled.diagnostics; } finally { compiled.free(); }
+    };
+    const uses = { 'a11y-extras': '#let f = pdf.header-cell', html: '#let f = html.elem', bundle: '#let f = asset' };
+    for (const [feature, source] of Object.entries(uses)) {
+      assert.equal(ok(source, [feature]), true, feature);
+      assert.notEqual(ok(source, []), true, `${feature} off`);
+    }
+    assert.equal(ok(Object.values(uses).join('\n'), Object.keys(uses)), true);
+    // Without the field only a11y-extras is on.
+    assert.equal(ok(uses['a11y-extras']), true);
+    assert.notEqual(ok(uses.html), true);
+    assert.notEqual(ok(uses.bundle), true);
+    assert.throws(() => ok('', ['imaginary']), /unknown feature "imaginary"/);
+  } finally { engine.free(); }
 });

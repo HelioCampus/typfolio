@@ -255,7 +255,7 @@ Sizes from the production Vite builds:
 
 | Artifact | Size |
 |---|---|
-| Compiler WASM | 24,136,677 bytes; about 8.8 MB gzip, 6.4 MB Brotli |
+| Compiler WASM | 24,161,860 bytes; about 8.8 MB gzip, 6.4 MB Brotli |
 | Worker application JavaScript (host + worker runtime) | 47.7 kB + 33.3 kB |
 | Core-only library build | about 40 kB |
 

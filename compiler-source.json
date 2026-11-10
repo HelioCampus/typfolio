@@ -11,6 +11,6 @@
   "crateType": "cdylib",
   "cargoProfile": { "optLevel": "s", "lto": "fat", "codegenUnits": 1, "panic": "abort", "strip": "symbols" },
   "wasmOpt": false,
-  "wasmSha256": "64c92e57b6fd3fb608c0b1c8aa8fc8d055f40fd4684681550f6a645bc67f012d",
-  "loaderSha256": "1470536f53bf1a62d23b773ef5562e44ae3d3c6bb6e4de3e47b08e6a687d42b8"
+  "wasmSha256": "db27f4dcefd6672f1aeebeea30d77cb2d33260000d224d101b9763a51c4de084",
+  "loaderSha256": "25ea8d5765798f2240e9eaca8fd7c9c295ac5f65dd6bad9d26638fab87c9197c"
 }

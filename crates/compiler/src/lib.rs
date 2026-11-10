@@ -20,7 +20,7 @@ use typst_layout::PagedDocument;
 use wasm_bindgen::prelude::*;
 
 use crate::diagnostics::Diagnostic;
-use crate::options::{CompileOptions, pdf_options};
+use crate::options::{CompileOptions, feature_names, pdf_options};
 use crate::world::{CompileWorld, Fonts, LibraryCache, Vfs, project_file};
 
 /// Memoized Typst results older than this many compiles are dropped after each compile, so repeating a document
@@ -72,8 +72,9 @@ impl Compiler {
     }
 
     /// Compiles the mounted file at `entrypoint` and exports it as PDF. `options` is JSON:
-    /// `{ inputs?: Record<string, string>, pdf?: { standard?, tags?, creationTimestamp? }, now?: { unixSeconds, utcOffsetMinutes? } }`
-    /// (see `options.rs`). Fails only for a malformed request; a document that does not compile or export is a
+    /// `{ inputs?: Record<string, string>, pdf?: { standard?, tags?, creationTimestamp? }, features?: string[], now?: { unixSeconds, utcOffsetMinutes? } }`
+    /// (see `options.rs`). `features` are Typst's in-development features (`a11y-extras`, `html`, `bundle`); without
+    /// the field `a11y-extras` is on. Fails only for a malformed request; a document that does not compile or export is a
     /// `Compiled` without PDF whose diagnostics say why.
     pub fn compile(&mut self, entrypoint: &str, options: &str) -> Result<Compiled, JsError> {
         let options: CompileOptions = serde_json::from_str(options).map_err(|error| JsError::new(&format!("invalid compile options: {error}")))?;
@@ -81,9 +82,10 @@ impl Compiler {
         if !self.vfs.has(main) {
             return Err(JsError::new(&format!("the entrypoint {entrypoint} is not mounted")));
         }
-        // Checked before compiling, so a bad standard is a request error and never a compile that went to waste.
+        // Checked before compiling, so a bad standard or feature is a request error and never a compile that went to waste.
         let pdf = pdf_options(&options.pdf, options.now).map_err(|message| JsError::new(&message))?;
-        let library = self.library.get(&options.inputs);
+        let features = feature_names(&options.features).map_err(|message| JsError::new(&message))?;
+        let library = self.library.get(&options.inputs, &features);
         let world = CompileWorld::new(library, &self.fonts, &self.vfs, main, &options);
 
         let Warned { output, warnings } = typst::compile::<PagedDocument>(&world);

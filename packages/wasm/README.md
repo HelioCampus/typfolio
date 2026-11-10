@@ -6,7 +6,8 @@ build step of its own; the files in `generated/` are produced by `npm run build:
 pins in `compiler-source.json`.
 
 - `@typfolio/wasm` exports the bindings used by `@typfolio/core` (`Compiler`, `Compiled`). They exist for core and are
-  not a public API.
+  not a public API. `compile` takes Typst's in-development features by name (`features`: `a11y-extras`, `html`,
+  `bundle`); `a11y-extras` is on when the field is absent.
 - `@typfolio/wasm/compiler.wasm` is the WASM binary. Applications load it explicitly (bytes, module, or a hosted URL).
 - `@typfolio/wasm/provenance` is the build provenance (crate, Typst version, tool versions, source and output hashes).
 

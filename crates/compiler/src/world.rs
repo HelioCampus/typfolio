@@ -14,7 +14,7 @@ use typst::text::{Font, FontBook};
 use typst::utils::LazyHash;
 use typst::{Library, LibraryExt, World};
 
-use crate::options::{CompileOptions, Now, date_from_unix};
+use crate::options::{CompileOptions, Now, date_from_unix, features};
 
 /// The id of a file at an absolute virtual path in the project root.
 pub fn project_file(path: &str) -> Result<FileId, String> {
@@ -118,20 +118,21 @@ fn not_found(path: &str) -> FileError {
     FileError::NotFound(PathBuf::from(path))
 }
 
-/// The standard library for the last `sys.inputs` seen; building it is not free, and the inputs rarely change.
+/// The standard library for the last `sys.inputs` and features seen; building it is not free, and they rarely change.
 #[derive(Default)]
 pub struct LibraryCache {
-    entry: Option<(BTreeMap<String, String>, LazyHash<Library>)>,
+    entry: Option<(BTreeMap<String, String>, Vec<String>, LazyHash<Library>)>,
 }
 
 impl LibraryCache {
-    pub fn get(&mut self, inputs: &BTreeMap<String, String>) -> &LazyHash<Library> {
-        if self.entry.as_ref().is_none_or(|(cached, _)| cached != inputs) {
+    /// `names` are feature names as `feature_names` returns them.
+    pub fn get(&mut self, inputs: &BTreeMap<String, String>, names: &[String]) -> &LazyHash<Library> {
+        if self.entry.as_ref().is_none_or(|(cached, cached_names, _)| cached != inputs || cached_names != names) {
             let dict: Dict = inputs.iter().map(|(key, value)| (key.as_str().into(), Value::Str(value.as_str().into()))).collect();
-            let library = Library::builder().with_inputs(dict).build();
-            self.entry = Some((inputs.clone(), LazyHash::new(library)));
+            let library = Library::builder().with_inputs(dict).with_features(features(names)).build();
+            self.entry = Some((inputs.clone(), names.to_vec(), LazyHash::new(library)));
         }
-        &self.entry.as_ref().expect("just set").1
+        &self.entry.as_ref().expect("just set").2
     }
 }
 

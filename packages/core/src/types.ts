@@ -14,6 +14,11 @@ export interface PdfOptions {
   tags?: boolean;
   /** Unix seconds, used when the document date is auto. */
   creationTimestamp?: number;
+  /**
+   * Typst's in-development `a11y-extras` feature: `pdf.header-cell`, `pdf.data-cell` and `pdf.table-summary` in
+   * templates. Defaults to `true`; these functions can change with a Typst upgrade.
+   */
+  a11yExtras?: boolean;
 }
 
 /** Files a template reads besides its data, such as a logo or a chart, by virtual path: `{ 'logo.png': bytes }`. */
@@ -76,6 +81,9 @@ export const capabilities = Object.freeze({
   tags: true,
   creationTimestamp: true,
   pageRanges: false,
+  /** Typst's `a11y-extras` feature, the `a11yExtras` option. */
+  a11yExtras: true,
+  /** Typst's other in-development features (`html`, `bundle`); the WASM binding accepts them, core does not pass them. */
   experimentalFeatures: false,
   remotePackages: false,
   /** Typst packages importable from templates; only the one bundled with core. */

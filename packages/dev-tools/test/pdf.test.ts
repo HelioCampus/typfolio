@@ -407,3 +407,12 @@ test('a missing pdfjs-dist rejects with an install hint', async () => {
     await rm(directory, { recursive: true, force: true });
   }
 });
+
+test('pdf.header-cell (a11y-extras, on by default) tags row headers as TH', async () => {
+  const table = (cell: string) => defineTemplate({ files: { 'main.typ': `#set document(title: "Row headers")
+#set text(lang: "en")
+#table(columns: 2, table.header[Student][Score], ${cell}[Ada], [9], ${cell}[Lin], [8])` } })();
+  const roles = async (cell: string) => (await inspectPdf((await compiler.compile(table(cell), { pdf: { standards: ['ua-1'], creationTimestamp: timestamp } })).bytes)).structureRoles;
+  assert.deepEqual([(await roles('')).TH, (await roles('')).TD], [2, 4]);
+  assert.deepEqual([(await roles('pdf.header-cell(scope: "row")')).TH, (await roles('pdf.header-cell(scope: "row")')).TD], [4, 2]);
+});

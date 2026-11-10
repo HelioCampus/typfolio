@@ -69,7 +69,9 @@ One active call is allowed per compiler. Concurrent calls reject with `TypstPdfE
 
 `TypstPdfError` provides `code`, `message`, `diagnostics`, and (when relevant) `cause`. A diagnostic Typfolio recognises carries a `code` of its own (`file-not-found` with `file`, `missing-glyph` with `text`) and a one-line message that links to what to do; switch on the codes, not the messages. [docs/errors.md](../../docs/errors.md) lists them all. Compile diagnostic ranges use upstream zero-based line/column notation. Export diagnostics can have only text.
 
-Remote Typst packages (everything except the bundled one), page ranges, experimental feature flags, and simultaneous PDF standards are not implemented. The compiler makes no JavaScript calls of its own, so a page can load it under a Content Security Policy that allows `'wasm-unsafe-eval'` and no `'unsafe-eval'`. Importing the JS module alone does not instantiate WASM or fetch resources.
+Typst's in-development `a11y-extras` feature is on by default, so templates can mark row headers and other header cells by hand with `pdf.header-cell`, override one with `pdf.data-cell`, and describe a table with `pdf.table-summary`; `pdf: { a11yExtras: false }` turns it off. These functions are not stable in Typst and can change when the pinned compiler is upgraded.
+
+Remote Typst packages (everything except the bundled one), page ranges, Typst's other in-development features (`html`, `bundle`), and simultaneous PDF standards are not implemented. The compiler makes no JavaScript calls of its own, so a page can load it under a Content Security Policy that allows `'wasm-unsafe-eval'` and no `'unsafe-eval'`. Importing the JS module alone does not instantiate WASM or fetch resources.
 
 ## Bundled Typst package
 
