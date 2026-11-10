@@ -4,6 +4,7 @@ use std::collections::BTreeMap;
 
 use serde::Deserialize;
 use typst::foundations::{Datetime, Smart};
+use typst::{Feature, Features};
 use typst_pdf::{PdfOptions, PdfStandard, PdfStandards, Timestamp};
 
 #[derive(Deserialize, Default)]
@@ -12,6 +13,9 @@ pub struct CompileOptions {
     /// `sys.inputs`, string values only.
     pub inputs: BTreeMap<String, String>,
     pub pdf: PdfRequest,
+    /// Typst's in-development features by their CLI names (`a11y-extras`, `html`, `bundle`). `["a11y-extras"]` when
+    /// absent; an empty list enables none.
+    pub features: Option<Vec<String>>,
     /// The caller's clock. Without it the document has no date unless it sets one, and `datetime.today()` fails.
     pub now: Option<Now>,
 }
@@ -34,6 +38,29 @@ pub struct Now {
     /// The caller's local time zone as minutes east of UTC (JavaScript: `-new Date().getTimezoneOffset()`).
     #[serde(default)]
     pub utc_offset_minutes: i32,
+}
+
+/// The features of a request, sorted and without repeats (the standard library is cached by them).
+pub fn feature_names(request: &Option<Vec<String>>) -> Result<Vec<String>, String> {
+    let mut names = request.clone().unwrap_or_else(|| vec!["a11y-extras".into()]);
+    names.sort();
+    names.dedup();
+    names.iter().try_for_each(|name| feature(name).map(drop))?;
+    Ok(names)
+}
+
+/// Typst's features for names `feature_names` accepted.
+pub fn features(names: &[String]) -> Features {
+    names.iter().filter_map(|name| feature(name).ok()).collect()
+}
+
+fn feature(name: &str) -> Result<Feature, String> {
+    match name {
+        "a11y-extras" => Ok(Feature::A11yExtras),
+        "html" => Ok(Feature::Html),
+        "bundle" => Ok(Feature::Bundle),
+        _ => Err(format!("unknown feature {name:?} (a11y-extras, html and bundle are available)")),
+    }
 }
 
 /// typst-pdf's options for a request. The identifier stays `auto` (a hash of title and author), as the Typst CLI does.

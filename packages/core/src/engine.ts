@@ -142,7 +142,7 @@ class Engine {
       this.compiler.mountPackage(bundledPackageSpec, bundledPackageDirectory);
       // The clock: the PDF's creation date when the request sets none, and `datetime.today()`.
       const now = { unixSeconds: Math.floor(Date.now() / 1000), utcOffsetMinutes: -new Date().getTimezoneOffset() };
-      compiled = this.compiler.compile(request.entrypoint, JSON.stringify({ inputs: Object.fromEntries(extras.inputs), pdf: request.pdf, now }));
+      compiled = this.compiler.compile(request.entrypoint, JSON.stringify({ inputs: Object.fromEntries(extras.inputs), pdf: request.pdf, features: request.features, now }));
       const diagnostics = (JSON.parse(compiled.diagnostics) as RawDiagnostic[]).map(diagnostic);
       const bytes = compiled.takePdf();
       if (bytes === undefined) {
