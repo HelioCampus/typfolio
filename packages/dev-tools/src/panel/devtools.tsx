@@ -38,9 +38,9 @@ const minSize = { width: 280, height: 140 };
 const growKey: Record<Side, string> = { bottom: 'ArrowUp', top: 'ArrowDown', left: 'ArrowRight', right: 'ArrowLeft' };
 const shrinkKey: Record<Side, string> = { bottom: 'ArrowDown', top: 'ArrowUp', left: 'ArrowLeft', right: 'ArrowRight' };
 
-/** A box with the edge the panel docks to filled in. */
-function SideIcon({ side }: { side: Side }) {
-  const edge = { bottom: { x: 1, y: 9, width: 12, height: 4 }, top: { x: 1, y: 1, width: 12, height: 4 }, left: { x: 1, y: 1, width: 4, height: 12 }, right: { x: 9, y: 1, width: 4, height: 12 } }[side];
+/** A box with the edge the panel docks to filled in; all of it for the whole page. */
+function SideIcon({ side }: { side: Side | 'full' }) {
+  const edge = { full: { x: 2.5, y: 2.5, width: 9, height: 9 }, bottom: { x: 1, y: 9, width: 12, height: 4 }, top: { x: 1, y: 1, width: 12, height: 4 }, left: { x: 1, y: 1, width: 4, height: 12 }, right: { x: 9, y: 1, width: 4, height: 12 } }[side];
   return (
     <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true">
       <rect x="0.5" y="0.5" width="13" height="13" rx="2" fill="none" stroke="currentColor" />
@@ -63,6 +63,8 @@ export function Devtools({ pdfjs, bytes, theme, buttonPosition, position, initia
   const state = useStructure(pdfjs, bytes);
   const [open, setOpen] = useState(initialIsOpen);
   const [side, setSide] = useState(position);
+  // Over the whole page, for room to read the page view; the side it was docked to is kept for the way back.
+  const [full, setFull] = useState(false);
   // Each axis keeps its own size, so moving the panel to the other axis and back keeps both.
   const [sizes, setSizes] = useState<{ width?: number; height?: number }>({});
   const toggle = useRef<HTMLButtonElement>(null);
@@ -124,10 +126,24 @@ export function Devtools({ pdfjs, bytes, theme, buttonPosition, position, initia
   const sidePicker = (
     <div className="tf-sides" role="group" aria-label="Move the panel">
       {sides.map(each => (
-        <button key={each} type="button" className="tf-side" aria-label={`Dock to the ${each}`} aria-pressed={side === each} title={`Dock to the ${each}`} onClick={() => setSide(each)}>
+        <button
+          key={each}
+          type="button"
+          className="tf-side"
+          aria-label={`Dock to the ${each}`}
+          aria-pressed={!full && side === each}
+          title={`Dock to the ${each}`}
+          onClick={() => {
+            setSide(each);
+            setFull(false);
+          }}
+        >
           <SideIcon side={each} />
         </button>
       ))}
+      <button type="button" className="tf-side" aria-label="Fill the page" aria-pressed={full} title={full ? 'Back to the side of the page' : 'Fill the page'} onClick={() => setFull(filled => !filled)}>
+        <SideIcon side="full" />
+      </button>
     </div>
   );
   return (
@@ -135,8 +151,9 @@ export function Devtools({ pdfjs, bytes, theme, buttonPosition, position, initia
       <button ref={toggle} type="button" className="tf-toggle" data-position={buttonPosition} hidden={open} aria-label={`Open the PDF tags panel: ${label}`} onClick={() => setOpen(true)}>
         PDF tags <span className="tf-badge" data-tone={tone} aria-hidden="true">{text}</span>
       </button>
-      <section ref={dock} className="tf-dock" data-side={side} hidden={!open} aria-label="PDF tags panel" tabIndex={-1} style={size === undefined ? undefined : { [axis]: size }} onKeyDown={closeOnEscape}>
+      <section ref={dock} className="tf-dock" data-side={side} data-full={full} hidden={!open} aria-label="PDF tags panel" tabIndex={-1} style={full || size === undefined ? undefined : { [axis]: size }} onKeyDown={closeOnEscape}>
         <div
+          hidden={full}
           className="tf-resize"
           role="separator"
           aria-orientation={axis === 'height' ? 'horizontal' : 'vertical'}

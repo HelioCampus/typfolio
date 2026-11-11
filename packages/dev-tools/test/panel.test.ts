@@ -273,6 +273,24 @@ test('the devtools panel docks to the side it is given, its toolbar moves it, an
     devtools.update({ position: 'left' });
     await waitFor(() => assert.equal(dock.getAttribute('data-side'), 'left'));
     assert.equal(dock.style.width, '280px');
+
+    // Over the whole page: no size of its own and nothing to resize; the same button, or a side, brings it back.
+    const fill = view.getByRole('button', { name: 'Fill the page' });
+    fireEvent.click(fill);
+    await waitFor(() => assert.equal(dock.getAttribute('data-full'), 'true'));
+    assert.equal(fill.getAttribute('aria-pressed'), 'true');
+    assert.equal(side('left').getAttribute('aria-pressed'), 'false');
+    assert.equal(dock.style.width, '');
+    assert.ok(view.queryByRole('separator', { name: 'Resize the panel' }) === null);
+    fireEvent.click(fill);
+    await waitFor(() => assert.equal(dock.getAttribute('data-full'), 'false'));
+    assert.equal(dock.getAttribute('data-side'), 'left');
+    assert.equal(dock.style.width, '280px', 'the size it had');
+    fireEvent.click(fill);
+    await waitFor(() => assert.equal(dock.getAttribute('data-full'), 'true'));
+    fireEvent.click(side('bottom'));
+    await waitFor(() => assert.equal(dock.getAttribute('data-full'), 'false'));
+    assert.equal(dock.getAttribute('data-side'), 'bottom');
   } finally {
     devtools.unmount();
   }
@@ -387,5 +405,61 @@ test('the page view marks the selected tag where it is drawn, follows the select
     await waitFor(() => assert.ok(view().queryByRole('region', { name: 'Page' }) === null));
   } finally {
     panel.unmount();
+  }
+});
+
+test('the dividers between the tags, the page and the selected tag move with the arrow keys and reset on a double click', async () => {
+  const { element, shadow, view } = target();
+  const panel = mountStructurePanel(element, { pdfjs, bytes: await withHeader() });
+  try {
+    await view().findByText(/^No problems found/);
+    const share = (name: string) => Number(shadow()!.querySelector<HTMLElement>(`[data-pane="${name}"]`)!.style.flexGrow);
+    const shares = () => ['tree', 'page', 'details'].map(share);
+    assert.deepEqual(shares(), [5, 4, 3]);
+    const first = view().getByRole('separator', { name: 'Resize the tags and the page' });
+    const second = view().getByRole('separator', { name: 'Resize the page and the selected tag' });
+    assert.equal(first.getAttribute('aria-orientation'), 'vertical');
+
+    // The first divider takes from the page and gives to the tags; the selected tag keeps its share.
+    fireEvent.keyDown(first, { key: 'ArrowRight' });
+    await waitFor(() => assert.ok(share('tree') > 5));
+    assert.ok(Math.abs(share('tree') + share('page') - 9) < 1e-9 && share('details') === 3, String(shares()));
+    fireEvent.keyDown(second, { key: 'ArrowLeft' });
+    await waitFor(() => assert.ok(share('details') > 3));
+
+    fireEvent.doubleClick(first);
+    fireEvent.doubleClick(second);
+    await waitFor(() => assert.deepEqual(shares(), [5, 4, 3]));
+
+    // Without the page, one divider is left, between the tags and the selected tag.
+    fireEvent.click(view().getByRole('button', { name: 'Page' }));
+    await waitFor(() => assert.ok(view().getByRole('separator', { name: 'Resize the tags and the selected tag' })));
+    assert.equal(view().getAllByRole('separator').length, 1);
+  } finally {
+    panel.unmount();
+  }
+});
+
+test('a tag\'s row and its details have a button that copies its whole text', async () => {
+  const { element, view } = target();
+  const copied: string[] = [];
+  Object.defineProperty(dom.window.navigator, 'clipboard', { configurable: true, value: { writeText: async (text: string) => { copied.push(text); } } });
+  const panel = mountStructurePanel(element, { pdfjs, bytes: await withHeader() });
+  try {
+    await view().findByText(/^No problems found/);
+    fireEvent.click(view().getByRole('button', { name: 'Copy the text of this H1' }));
+    await waitFor(() => assert.deepEqual(copied, ['Results']));
+    assert.ok(await view().findByText('Copied'));
+    // The table's row copies the whole table's text, more than its line shows.
+    fireEvent.click(view().getByRole('button', { name: 'Copy the text of this Table' }));
+    await waitFor(() => assert.equal(copied[1], 'Name Score Ada 90 Grace 85'));
+
+    fireEvent.click(view().getByRole('button', { name: /^H1.*Results$/ }));
+    const details = within(view().getByRole('complementary', { name: 'Selected tag' }));
+    fireEvent.click(await details.findByRole('button', { name: 'Copy the text' }));
+    await waitFor(() => assert.equal(copied[2], 'Results'));
+  } finally {
+    panel.unmount();
+    delete (dom.window.navigator as { clipboard?: unknown }).clipboard;
   }
 });

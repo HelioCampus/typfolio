@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type PointerEvent, type ReactNode } from 'react';
 import { headingLevel, type PdfStructureElement, type PdfStructureWarning, type PdfStructureWarningKind } from '../structure.js';
 import { PageView } from './page.js';
 import type { ReadState } from './read.js';
@@ -46,6 +46,35 @@ function summary({ element, continues }: TreeNode): { text: string; quiet: boole
   return { text: element.text, quiet: element.children.length > 0 && !isHeading(element) };
 }
 
+/** Copies text to the clipboard; says so for a moment. Shown in a tag's row when the pointer or focus is on it. */
+function CopyButton({ text, label }: { text: string; label: string }) {
+  const [copied, setCopied] = useState<boolean>();
+  useEffect(() => {
+    if (copied === undefined) return;
+    const timer = setTimeout(() => setCopied(undefined), 1500);
+    return () => clearTimeout(timer);
+  }, [copied]);
+  return (
+    <button
+      type="button"
+      className="tf-copy"
+      data-copied={copied !== undefined}
+      aria-label={label}
+      title={label}
+      onClick={event => {
+        const clipboard = event.currentTarget.ownerDocument.defaultView?.navigator.clipboard;
+        // No clipboard, as on a page not served over HTTPS, or permission refused.
+        (clipboard ? clipboard.writeText(text) : Promise.reject()).then(() => setCopied(true), () => setCopied(false));
+      }}
+    >
+      <span aria-live="polite">{copied === undefined ? 'Copy' : copied ? 'Copied' : 'Not copied'}</span>
+    </button>
+  );
+}
+
+/** What there is to copy from a tag: a figure's alt text, any other tag's text. */
+const copyable = (element: PdfStructureElement) => (element.role === 'Figure' ? element.alt?.trim() : element.text) || undefined;
+
 function Details({ node, index, warnings }: { node: TreeNode; index: TreeIndex; warnings: readonly PdfStructureWarning[] }) {
   const { element } = node;
   const children = new Map<string, number>();
@@ -61,11 +90,11 @@ function Details({ node, index, warnings }: { node: TreeNode; index: TreeIndex; 
         <dt>Path</dt>
         <dd>{[...ancestors(node), node].map(each => each.element.role).join(' › ')}</dd>
         <dt>Text</dt>
-        <dd>{text || 'None'}</dd>
+        <dd>{text || 'None'}{element.text ? <CopyButton text={element.text} label="Copy the text" /> : null}</dd>
         {element.alt !== undefined || element.role === 'Figure' ? (
           <>
             <dt>Alt text</dt>
-            <dd>{element.alt?.trim() ? element.alt : 'None'}</dd>
+            <dd>{element.alt?.trim() ? <>{element.alt}<CopyButton text={element.alt} label="Copy the alt text" /></> : 'None'}</dd>
           </>
         ) : null}
         {element.lang ? (
@@ -113,6 +142,15 @@ function Details({ node, index, warnings }: { node: TreeNode; index: TreeIndex; 
   );
 }
 
+type Pane = 'tree' | 'page' | 'details';
+// The share of the panel each view starts with.
+const startShares: Record<Pane, number> = { tree: 5, page: 4, details: 3 };
+// The least a view is dragged down to, in pixels, and the step of an arrow key as a part of the two views' size.
+const minPane = 60;
+const keyStep = 0.05;
+// Under this width the views stack, as the panel docked to the left or right does.
+const stackUnder = 560;
+
 export interface StructureViewProps {
   state: ReadState;
   /** Whether the page gave a PDF to read. */
@@ -140,6 +178,11 @@ export function StructureView({ state, hasBytes, tools, onClose }: StructureView
   const [page, setPage] = useState(1);
   const [hovered, setHovered] = useState<string>();
   const tree = useRef<HTMLDivElement>(null);
+  // The views side by side, or stacked in a narrow panel, and the share of the room each has: the dividers move it.
+  const main = useRef<HTMLDivElement>(null);
+  const [stacked, setStacked] = useState(false);
+  const [shares, setShares] = useState(startShares);
+  const stopDragging = useRef<() => void>(undefined);
   const filter = useMemo(() => index && filterTree(index, query), [index, query]);
   const warningsAt = useMemo(() => {
     const byPath = new Map<string, PdfStructureWarning[]>();
@@ -154,6 +197,77 @@ export function StructureView({ state, hasBytes, tools, onClose }: StructureView
     if (revealed === 0 || selected === undefined) return;
     tree.current?.querySelector(`[data-path="${selected}"]`)?.scrollIntoView?.({ block: 'nearest' });
   }, [revealed]);
+
+  const tagged = read?.tagged === true && index !== undefined && error === undefined;
+  useEffect(() => {
+    const element = main.current;
+    const Observer = element?.ownerDocument.defaultView?.ResizeObserver;
+    if (!element || !Observer) return;
+    const observer = new Observer(() => setStacked(element.clientWidth < stackUnder));
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [tagged]);
+  useEffect(() => () => stopDragging.current?.(), []);
+
+  const extent = (pane: Pane) => {
+    const bounds = main.current?.querySelector(`[data-pane="${pane}"]`)?.getBoundingClientRect();
+    return bounds ? (stacked ? bounds.height : bounds.width) : 0;
+  };
+  /** Gives `before` the size asked for, in pixels, out of the room it and `after` have together. */
+  const divide = (before: Pane, after: Pane, total: number, size: number) => {
+    if (!(total > 0)) return;
+    const least = Math.min(minPane, total / 2);
+    const part = Math.min(Math.max(size, least), total - least) / total;
+    setShares(previous => {
+      const sum = previous[before] + previous[after];
+      return { ...previous, [before]: sum * part, [after]: sum * (1 - part) };
+    });
+  };
+  const divider = (before: Pane, after: Pane) => {
+    const startDragging = (event: PointerEvent<HTMLDivElement>) => {
+      event.preventDefault();
+      const view = event.currentTarget.ownerDocument.defaultView ?? window;
+      const start = stacked ? event.clientY : event.clientX;
+      const size = extent(before);
+      const total = size + extent(after);
+      const move = ({ clientX, clientY }: globalThis.PointerEvent) => divide(before, after, total, size + (stacked ? clientY : clientX) - start);
+      const stop = () => {
+        view.removeEventListener('pointermove', move);
+        view.removeEventListener('pointerup', stop);
+        stopDragging.current = undefined;
+      };
+      stopDragging.current?.();
+      view.addEventListener('pointermove', move);
+      view.addEventListener('pointerup', stop);
+      stopDragging.current = stop;
+    };
+    const moveWithKeys = (event: KeyboardEvent<HTMLDivElement>) => {
+      const step = event.key === (stacked ? 'ArrowDown' : 'ArrowRight') ? 1 : event.key === (stacked ? 'ArrowUp' : 'ArrowLeft') ? -1 : 0;
+      if (step === 0) return;
+      event.preventDefault();
+      const sum = shares[before] + shares[after];
+      // Without a layout to measure, the shares stand in for the sizes.
+      const total = extent(before) + extent(after) || sum * 1000;
+      divide(before, after, total, total * (shares[before] / sum + step * keyStep));
+    };
+    return (
+      <div
+        className="tf-split"
+        role="separator"
+        aria-orientation={stacked ? 'horizontal' : 'vertical'}
+        aria-label={`Resize the ${before === 'tree' ? 'tags' : before} and the ${after === 'details' ? 'selected tag' : after}`}
+        aria-valuenow={Math.round(shares[before] / (shares[before] + shares[after]) * 100)}
+        aria-valuemin={0}
+        aria-valuemax={100}
+        tabIndex={0}
+        title="Drag to resize; double-click to reset"
+        onPointerDown={startDragging}
+        onKeyDown={moveWithKeys}
+        onDoubleClick={() => setShares(previous => ({ ...previous, [before]: startShares[before], [after]: startShares[after] }))}
+      />
+    );
+  };
+  const pane = (name: Pane) => ({ className: 'tf-pane', 'data-pane': name, style: { flexGrow: shares[name] } });
 
   // The page view follows the selection.
   const selectedPage = selected === undefined ? undefined : index?.byPath.get(selected)?.page;
@@ -206,6 +320,7 @@ export function StructureView({ state, hasBytes, tools, onClose }: StructureView
             {line ? <span className="tf-text" data-quiet={line.quiet}>{line.text}</span> : null}
             {mark ? <span className="tf-mark">{marks[mark.kind]}</span> : null}
           </button>
+          {copyable(element) ? <CopyButton text={copyable(element)!} label={`Copy the ${element.role === 'Figure' ? 'alt text' : 'text'} of this ${element.role}`} /> : null}
         </div>
         {open ? renderList(children) : null}
       </li>
@@ -296,7 +411,8 @@ export function StructureView({ state, hasBytes, tools, onClose }: StructureView
         </section>
       )}
       {read?.tagged && index && error === undefined ? (
-        <div className="tf-main" data-page={showPage}>
+        <div className="tf-main" ref={main} data-stacked={stacked}>
+          <div {...pane('tree')}>
           <div className="tf-tree" ref={tree} role="region" aria-label="Tags in reading order">
             {index.pages.map(({ page, nodes }) => {
               const shown = filter ? nodes.filter(each => filter.shown.has(each.path)) : nodes;
@@ -310,7 +426,10 @@ export function StructureView({ state, hasBytes, tools, onClose }: StructureView
             })}
             {filter && filter.found.size === 0 ? <p className="tf-banner" data-tone="quiet">No tag matches “{query.trim()}”.</p> : null}
           </div>
+          </div>
+          {showPage && read ? divider('tree', 'page') : null}
           {showPage && read ? (
+            <div {...pane('page')}>
             <PageView
               read={read}
               index={index}
@@ -321,10 +440,14 @@ export function StructureView({ state, hasBytes, tools, onClose }: StructureView
               onHover={at => setHovered(at?.path)}
               onPick={reveal}
             />
+            </div>
           ) : null}
+          {divider(showPage && read ? 'page' : 'tree', 'details')}
+          <div {...pane('details')}>
           <aside className="tf-details" aria-label="Selected tag">
             {node ? <Details node={node} index={index} warnings={warningsAt.get(node.path) ?? []} /> : <p className="tf-hint">Select a tag, in the list or on the page, to see its text, alt text and language, and for a table cell its scope and headers.</p>}
           </aside>
+          </div>
         </div>
       ) : null}
     </div>
