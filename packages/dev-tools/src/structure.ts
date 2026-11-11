@@ -12,6 +12,14 @@ export interface PdfStructureElement {
   alt?: string;
   /** The element's `/Lang`. */
   lang?: string;
+  /** A `Table`'s `/Summary`: what the table is about, for a reader who cannot see it. */
+  summary?: string;
+  /** A `TH`'s `/Scope`: whether it labels its row, its column or both. */
+  scope?: 'Row' | 'Column' | 'Both';
+  /** A `TH`'s `/ID`, which other cells' `headers` name. */
+  id?: string;
+  /** A `TH` or `TD`'s `/Headers`: the `id` of each header cell that labels it. */
+  headers?: string[];
   children: PdfStructureElement[];
 }
 
@@ -52,8 +60,25 @@ export interface PdfStructureSource {
 }
 
 // The part of pdf.js output read here.
-interface PdfJsStructNode { type?: string; id?: string; role?: string; alt?: string; lang?: string; children?: PdfJsStructNode[] }
-interface PdfJsTextItem { str?: string; hasEOL?: boolean; type?: string; id?: string | null; tag?: string | null }
+interface PdfJsStructNode { type?: string; id?: string; role?: string; alt?: string; lang?: string; bbox?: unknown; summary?: string; scope?: string; structId?: string; headers?: unknown; children?: PdfJsStructNode[] }
+interface PdfJsTextItem { str?: string; hasEOL?: boolean; type?: string; id?: string | null; tag?: string | null; transform?: number[]; width?: number; height?: number }
+
+/** A rectangle on a page in PDF units, origin at the bottom left: `[left, bottom, right, top]`. */
+export type PdfRect = [number, number, number, number];
+
+/** Where each element's content is drawn on its page; an element without drawn content has no entry. */
+export type PdfElementBoxes = WeakMap<PdfStructureElement, PdfRect>;
+
+const union = (a: PdfRect | undefined, b: PdfRect | undefined): PdfRect | undefined =>
+  !a ? b : !b ? a : [Math.min(a[0], b[0]), Math.min(a[1], b[1]), Math.max(a[2], b[2]), Math.max(a[3], b[3])];
+
+// The box of a run of text: pdf.js gives its baseline origin, its advance and its font size. The share of the font
+// size above and below the baseline is an estimate that fits Latin text; upright text only.
+function textRect({ str, transform, width, height }: PdfJsTextItem): PdfRect | undefined {
+  if (!str?.trim() || !Array.isArray(transform) || typeof width !== 'number' || typeof height !== 'number' || !(width > 0) || !(height > 0)) return undefined;
+  const [, , , , x, y] = transform;
+  return [x, y - height * 0.22, x + width, y + height * 0.8];
+}
 
 /** What pdf.js's `getMarkInfo()` resolves to. */
 export type PdfMarkInfo = { Marked?: boolean } | Map<string, unknown> | null;
@@ -72,7 +97,7 @@ export const headingLevel = (role: string): number | undefined => {
  * The text of each marked-content section that has an id, by id. Text goes to its innermost section with an id;
  * an artifact's text (a running header, a page number) goes to none, as a screen reader skips it.
  */
-function textByContentId(items: readonly PdfJsTextItem[]): Map<string, string> {
+function textByContentId(items: readonly PdfJsTextItem[], rects?: Map<string, PdfRect>): Map<string, string> {
   const byId = new Map<string, string>();
   const open: (string | null)[] = [];
   for (const item of items) {
@@ -83,6 +108,8 @@ function textByContentId(items: readonly PdfJsTextItem[]): Map<string, string> {
     else if (typeof item.str === 'string') {
       const id = open.at(-1);
       if (id) byId.set(id, (byId.get(id) ?? '') + item.str + (item.hasEOL ? ' ' : ''));
+      const rect = id && rects ? union(rects.get(id), textRect(item)) : undefined;
+      if (id && rect) rects!.set(id, rect);
     }
   }
   return byId;
@@ -94,35 +121,55 @@ const inlineRoles = new Set(['Span', 'Quote', 'Note', 'Reference', 'BibEntry', '
 
 const isElement = (node: PdfJsStructNode): boolean => typeof node.role === 'string';
 
-function toElement(node: PdfJsStructNode, textById: Map<string, string>): { element: PdfStructureElement; raw: string } {
+/** Where an element is drawn, to collect while its page is read: the text positions by content id, and the boxes. */
+interface Placement { rects: Map<string, PdfRect>; boxes: PdfElementBoxes }
+
+// An element's `/BBox`, as a figure has. pdf.js gives a `/Width` and `/Height` without a position as a box at the
+// origin, which is not a place on the page.
+function ownBox(bbox: unknown): PdfRect | undefined {
+  if (!Array.isArray(bbox) || bbox.length !== 4 || !bbox.every(value => typeof value === 'number' && Number.isFinite(value))) return undefined;
+  const [left, bottom, right, top] = bbox as PdfRect;
+  return (left === 0 && bottom === 0) || !(right > left) || !(top > bottom) ? undefined : [left, bottom, right, top];
+}
+
+function toElement(node: PdfJsStructNode, textById: Map<string, string>, placement?: Placement): { element: PdfStructureElement; raw: string; box?: PdfRect } {
   const children: PdfStructureElement[] = [];
   let raw = '';
+  let box = placement ? ownBox(node.bbox) : undefined;
   for (const child of node.children ?? []) {
     if (isElement(child)) {
-      const built = toElement(child, textById);
+      const built = toElement(child, textById, placement);
       children.push(built.element);
       raw += inlineRoles.has(built.element.role) ? built.raw : ` ${built.raw} `;
-    } else if (child.type === 'content' && typeof child.id === 'string') raw += textById.get(child.id) ?? '';
+      box = union(box, built.box);
+    } else if (child.type === 'content' && typeof child.id === 'string') {
+      raw += textById.get(child.id) ?? '';
+      box = union(box, placement?.rects.get(child.id));
+    }
   }
-  return {
-    element: {
+  const element: PdfStructureElement = {
       role: node.role as string,
       text: raw.replace(/\s+/g, ' ').trim(),
       ...(typeof node.alt === 'string' ? { alt: node.alt } : {}),
       ...(typeof node.lang === 'string' ? { lang: node.lang } : {}),
+      ...(typeof node.summary === 'string' ? { summary: node.summary } : {}),
+      ...(node.scope === 'Row' || node.scope === 'Column' || node.scope === 'Both' ? { scope: node.scope } : {}),
+      ...(typeof node.structId === 'string' ? { id: node.structId } : {}),
+      ...(Array.isArray(node.headers) ? { headers: node.headers.filter((id): id is string => typeof id === 'string') } : {}),
       children,
-    },
-    raw,
   };
+  if (box) placement!.boxes.set(element, box);
+  return { element, raw, box };
 }
 
-/** A page's part of the structure tree; null when the page has none. */
-export async function pageStructure(page: Awaited<ReturnType<PdfStructureSource['getPage']>>): Promise<PdfStructureElement[] | null> {
+/** A page's part of the structure tree; null when the page has none. With `boxes`, also where each element is drawn. */
+export async function pageStructure(page: Awaited<ReturnType<PdfStructureSource['getPage']>>, boxes?: PdfElementBoxes): Promise<PdfStructureElement[] | null> {
   const tree = await page.getStructTree() as PdfJsStructNode | null;
   if (!tree) return null;
   const { items } = await page.getTextContent({ includeMarkedContent: true });
-  const textById = textByContentId(items as PdfJsTextItem[]);
-  return (tree.children ?? []).filter(isElement).map(child => toElement(child, textById).element);
+  const placement = boxes && { rects: new Map<string, PdfRect>(), boxes };
+  const textById = textByContentId(items as PdfJsTextItem[], placement?.rects);
+  return (tree.children ?? []).filter(isElement).map(child => toElement(child, textById, placement).element);
 }
 
 /** Calls `visit` on every element of every page, parents before children, in reading order. */
@@ -139,13 +186,17 @@ export function eachElement(pages: readonly PdfStructurePage[], visit: (element:
  * has, such as one a browser page loaded with its own pdf.js. Needs nothing installed: `inspectPdf` returns the
  * same pages as `structure`.
  */
-export async function readStructure(document: PdfStructureSource): Promise<PdfStructurePage[]> {
+export function readStructure(document: PdfStructureSource): Promise<PdfStructurePage[]> {
+  return readPages(document);
+}
+
+async function readPages(document: PdfStructureSource, boxes?: PdfElementBoxes): Promise<PdfStructurePage[]> {
   if (!document || typeof document.getPage !== 'function' || !Number.isSafeInteger(document.numPages)) {
     throw new TypstPdfError('INVALID_REQUEST', 'readStructure takes a pdf.js document (PDFDocumentProxy)');
   }
   const pages: PdfStructurePage[] = [];
   for (let page = 1; page <= document.numPages; page += 1) {
-    pages.push({ page, elements: await pageStructure(await document.getPage(page)) ?? [] });
+    pages.push({ page, elements: await pageStructure(await document.getPage(page), boxes) ?? [] });
   }
   return pages;
 }
@@ -228,9 +279,9 @@ export function structureWarnings(pages: readonly PdfStructurePage[]): PdfStruct
  * A pdf.js document's pages and their warnings: one `untagged` warning when it is not tagged, else the
  * `structureWarnings` of its pages. What `checkStructure` reports, and what the panel shows.
  */
-export async function readDocument(document: PdfStructureSource & { getMarkInfo(): Promise<PdfMarkInfo> }): Promise<{ tagged: boolean; pages: PdfStructurePage[]; warnings: PdfStructureWarning[] }> {
+export async function readDocument(document: PdfStructureSource & { getMarkInfo(): Promise<PdfMarkInfo> }, boxes?: PdfElementBoxes): Promise<{ tagged: boolean; pages: PdfStructurePage[]; warnings: PdfStructureWarning[] }> {
   const tagged = isMarked(await document.getMarkInfo());
-  const pages = await readStructure(document);
+  const pages = await readPages(document, boxes);
   const warnings: PdfStructureWarning[] = tagged
     ? structureWarnings(pages)
     : [{ kind: 'untagged', message: 'The PDF is not tagged, so a screen reader gets its text with no headings, tables or figures.' }];

@@ -64,7 +64,7 @@ test('the panel shows the tags and their problems, and a problem opens the tag i
     // The table starts closed, marked; its cells are not listed until it is opened.
     const tableRow = view().getByRole('button', { name: /^Table.*No header cells$/ });
     assert.ok(view().queryByText('Grace') === null);
-    assert.ok(view().getByText('Select a tag to see its text, alt text and language.'));
+    assert.ok(view().getByText('Select a tag, in the list or on the page, to see its text, alt text and language, and for a table cell its scope and headers.'));
 
     fireEvent.click(problem);
     await waitFor(() => assert.equal(tableRow.closest('.tf-row')?.getAttribute('data-selected'), 'true'));
@@ -166,7 +166,7 @@ test('an untagged PDF says so, and bytes that are not a PDF say why they could n
   }
 });
 
-test('a PDF replaced while it is read is dropped, and every pdf.js document opened is freed', async () => {
+test('a PDF replaced while it is read is dropped; the one on show stays open for the page view, and all are freed', async () => {
   const { counts, pdfjs: tracked } = counted();
   const { element, shadow, view } = target();
   const first = await headerless();
@@ -179,9 +179,11 @@ test('a PDF replaced while it is read is dropped, and every pdf.js document open
   await new Promise(resolve => setTimeout(resolve, 200));
   assert.ok(view().queryByText(/problem a screen reader user would hit/) === null);
   assert.equal(counts.opened, 2);
-  await waitFor(() => assert.equal(counts.destroyed, 2));
+  // The first is freed; the one on show stays open until the panel goes.
+  await waitFor(() => assert.equal(counts.destroyed, 1));
 
   panel.unmount();
+  assert.equal(counts.destroyed, 2);
   assert.equal(shadow(), undefined, 'unmount removes the panel');
   assert.equal(element.childElementCount, 0);
   panel.update({ bytes: first });
@@ -271,6 +273,24 @@ test('the devtools panel docks to the side it is given, its toolbar moves it, an
     devtools.update({ position: 'left' });
     await waitFor(() => assert.equal(dock.getAttribute('data-side'), 'left'));
     assert.equal(dock.style.width, '280px');
+
+    // Over the whole page: no size of its own and nothing to resize; the same button, or a side, brings it back.
+    const fill = view.getByRole('button', { name: 'Fill the page' });
+    fireEvent.click(fill);
+    await waitFor(() => assert.equal(dock.getAttribute('data-full'), 'true'));
+    assert.equal(fill.getAttribute('aria-pressed'), 'true');
+    assert.equal(side('left').getAttribute('aria-pressed'), 'false');
+    assert.equal(dock.style.width, '');
+    assert.ok(view.queryByRole('separator', { name: 'Resize the panel' }) === null);
+    fireEvent.click(fill);
+    await waitFor(() => assert.equal(dock.getAttribute('data-full'), 'false'));
+    assert.equal(dock.getAttribute('data-side'), 'left');
+    assert.equal(dock.style.width, '280px', 'the size it had');
+    fireEvent.click(fill);
+    await waitFor(() => assert.equal(dock.getAttribute('data-full'), 'true'));
+    fireEvent.click(side('bottom'));
+    await waitFor(() => assert.equal(dock.getAttribute('data-full'), 'false'));
+    assert.equal(dock.getAttribute('data-side'), 'bottom');
   } finally {
     devtools.unmount();
   }
@@ -316,5 +336,130 @@ test('the bundle carries React and imports only @typfolio/core; the other entrie
   for (const entry of ['index.js', 'pdf.js', 'structure.js']) {
     const source = await readFile(new URL(`../dist/${entry}`, import.meta.url), 'utf8');
     assert.equal(/(?:from\s*|import\(\s*)['"][^'"]*(?:panel|react)/.test(source), false, `${entry} must not import the panel or React`);
+  }
+});
+
+test('a table shows its summary, a header cell its scope, and a cell the headers that label it', async () => {
+  const { element, view } = target();
+  const bytes = await compileSource(`= Results
+#pdf.table-summary(summary: "Scores by student and term", table(columns: 3,
+  table.header[Student][Autumn][Spring],
+  pdf.header-cell(scope: "row")[Ada], [90], [85],
+  pdf.header-cell(scope: "row")[Grace], [70], [65]))`, { standards: ['ua-1'] });
+  const panel = mountStructurePanel(element, { pdfjs, bytes });
+  try {
+    // Row headers are not columns.
+    const table = await view().findByRole('button', { name: /^Table.*Columns: Student, Autumn, Spring · Summary: Scores by student and term$/ });
+    const details = () => within(view().getByRole('complementary', { name: 'Selected tag' }));
+    fireEvent.click(table);
+    await waitFor(() => assert.ok(details().getByText('Scores by student and term')));
+
+    fireEvent.click(view().getByRole('button', { name: 'Expand Table' }));
+    fireEvent.click(await view().findByRole('button', { name: /^TH.*scope Row.*Grace$/ }));
+    await waitFor(() => assert.ok(details().getByText('Row: labels the cells of its row')));
+    assert.ok(details().getByText('Student'), 'the row header is itself under the column header');
+    assert.equal(view().getAllByRole('button', { name: /^TH.*scope Column/ }).length, 3);
+
+    fireEvent.click(view().getByRole('button', { name: /^TD.*65$/ }));
+    await waitFor(() => assert.ok(details().getByText('Spring, Grace')));
+  } finally {
+    panel.unmount();
+  }
+});
+
+test('the page view marks the selected tag where it is drawn, follows the selection to its page, and can be hidden', async () => {
+  const { element, shadow, view } = target();
+  const bytes = await compileSource('= First\nOpening words.\n#pagebreak()\n= Second\n#table(columns: 2, table.header([Name], [Score]), [Ada], [90])');
+  const panel = mountStructurePanel(element, { pdfjs, bytes });
+  try {
+    const page = () => within(view().getByRole('region', { name: 'Page' }));
+    await waitFor(() => assert.ok(page().getByText('Page 1 of 2')));
+    const mark = () => shadow()!.querySelector<HTMLElement>('.tf-box[data-kind="selected"]');
+    // Compared as booleans: a failed comparison of a DOM element would print the whole document.
+    assert.ok(mark() === null, 'nothing is marked before a tag is selected');
+    const box = () => ['left', 'top', 'width', 'height'].map(side => parseFloat(mark()!.style.getPropertyValue(side)));
+
+    fireEvent.click(view().getByRole('button', { name: /^H1.*First$/ }));
+    await waitFor(() => assert.equal(mark()?.getAttribute('data-role'), 'H1'));
+    const heading = box();
+    assert.ok(heading.every(value => value > 0 && value < 100), `a box inside the page: ${heading}`);
+    assert.ok(heading[1] < 30, 'the first heading is near the top of its page');
+
+    // A tag of the second page brings that page.
+    fireEvent.click(view().getByRole('button', { name: 'Expand Table' }));
+    fireEvent.click(await view().findByRole('button', { name: /^TD.*90$/ }));
+    await waitFor(() => assert.ok(page().getByText('Page 2 of 2')));
+    await waitFor(() => assert.equal(mark()?.getAttribute('data-role'), 'TD'));
+    const cell = box();
+    // The table, selected, holds its cell.
+    fireEvent.click(view().getByRole('button', { name: /^Table/ }));
+    await waitFor(() => assert.equal(mark()?.getAttribute('data-role'), 'Table'));
+    const table = box();
+    assert.ok(table[0] <= cell[0] && table[1] <= cell[1] && table[0] + table[2] >= cell[0] + cell[2] && table[1] + table[3] >= cell[1] + cell[3], `${table} holds ${cell}`);
+
+    fireEvent.click(page().getByRole('button', { name: 'Previous page' }));
+    await waitFor(() => assert.ok(page().getByText('Page 1 of 2')));
+    await waitFor(() => assert.ok(mark() === null, 'the table is not on the first page'));
+
+    fireEvent.click(view().getByRole('button', { name: 'Page' }));
+    await waitFor(() => assert.ok(view().queryByRole('region', { name: 'Page' }) === null));
+  } finally {
+    panel.unmount();
+  }
+});
+
+test('the dividers between the tags, the page and the selected tag move with the arrow keys and reset on a double click', async () => {
+  const { element, shadow, view } = target();
+  const panel = mountStructurePanel(element, { pdfjs, bytes: await withHeader() });
+  try {
+    await view().findByText(/^No problems found/);
+    const share = (name: string) => Number(shadow()!.querySelector<HTMLElement>(`[data-pane="${name}"]`)!.style.flexGrow);
+    const shares = () => ['tree', 'page', 'details'].map(share);
+    assert.deepEqual(shares(), [5, 4, 3]);
+    const first = view().getByRole('separator', { name: 'Resize the tags and the page' });
+    const second = view().getByRole('separator', { name: 'Resize the page and the selected tag' });
+    assert.equal(first.getAttribute('aria-orientation'), 'vertical');
+
+    // The first divider takes from the page and gives to the tags; the selected tag keeps its share.
+    fireEvent.keyDown(first, { key: 'ArrowRight' });
+    await waitFor(() => assert.ok(share('tree') > 5));
+    assert.ok(Math.abs(share('tree') + share('page') - 9) < 1e-9 && share('details') === 3, String(shares()));
+    fireEvent.keyDown(second, { key: 'ArrowLeft' });
+    await waitFor(() => assert.ok(share('details') > 3));
+
+    fireEvent.doubleClick(first);
+    fireEvent.doubleClick(second);
+    await waitFor(() => assert.deepEqual(shares(), [5, 4, 3]));
+
+    // Without the page, one divider is left, between the tags and the selected tag.
+    fireEvent.click(view().getByRole('button', { name: 'Page' }));
+    await waitFor(() => assert.ok(view().getByRole('separator', { name: 'Resize the tags and the selected tag' })));
+    assert.equal(view().getAllByRole('separator').length, 1);
+  } finally {
+    panel.unmount();
+  }
+});
+
+test('a tag\'s row and its details have a button that copies its whole text', async () => {
+  const { element, view } = target();
+  const copied: string[] = [];
+  Object.defineProperty(dom.window.navigator, 'clipboard', { configurable: true, value: { writeText: async (text: string) => { copied.push(text); } } });
+  const panel = mountStructurePanel(element, { pdfjs, bytes: await withHeader() });
+  try {
+    await view().findByText(/^No problems found/);
+    fireEvent.click(view().getByRole('button', { name: 'Copy the text of this H1' }));
+    await waitFor(() => assert.deepEqual(copied, ['Results']));
+    assert.ok(await view().findByText('Copied'));
+    // The table's row copies the whole table's text, more than its line shows.
+    fireEvent.click(view().getByRole('button', { name: 'Copy the text of this Table' }));
+    await waitFor(() => assert.equal(copied[1], 'Name Score Ada 90 Grace 85'));
+
+    fireEvent.click(view().getByRole('button', { name: /^H1.*Results$/ }));
+    const details = within(view().getByRole('complementary', { name: 'Selected tag' }));
+    fireEvent.click(await details.findByRole('button', { name: 'Copy the text' }));
+    await waitFor(() => assert.equal(copied[2], 'Results'));
+  } finally {
+    panel.unmount();
+    delete (dom.window.navigator as { clipboard?: unknown }).clipboard;
   }
 });

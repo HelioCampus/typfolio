@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import type { StructurePanelPdfJs as PanelPdfJs } from '../panel.js';
-import { readDocument, type PdfMarkInfo, type PdfStructurePage, type PdfStructureSource, type PdfStructureWarning } from '../structure.js';
+import { readDocument, type PdfElementBoxes, type PdfMarkInfo, type PdfStructurePage, type PdfStructureSource, type PdfStructureWarning } from '../structure.js';
 
 export type { PanelPdfJs };
 
@@ -8,6 +8,10 @@ export interface Read {
   tagged: boolean;
   pages: PdfStructurePage[];
   warnings: PdfStructureWarning[];
+  /** Where each element is drawn on its page. */
+  boxes: PdfElementBoxes;
+  /** The pdf.js document, open while this is the PDF to show, for the page view to draw from. */
+  document: PdfStructureSource;
 }
 
 export interface ReadState {
@@ -20,7 +24,8 @@ export interface ReadState {
 
 /**
  * The tags of `bytes`, read with the page's pdf.js, and their warnings. A new PDF is read in place of the one being
- * read, whose result is dropped; pdf.js gets a copy of the bytes, as it detaches the buffer it is given.
+ * read, whose result is dropped; pdf.js gets a copy of the bytes, as it detaches the buffer it is given. The pdf.js
+ * document stays open until another PDF takes its place or the panel goes, so the page view can draw its pages.
  */
 export function useStructure(pdfjs: PanelPdfJs, bytes: Uint8Array | undefined): ReadState {
   const [state, setState] = useState<ReadState>({ reading: bytes !== undefined });
@@ -42,11 +47,11 @@ export function useStructure(pdfjs: PanelPdfJs, bytes: Uint8Array | undefined): 
       try {
         task = pdfjs.getDocument({ data: bytes.slice(), verbosity: 0, isEvalSupported: false, disableFontFace: true, useSystemFonts: false });
         const document = await task.promise;
-        const read = await readDocument(document as PdfStructureSource & { getMarkInfo(): Promise<PdfMarkInfo> });
-        if (current) setState({ read, reading: false });
+        const boxes: PdfElementBoxes = new WeakMap();
+        const read = await readDocument(document as PdfStructureSource & { getMarkInfo(): Promise<PdfMarkInfo> }, boxes);
+        if (current) setState({ read: { ...read, boxes, document }, reading: false });
       } catch (error) {
         if (current) setState({ reading: false, error });
-      } finally {
         destroy();
       }
     })();

@@ -116,16 +116,31 @@ export const css = `
 button.tf-problem:hover { text-decoration: underline; }
 .tf-problem-page { font-weight: 600; }
 
-.tf-main {
-  display: grid;
-  grid-template-columns: minmax(0, 3fr) minmax(0, 2fr);
-  flex: 1;
-  min-height: 0;
-}
-@container (max-width: 560px) {
-  .tf-main { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 3fr) minmax(0, 2fr); }
-  .tf-details { border-left: 0; border-top: 1px solid var(--tf-border); }
-}
+.tf-main { display: flex; flex: 1; min-height: 0; }
+.tf-main[data-stacked="true"] { flex-direction: column; }
+.tf-pane { display: flex; flex-direction: column; flex-basis: 0; flex-shrink: 1; min-width: 0; min-height: 0; overflow: hidden; }
+.tf-pane > * { flex: 1; min-width: 0; min-height: 0; }
+/* The line between two views, with room around it to take hold of. */
+.tf-split { position: relative; z-index: 2; flex: 0 0 1px; background: var(--tf-border); cursor: col-resize; touch-action: none; }
+.tf-split::after { content: ""; position: absolute; inset: 0 -3px; }
+.tf-main[data-stacked="true"] > .tf-split { cursor: row-resize; }
+.tf-main[data-stacked="true"] > .tf-split::after { inset: -3px 0; }
+.tf-split:hover, .tf-split:focus-visible { background: var(--tf-accent); outline: 1px solid var(--tf-accent); }
+
+.tf-page { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+.tf-page-bar { display: flex; align-items: center; justify-content: center; gap: 8px; padding: 3px 8px; color: var(--tf-muted); font-size: 11px; border-bottom: 1px solid var(--tf-border); }
+.tf-page-step { width: 20px; height: 20px; padding: 0; border: 0; border-radius: 3px; background: none; color: inherit; font: inherit; font-size: 14px; cursor: pointer; }
+.tf-page-step:hover:not(:disabled) { background: var(--tf-hover); color: var(--tf-fg); }
+.tf-page-step:disabled { opacity: 0.35; cursor: default; }
+.tf-page-scroll { flex: 1; min-height: 0; overflow: auto; padding: 8px; background: var(--tf-bg-soft); }
+.tf-page-note { padding: 8px; }
+.tf-sheet { position: relative; width: 100%; background: #fff; box-shadow: 0 0 0 1px var(--tf-border); cursor: crosshair; }
+.tf-sheet canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
+.tf-box { position: absolute; box-sizing: content-box; margin: -2px; padding: 1px; border-radius: 2px; pointer-events: none; }
+.tf-box[data-kind="selected"] { border: 1.5px solid #2f5bd3; background: rgba(47, 91, 211, 0.16); }
+.tf-box[data-kind="hovered"] { border: 1.5px dashed #c2410c; background: rgba(194, 65, 12, 0.10); }
+.tf-row[data-hovered="true"] { background: var(--tf-hover); }
+.tf-side.tf-page-toggle { padding: 3px 8px; font-size: 11px; cursor: pointer; }
 .tf-tree { overflow: auto; padding: 4px 0 12px; }
 .tf-page-title {
   position: sticky;
@@ -173,8 +188,33 @@ button.tf-problem:hover { text-decoration: underline; }
   font: 11px/18px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
 .tf-role[data-heading="true"] { color: var(--tf-accent); font-weight: 700; }
+.tf-copy {
+  flex-shrink: 0;
+  margin: 0 6px;
+  padding: 1px 6px;
+  border: 1px solid var(--tf-border);
+  border-radius: 3px;
+  background: var(--tf-bg);
+  color: var(--tf-muted);
+  font: inherit;
+  font-size: 11px;
+  line-height: 1.4;
+  cursor: pointer;
+}
+.tf-copy:hover, .tf-copy:focus-visible { color: var(--tf-fg); border-color: var(--tf-accent); }
+.tf-copy[data-copied="true"] { color: var(--tf-accent); }
+/* In a row it shows with the pointer or focus on the row; in the details it is always there. */
+.tf-row .tf-copy { opacity: 0; }
+.tf-row:hover .tf-copy, .tf-row:focus-within .tf-copy, .tf-row .tf-copy[data-copied="true"] { opacity: 1; }
+.tf-details .tf-copy { margin: 0 0 0 8px; vertical-align: 1px; }
 .tf-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tf-text[data-quiet="true"] { color: var(--tf-muted); }
+/* The selected tag's line is shown whole, on as many lines as it takes. */
+.tf-row[data-selected="true"] { align-items: flex-start; }
+.tf-row[data-selected="true"] .tf-select { align-items: flex-start; padding-top: 2px; padding-bottom: 2px; }
+.tf-row[data-selected="true"] .tf-text { overflow: visible; text-overflow: clip; white-space: normal; overflow-wrap: anywhere; }
+.tf-row[data-selected="true"] .tf-text[data-quiet="true"]:not(:last-of-type) { flex-shrink: 0; }
+.tf-row[data-selected="true"] .tf-copy { margin-top: 2px; }
 .tf-row[data-found="true"] .tf-text { font-weight: 600; }
 .tf-mark {
   flex-shrink: 0;
@@ -187,7 +227,7 @@ button.tf-problem:hover { text-decoration: underline; }
   font-weight: 600;
 }
 
-.tf-details { overflow: auto; padding: 10px 12px; border-left: 1px solid var(--tf-border); background: var(--tf-bg-soft); }
+.tf-details { overflow: auto; padding: 10px 12px; background: var(--tf-bg-soft); }
 .tf-details h2 { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; font-size: 13px; font-weight: 600; }
 .tf-details dl { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 4px 12px; }
 .tf-details dt { color: var(--tf-muted); }
@@ -238,6 +278,8 @@ button.tf-problem:hover { text-decoration: underline; }
 .tf-dock[data-side="top"] { top: 0; flex-direction: column-reverse; border-bottom: 1px solid var(--tf-border); box-shadow: 0 4px 16px rgb(0 0 0 / 0.16); }
 .tf-dock[data-side="left"] { left: 0; flex-direction: row-reverse; border-right: 1px solid var(--tf-border); box-shadow: 4px 0 16px rgb(0 0 0 / 0.16); }
 .tf-dock[data-side="right"] { right: 0; flex-direction: row; border-left: 1px solid var(--tf-border); box-shadow: -4px 0 16px rgb(0 0 0 / 0.16); }
+.tf-dock[data-full="true"] { inset: 0; width: auto; height: auto; min-width: 0; min-height: 0; max-width: none; max-height: none; border: 0; box-shadow: none; }
+.tf-resize[hidden] { display: none; }
 .tf-dock .tf-panel { flex: 1; min-width: 0; min-height: 0; }
 .tf-resize { flex-shrink: 0; }
 .tf-resize:hover, .tf-resize:focus-visible { background: var(--tf-accent); }

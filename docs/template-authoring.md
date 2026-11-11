@@ -347,7 +347,7 @@ const report = await inspectPdf(bytes);
 // report.standard: { pdfUa?, pdfA?: { part, conformance? } }, as the XMP metadata declares them
 // report.headings: [{ level, text }] in document order; report.figures: [{ alt? }]; report.tables
 // report.fonts: [{ name, embedded }]; report.structureRoles: how often each structure role occurs
-// report.structure: [{ page, elements: [{ role, text, alt?, lang?, children }] }]: each page's tags in reading order
+// report.structure: [{ page, elements: [{ role, text, alt?, lang?, summary?, scope?, id?, headers?, children }] }]: each page's tags in reading order
 ```
 
 `pdfjs-dist` (6.3 or later) is an optional peer dependency of `@typfolio/dev-tools`, loaded only when `inspectPdf` or `checkStructure` is first called (`structureWarnings` and `readStructure` never load it); without it the call rejects with a `TypstPdfError` that says to install it. Input that is not a readable PDF rejects with `INVALID_REQUEST`.
