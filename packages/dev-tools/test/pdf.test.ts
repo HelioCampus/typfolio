@@ -416,3 +416,20 @@ test('pdf.header-cell (a11y-extras, on by default) tags row headers as TH', asyn
   assert.deepEqual([(await roles('')).TH, (await roles('')).TD], [2, 4]);
   assert.deepEqual([(await roles('pdf.header-cell(scope: "row")')).TH, (await roles('pdf.header-cell(scope: "row")')).TD], [4, 2]);
 });
+
+test('the structure keeps a table\'s summary, header scopes, and the headers of each cell', async () => {
+  const source = defineTemplate({ files: { 'main.typ': `#set document(title: "Scores")
+#set text(lang: "en")
+#pdf.table-summary(summary: "Scores by student", table(columns: 2, table.header[Student][Score], pdf.header-cell(scope: "row")[Ada], [9]))` } })();
+  const { structure } = await inspectPdf((await compiler.compile(source, { pdf: { standards: ['ua-1'], creationTimestamp: timestamp } })).bytes);
+  const table = structure[0].elements[0].children.find(child => child.role === 'Table')!;
+  assert.equal(table.summary, 'Scores by student');
+  const cells = table.children.flatMap(row => row.role === 'TR' ? row.children : row.children.flatMap(inner => inner.children));
+  const byId = new Map(cells.filter(cell => cell.id !== undefined).map(cell => [cell.id, cell.text]));
+  assert.deepEqual(cells.map(cell => [cell.role, cell.text, cell.scope, (cell.headers ?? []).map(id => byId.get(id))]), [
+    ['TH', 'Student', 'Column', []],
+    ['TH', 'Score', 'Column', []],
+    ['TH', 'Ada', 'Row', ['Student']],
+    ['TD', '9', undefined, ['Score', 'Ada']],
+  ]);
+});

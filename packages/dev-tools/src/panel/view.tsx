@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { headingLevel, type PdfStructureElement, type PdfStructureWarning, type PdfStructureWarningKind } from '../structure.js';
 import type { ReadState } from './read.js';
-import { ancestors, filterTree, indexPages, type TreeNode } from './tree.js';
+import { ancestors, filterTree, indexPages, type TreeIndex, type TreeNode } from './tree.js';
 
 const marks: Record<PdfStructureWarningKind, string> = {
   'untagged': 'Not tagged',
@@ -18,10 +18,12 @@ export const plural = (count: number, word: string) => `${count} ${word}${count 
 const describe = (error: unknown) => error instanceof Error ? error.message : String(error);
 const isHeading = (element: PdfStructureElement) => headingLevel(element.role) !== undefined;
 
-/** The text of a table's `TH` cells, not counting those of a table nested in it. */
+/** The text of a table's `TH` cells that label columns, not counting those of a table nested in it. */
 function columns(element: PdfStructureElement): string[] {
-  return element.children.flatMap(child => child.role === 'TH' ? [child.text] : child.role === 'Table' ? [] : columns(child));
+  return element.children.flatMap(child => child.role === 'TH' ? (child.scope === 'Row' ? [] : [child.text]) : child.role === 'Table' ? [] : columns(child));
 }
+
+const scopes = { Row: 'Row: labels the cells of its row', Column: 'Column: labels the cells of its column', Both: 'Both: labels the cells of its row and of its column' };
 
 /** Something to read in it: text, alt text, or a figure. */
 const hasContent = (element: PdfStructureElement): boolean =>
@@ -33,7 +35,8 @@ function summary({ element, continues }: TreeNode): { text: string; quiet: boole
   if (continues !== undefined) return { text: `Continued from page ${continues}`, quiet: true };
   if (element.role === 'Table') {
     const names = columns(element);
-    return names.length > 0 ? { text: `Columns: ${names.join(', ')}`, quiet: true } : undefined;
+    const parts = [...(names.length > 0 ? [`Columns: ${names.join(', ')}`] : []), ...(element.summary?.trim() ? [`Summary: ${element.summary}`] : [])];
+    return parts.length > 0 ? { text: parts.join(' · '), quiet: true } : undefined;
   }
   // Such as a table's row drawn on another page: pdf.js lists all of a table's rows on each of its pages.
   if (!hasContent(element)) return { text: 'No text on this page', quiet: true };
@@ -42,7 +45,7 @@ function summary({ element, continues }: TreeNode): { text: string; quiet: boole
   return { text: element.text, quiet: element.children.length > 0 && !isHeading(element) };
 }
 
-function Details({ node, warnings }: { node: TreeNode; warnings: readonly PdfStructureWarning[] }) {
+function Details({ node, index, warnings }: { node: TreeNode; index: TreeIndex; warnings: readonly PdfStructureWarning[] }) {
   const { element } = node;
   const children = new Map<string, number>();
   for (const child of element.children) children.set(child.role, (children.get(child.role) ?? 0) + 1);
@@ -80,6 +83,21 @@ function Details({ node, warnings }: { node: TreeNode; warnings: readonly PdfStr
           <>
             <dt>Columns</dt>
             <dd>{columns(element).join(', ') || 'None: no TH cells'}</dd>
+            <dt>Summary</dt>
+            <dd>{element.summary?.trim() ? element.summary : 'None'}</dd>
+          </>
+        ) : null}
+        {element.role === 'TH' ? (
+          <>
+            <dt>Scope</dt>
+            <dd>{element.scope ? scopes[element.scope] : 'None'}</dd>
+          </>
+        ) : null}
+        {element.role === 'TH' || element.role === 'TD' ? (
+          <>
+            <dt>Headers</dt>
+            {/* A header cell without text, or one the tree does not have, is named by its id. */}
+            <dd>{element.headers?.length ? element.headers.map(id => index.byId.get(id)?.element.text || id).join(', ') : 'None'}</dd>
           </>
         ) : null}
         {children.size > 0 ? (
@@ -164,6 +182,7 @@ export function StructureView({ state, hasBytes, tools, onClose }: StructureView
           <button type="button" className="tf-select" aria-current={selected === node.path || undefined} onClick={() => setSelected(node.path)}>
             <span className="tf-role" data-heading={isHeading(element)}>{element.role}</span>
             {element.lang ? <span className="tf-text" data-quiet="true">lang {element.lang}</span> : null}
+            {element.scope ? <span className="tf-text" data-quiet="true">scope {element.scope}</span> : null}
             {line ? <span className="tf-text" data-quiet={line.quiet}>{line.text}</span> : null}
             {mark ? <span className="tf-mark">{marks[mark.kind]}</span> : null}
           </button>
@@ -269,7 +288,7 @@ export function StructureView({ state, hasBytes, tools, onClose }: StructureView
             {filter && filter.found.size === 0 ? <p className="tf-banner" data-tone="quiet">No tag matches “{query.trim()}”.</p> : null}
           </div>
           <aside className="tf-details" aria-label="Selected tag">
-            {node ? <Details node={node} warnings={warningsAt.get(node.path) ?? []} /> : <p className="tf-hint">Select a tag to see its text, alt text and language.</p>}
+            {node ? <Details node={node} index={index} warnings={warningsAt.get(node.path) ?? []} /> : <p className="tf-hint">Select a tag to see its text, alt text and language, and for a table cell its scope and headers.</p>}
           </aside>
         </div>
       ) : null}

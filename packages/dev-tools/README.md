@@ -56,12 +56,12 @@ const report = await inspectPdf(bytes); // the bytes of a compiled PDF
 // report.headings: [{ level, text }]  in document order
 // report.figures: [{ alt? }], report.tables, report.fonts: [{ name, embedded }]
 // report.structureRoles: { H1: 1, Table: 1, ... }  how often each structure role occurs
-// report.structure: [{ page, elements: [{ role, text, alt?, lang?, children }] }]  the tags of each page
+// report.structure: [{ page, elements: [{ role, text, alt?, lang?, summary?, scope?, id?, headers?, children }] }]  the tags of each page
 ```
 
 `inspectPdf` reports facts about the file so a test can assert on them. It never says a file conforms to anything: a tagged PDF with PDF/UA metadata, a title, a language and alt text can still fail PDF/UA. Use a validator such as veraPDF for conformance.
 
-`structure` is the structure tree as a screen reader gets it: each page's elements in reading order, with the text drawn in them, a figure's alt text and the language an element sets. Text an artifact draws (a running header, a page number) belongs to no element.
+`structure` is the structure tree as a screen reader gets it: each page's elements in reading order, with the text drawn in them, a figure's alt text and the language an element sets. A table carries what Typst wrote for it: the table's `summary` (`pdf.table-summary`), a header cell's `scope` (`Row`, `Column` or `Both`) and `id`, and on each cell `headers`, the ids of the header cells that label it. A row header made with `pdf.header-cell(scope: "row")` is a `TH` with scope `Row`, and the cells of its row name it in `headers`. Text an artifact draws (a running header, a page number) belongs to no element.
 
 `inspectPdf` and `checkStructure` read the file with [`pdfjs-dist`](https://www.npmjs.com/package/pdfjs-dist), an **optional peer dependency** (`^6.3.0`) that you install yourself when you use this entry. It is loaded on the first call and only from `@typfolio/dev-tools/pdf`: the main entry never imports it. Without it, the call rejects with a `TypstPdfError` (`INITIALIZATION`) that says to install `pdfjs-dist`; bytes that are not a readable PDF reject with `INVALID_REQUEST`. Counts are per page (an element that continues over a page break is counted for each page), see "Inspecting the output" in [docs/template-authoring.md](../../docs/template-authoring.md) for this and the other limits.
 
@@ -92,7 +92,7 @@ await checkStructure(bytes); // the same, and one `untagged` warning for a PDF t
 
 ## Structure panel
 
-`@typfolio/dev-tools/panel` shows a PDF's tags in the page while you work on a template: each page's tags in reading order, the warnings above with a link to the tag each is about, and the text, alt text and language of the tag you select. It is written in React and ships with React bundled in (about 75 kB gzipped), so a page needs no React of its own, and in a React page it runs apart from the page's React. It loads no pdf.js: pass the one your page uses, with its worker set up.
+`@typfolio/dev-tools/panel` shows a PDF's tags in the page while you work on a template: each page's tags in reading order, the warnings above with a link to the tag each is about, and the text, alt text and language of the tag you select. A header cell shows its scope, a table its summary, and a selected cell the header cells that label it, by their text. It is written in React and ships with React bundled in (about 75 kB gzipped), so a page needs no React of its own, and in a React page it runs apart from the page's React. It loads no pdf.js: pass the one your page uses, with its worker set up.
 
 ```ts
 import * as pdfjs from 'pdfjs-dist';

@@ -85,8 +85,10 @@ function ChartsApp({ client }: { readonly client: PdfClient }) {
       {
         title: 'Outcome results',
         generatedAt: new Intl.DateTimeFormat('en', { dateStyle: 'long' }).format(new Date()),
+        levels: levelNames,
         outcomes: outcomes.map(outcome => ({
           name: outcome.name,
+          students: outcome.levels.map(level => level.students),
           summary: `${proficient(outcome)} students reached Proficient or above; the goal is ${outcome.goal}.`,
           chart: render(<LevelsChart levels={outcome.levels} goal={outcome.goal} {...pdfChart} />),
           chartAlt: `Students per level for ${outcome.name}: ` +

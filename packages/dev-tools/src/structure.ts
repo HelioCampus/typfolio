@@ -12,6 +12,14 @@ export interface PdfStructureElement {
   alt?: string;
   /** The element's `/Lang`. */
   lang?: string;
+  /** A `Table`'s `/Summary`: what the table is about, for a reader who cannot see it. */
+  summary?: string;
+  /** A `TH`'s `/Scope`: whether it labels its row, its column or both. */
+  scope?: 'Row' | 'Column' | 'Both';
+  /** A `TH`'s `/ID`, which other cells' `headers` name. */
+  id?: string;
+  /** A `TH` or `TD`'s `/Headers`: the `id` of each header cell that labels it. */
+  headers?: string[];
   children: PdfStructureElement[];
 }
 
@@ -52,7 +60,7 @@ export interface PdfStructureSource {
 }
 
 // The part of pdf.js output read here.
-interface PdfJsStructNode { type?: string; id?: string; role?: string; alt?: string; lang?: string; children?: PdfJsStructNode[] }
+interface PdfJsStructNode { type?: string; id?: string; role?: string; alt?: string; lang?: string; summary?: string; scope?: string; structId?: string; headers?: unknown; children?: PdfJsStructNode[] }
 interface PdfJsTextItem { str?: string; hasEOL?: boolean; type?: string; id?: string | null; tag?: string | null }
 
 /** What pdf.js's `getMarkInfo()` resolves to. */
@@ -110,6 +118,10 @@ function toElement(node: PdfJsStructNode, textById: Map<string, string>): { elem
       text: raw.replace(/\s+/g, ' ').trim(),
       ...(typeof node.alt === 'string' ? { alt: node.alt } : {}),
       ...(typeof node.lang === 'string' ? { lang: node.lang } : {}),
+      ...(typeof node.summary === 'string' ? { summary: node.summary } : {}),
+      ...(node.scope === 'Row' || node.scope === 'Column' || node.scope === 'Both' ? { scope: node.scope } : {}),
+      ...(typeof node.structId === 'string' ? { id: node.structId } : {}),
+      ...(Array.isArray(node.headers) ? { headers: node.headers.filter((id): id is string => typeof id === 'string') } : {}),
       children,
     },
     raw,

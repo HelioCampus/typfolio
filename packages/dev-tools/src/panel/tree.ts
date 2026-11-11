@@ -15,12 +15,15 @@ export interface TreeIndex {
   pages: { page: number; nodes: TreeNode[] }[];
   byPath: Map<string, TreeNode>;
   byElement: Map<PdfStructureElement, TreeNode>;
+  /** Header cells by their id, as other cells' `headers` name them; the part of a cell that has its text. */
+  byId: Map<string, TreeNode>;
   counts: { headings: number; tables: number; figures: number };
 }
 
 export function indexPages(pages: readonly PdfStructurePage[]): TreeIndex {
   const byPath = new Map<string, TreeNode>();
   const byElement = new Map<PdfStructureElement, TreeNode>();
+  const byId = new Map<string, TreeNode>();
   const counts = { headings: 0, tables: 0, figures: 0 };
   let carried = new Set<PdfStructureElement>();
   const build = (element: PdfStructureElement, path: string, page: number, parent?: TreeNode): TreeNode => {
@@ -28,6 +31,8 @@ export function indexPages(pages: readonly PdfStructurePage[]): TreeIndex {
     node.children = element.children.map((child, index) => build(child, `${path}.${index}`, page, node));
     byPath.set(path, node);
     byElement.set(element, node);
+    // A table's cells are listed on each of its pages; the one drawn on the page has the text.
+    if (element.id !== undefined && (!byId.has(element.id) || (element.text && !byId.get(element.id)!.element.text))) byId.set(element.id, node);
     // A table over a page break is one table, in parts on each page: the rest of it is counted once.
     if (element.role === 'Table' && carried.has(element)) node.continues = page - 1;
     else if (headingLevel(element.role) !== undefined) counts.headings += 1;
@@ -42,6 +47,7 @@ export function indexPages(pages: readonly PdfStructurePage[]): TreeIndex {
     }),
     byPath,
     byElement,
+    byId,
     counts,
   };
 }

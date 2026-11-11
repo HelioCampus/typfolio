@@ -13,6 +13,21 @@
 #text(size: 9pt, fill: rgb("66736c"))[Generated #data.generatedAt]
 #v(6mm)
 
+== Students per level
+// Each outcome names its row: pdf.header-cell (Typst's a11y-extras) tags it TH with scope Row, so a screen reader
+// reads a count as "Proficient, Written communication, 12". The summary says what the table is about.
+#pdf.table-summary(
+  summary: "Students per level for each outcome",
+  table(
+    columns: (1fr,) + (auto,) * data.levels.len(),
+    align: (x, _) => if x == 0 { left } else { right },
+    stroke: 0.4pt + rgb("c9d2cb"),
+    table.header([*Outcome*], ..data.levels.map(level => [*#level*])),
+    ..data.outcomes.map(outcome => (pdf.header-cell(scope: "row")[#outcome.name], ..outcome.students.map(count => [#count]))).flatten(),
+  ),
+)
+#v(4mm)
+
 #for outcome in data.outcomes [
   == #outcome.name
   #outcome.summary

@@ -64,7 +64,7 @@ test('the panel shows the tags and their problems, and a problem opens the tag i
     // The table starts closed, marked; its cells are not listed until it is opened.
     const tableRow = view().getByRole('button', { name: /^Table.*No header cells$/ });
     assert.ok(view().queryByText('Grace') === null);
-    assert.ok(view().getByText('Select a tag to see its text, alt text and language.'));
+    assert.ok(view().getByText('Select a tag to see its text, alt text and language, and for a table cell its scope and headers.'));
 
     fireEvent.click(problem);
     await waitFor(() => assert.equal(tableRow.closest('.tf-row')?.getAttribute('data-selected'), 'true'));
@@ -316,5 +316,33 @@ test('the bundle carries React and imports only @typfolio/core; the other entrie
   for (const entry of ['index.js', 'pdf.js', 'structure.js']) {
     const source = await readFile(new URL(`../dist/${entry}`, import.meta.url), 'utf8');
     assert.equal(/(?:from\s*|import\(\s*)['"][^'"]*(?:panel|react)/.test(source), false, `${entry} must not import the panel or React`);
+  }
+});
+
+test('a table shows its summary, a header cell its scope, and a cell the headers that label it', async () => {
+  const { element, view } = target();
+  const bytes = await compileSource(`= Results
+#pdf.table-summary(summary: "Scores by student and term", table(columns: 3,
+  table.header[Student][Autumn][Spring],
+  pdf.header-cell(scope: "row")[Ada], [90], [85],
+  pdf.header-cell(scope: "row")[Grace], [70], [65]))`, { standards: ['ua-1'] });
+  const panel = mountStructurePanel(element, { pdfjs, bytes });
+  try {
+    // Row headers are not columns.
+    const table = await view().findByRole('button', { name: /^Table.*Columns: Student, Autumn, Spring · Summary: Scores by student and term$/ });
+    const details = () => within(view().getByRole('complementary', { name: 'Selected tag' }));
+    fireEvent.click(table);
+    await waitFor(() => assert.ok(details().getByText('Scores by student and term')));
+
+    fireEvent.click(view().getByRole('button', { name: 'Expand Table' }));
+    fireEvent.click(await view().findByRole('button', { name: /^TH.*scope Row.*Grace$/ }));
+    await waitFor(() => assert.ok(details().getByText('Row: labels the cells of its row')));
+    assert.ok(details().getByText('Student'), 'the row header is itself under the column header');
+    assert.equal(view().getAllByRole('button', { name: /^TH.*scope Column/ }).length, 3);
+
+    fireEvent.click(view().getByRole('button', { name: /^TD.*65$/ }));
+    await waitFor(() => assert.ok(details().getByText('Spring, Grace')));
+  } finally {
+    panel.unmount();
   }
 });
