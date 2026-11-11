@@ -1,5 +1,12 @@
 # @typfolio/dev-tools
 
+## 0.6.0
+
+### Minor Changes
+
+- d97bf89: The tags panel draws the page beside the tags, with the page's pdf.js, and marks the selected tag on it. Moving over the page marks the tag under the pointer and a click selects it in the list; the page follows the selection, and a "Page" button hides it. The mark covers the tag's text or a figure's own box. The panel now keeps the pdf.js document open while it is the PDF on show, and frees it when another takes its place or the panel is removed. The tags, the page and the selected tag are divided by lines that can be dragged, or moved with the arrow keys, to resize them; a double click resets one. In a narrow panel the three stack. The devtools toolbar has a "Fill the page" button that puts the panel over the whole page, and back. A tag's row has a "Copy" button, shown on hover or focus, that copies its text or a figure's alt text. The selected tag's row shows its whole text instead of one cut-off line.
+- 9256249: The structure keeps what a tagged table says about its cells: `summary` on a `Table`, `scope` (`Row`, `Column`, `Both`) and `id` on a `TH`, and `headers` on a `TH` or `TD` (the ids of the header cells that label it). The tags panel shows a header cell's scope, a table's summary, and the headers of the selected cell by their text; a table's "Columns" line no longer lists row headers.
+
 ## 0.5.0
 
 ### Patch Changes
