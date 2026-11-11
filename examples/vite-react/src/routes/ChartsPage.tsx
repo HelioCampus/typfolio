@@ -61,6 +61,20 @@ function proficient(outcome: Outcome): number {
   return outcome.levels.slice(0, 2).reduce((sum, level) => sum + level.students, 0);
 }
 
+/**
+ * The chart in words, for a reader who cannot see it: what it is, what stands out, and how the result compares with
+ * the goal the dashed line marks. It says what the chart means, not how it looks, and leaves the full numbers to
+ * the table in the PDF.
+ */
+function chartAlt(outcome: Outcome): string {
+  const largest = outcome.levels.reduce((most, level) => (level.students > most.students ? level : most));
+  const reached = proficient(outcome);
+  const gap = outcome.goal - reached;
+  const result = gap > 0 ? `${gap} short of the goal of ${outcome.goal}` : gap < 0 ? `${-gap} above the goal of ${outcome.goal}` : `the goal of ${outcome.goal}`;
+  return `Bar chart of students per level for ${outcome.name}. The largest group is ${largest.name} (${largest.students}). ` +
+    `${reached} reached Proficient or above, ${result}. The full numbers are in the table "Students per level".`;
+}
+
 function statusLabel(status: PdfStatus): string {
   switch (status) {
     case 'idle': return 'Ready';
@@ -91,8 +105,7 @@ function ChartsApp({ client }: { readonly client: PdfClient }) {
           students: outcome.levels.map(level => level.students),
           summary: `${proficient(outcome)} students reached Proficient or above; the goal is ${outcome.goal}.`,
           chart: render(<LevelsChart levels={outcome.levels} goal={outcome.goal} {...pdfChart} />),
-          chartAlt: `Students per level for ${outcome.name}: ` +
-            outcome.levels.map(level => `${level.name} ${level.students}`).join(', ') + '.',
+          chartAlt: chartAlt(outcome),
         })),
       },
       { header: { institution: 'Example University', logo: attach(logo, 'svg') } },
