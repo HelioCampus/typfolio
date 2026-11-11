@@ -64,7 +64,7 @@ test('the panel shows the tags and their problems, and a problem opens the tag i
     // The table starts closed, marked; its cells are not listed until it is opened.
     const tableRow = view().getByRole('button', { name: /^Table.*No header cells$/ });
     assert.ok(view().queryByText('Grace') === null);
-    assert.ok(view().getByText('Select a tag to see its text, alt text and language, and for a table cell its scope and headers.'));
+    assert.ok(view().getByText('Select a tag, in the list or on the page, to see its text, alt text and language, and for a table cell its scope and headers.'));
 
     fireEvent.click(problem);
     await waitFor(() => assert.equal(tableRow.closest('.tf-row')?.getAttribute('data-selected'), 'true'));
@@ -166,7 +166,7 @@ test('an untagged PDF says so, and bytes that are not a PDF say why they could n
   }
 });
 
-test('a PDF replaced while it is read is dropped, and every pdf.js document opened is freed', async () => {
+test('a PDF replaced while it is read is dropped; the one on show stays open for the page view, and all are freed', async () => {
   const { counts, pdfjs: tracked } = counted();
   const { element, shadow, view } = target();
   const first = await headerless();
@@ -179,9 +179,11 @@ test('a PDF replaced while it is read is dropped, and every pdf.js document open
   await new Promise(resolve => setTimeout(resolve, 200));
   assert.ok(view().queryByText(/problem a screen reader user would hit/) === null);
   assert.equal(counts.opened, 2);
-  await waitFor(() => assert.equal(counts.destroyed, 2));
+  // The first is freed; the one on show stays open until the panel goes.
+  await waitFor(() => assert.equal(counts.destroyed, 1));
 
   panel.unmount();
+  assert.equal(counts.destroyed, 2);
   assert.equal(shadow(), undefined, 'unmount removes the panel');
   assert.equal(element.childElementCount, 0);
   panel.update({ bytes: first });
@@ -342,6 +344,47 @@ test('a table shows its summary, a header cell its scope, and a cell the headers
 
     fireEvent.click(view().getByRole('button', { name: /^TD.*65$/ }));
     await waitFor(() => assert.ok(details().getByText('Spring, Grace')));
+  } finally {
+    panel.unmount();
+  }
+});
+
+test('the page view marks the selected tag where it is drawn, follows the selection to its page, and can be hidden', async () => {
+  const { element, shadow, view } = target();
+  const bytes = await compileSource('= First\nOpening words.\n#pagebreak()\n= Second\n#table(columns: 2, table.header([Name], [Score]), [Ada], [90])');
+  const panel = mountStructurePanel(element, { pdfjs, bytes });
+  try {
+    const page = () => within(view().getByRole('region', { name: 'Page' }));
+    await waitFor(() => assert.ok(page().getByText('Page 1 of 2')));
+    const mark = () => shadow()!.querySelector<HTMLElement>('.tf-box[data-kind="selected"]');
+    // Compared as booleans: a failed comparison of a DOM element would print the whole document.
+    assert.ok(mark() === null, 'nothing is marked before a tag is selected');
+    const box = () => ['left', 'top', 'width', 'height'].map(side => parseFloat(mark()!.style.getPropertyValue(side)));
+
+    fireEvent.click(view().getByRole('button', { name: /^H1.*First$/ }));
+    await waitFor(() => assert.equal(mark()?.getAttribute('data-role'), 'H1'));
+    const heading = box();
+    assert.ok(heading.every(value => value > 0 && value < 100), `a box inside the page: ${heading}`);
+    assert.ok(heading[1] < 30, 'the first heading is near the top of its page');
+
+    // A tag of the second page brings that page.
+    fireEvent.click(view().getByRole('button', { name: 'Expand Table' }));
+    fireEvent.click(await view().findByRole('button', { name: /^TD.*90$/ }));
+    await waitFor(() => assert.ok(page().getByText('Page 2 of 2')));
+    await waitFor(() => assert.equal(mark()?.getAttribute('data-role'), 'TD'));
+    const cell = box();
+    // The table, selected, holds its cell.
+    fireEvent.click(view().getByRole('button', { name: /^Table/ }));
+    await waitFor(() => assert.equal(mark()?.getAttribute('data-role'), 'Table'));
+    const table = box();
+    assert.ok(table[0] <= cell[0] && table[1] <= cell[1] && table[0] + table[2] >= cell[0] + cell[2] && table[1] + table[3] >= cell[1] + cell[3], `${table} holds ${cell}`);
+
+    fireEvent.click(page().getByRole('button', { name: 'Previous page' }));
+    await waitFor(() => assert.ok(page().getByText('Page 1 of 2')));
+    await waitFor(() => assert.ok(mark() === null, 'the table is not on the first page'));
+
+    fireEvent.click(view().getByRole('button', { name: 'Page' }));
+    await waitFor(() => assert.ok(view().queryByRole('region', { name: 'Page' }) === null));
   } finally {
     panel.unmount();
   }

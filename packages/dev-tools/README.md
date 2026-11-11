@@ -92,7 +92,9 @@ await checkStructure(bytes); // the same, and one `untagged` warning for a PDF t
 
 ## Structure panel
 
-`@typfolio/dev-tools/panel` shows a PDF's tags in the page while you work on a template: each page's tags in reading order, the warnings above with a link to the tag each is about, and the text, alt text and language of the tag you select. A header cell shows its scope, a table its summary, and a selected cell the header cells that label it, by their text. It is written in React and ships with React bundled in (about 75 kB gzipped), so a page needs no React of its own, and in a React page it runs apart from the page's React. It loads no pdf.js: pass the one your page uses, with its worker set up.
+`@typfolio/dev-tools/panel` shows a PDF's tags in the page while you work on a template: each page's tags in reading order, the warnings above with a link to the tag each is about, and the text, alt text and language of the tag you select. A header cell shows its scope, a table its summary, and a selected cell the header cells that label it, by their text.
+
+Beside the tags the panel draws the page with the page's pdf.js and marks the selected tag on it; moving over the page marks the tag under the pointer, and a click selects it in the list. The mark covers what the tag holds, which is its text or a figure's own box: a cell's border and padding belong to no tag, so they are not covered, and an empty cell has nothing to mark. The box of text is estimated from its font size and fits upright Latin text. The "Page" button in the toolbar hides the page. The page is a second drawing of the PDF, apart from any preview your application shows. It is written in React and ships with React bundled in (about 75 kB gzipped), so a page needs no React of its own, and in a React page it runs apart from the page's React. It loads no pdf.js: pass the one your page uses, with its worker set up.
 
 ```ts
 import * as pdfjs from 'pdfjs-dist';

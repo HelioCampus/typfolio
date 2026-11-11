@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { headingLevel, type PdfStructureElement, type PdfStructureWarning, type PdfStructureWarningKind } from '../structure.js';
+import { PageView } from './page.js';
 import type { ReadState } from './read.js';
 import { ancestors, filterTree, indexPages, type TreeIndex, type TreeNode } from './tree.js';
 
@@ -134,6 +135,10 @@ export function StructureView({ state, hasBytes, tools, onClose }: StructureView
   const [toggled, setToggled] = useState(() => new Map<string, boolean>());
   const [query, setQuery] = useState('');
   const [revealed, setRevealed] = useState(0);
+  // The page view: whether it shows, its page, and the tag the pointer is on, in the tree or on the page.
+  const [showPage, setShowPage] = useState(true);
+  const [page, setPage] = useState(1);
+  const [hovered, setHovered] = useState<string>();
   const tree = useRef<HTMLDivElement>(null);
   const filter = useMemo(() => index && filterTree(index, query), [index, query]);
   const warningsAt = useMemo(() => {
@@ -149,6 +154,13 @@ export function StructureView({ state, hasBytes, tools, onClose }: StructureView
     if (revealed === 0 || selected === undefined) return;
     tree.current?.querySelector(`[data-path="${selected}"]`)?.scrollIntoView?.({ block: 'nearest' });
   }, [revealed]);
+
+  // The page view follows the selection.
+  const selectedPage = selected === undefined ? undefined : index?.byPath.get(selected)?.page;
+  useEffect(() => {
+    if (selectedPage !== undefined) setPage(selectedPage);
+  }, [selected, selectedPage]);
+  const shownPage = Math.min(Math.max(page, 1), Math.max(read?.pages.length ?? 1, 1));
 
   const reveal = (node: TreeNode) => {
     setToggled(previous => {
@@ -169,7 +181,15 @@ export function StructureView({ state, hasBytes, tools, onClose }: StructureView
     const mark = warningsAt.get(node.path)?.[0];
     return (
       <li key={node.path}>
-        <div className="tf-row" data-path={node.path} data-selected={selected === node.path} data-found={filter?.found.has(node.path) ?? false}>
+        <div
+          className="tf-row"
+          data-path={node.path}
+          data-selected={selected === node.path}
+          data-hovered={hovered === node.path}
+          data-found={filter?.found.has(node.path) ?? false}
+          onMouseEnter={() => setHovered(node.path)}
+          onMouseLeave={() => setHovered(current => current === node.path ? undefined : current)}
+        >
           {children.length > 0 ? (
             <button
               type="button"
@@ -243,6 +263,9 @@ export function StructureView({ state, hasBytes, tools, onClose }: StructureView
             onChange={event => setQuery(event.target.value)}
           />
         ) : null}
+        {read?.tagged ? (
+          <button type="button" className="tf-side tf-page-toggle" aria-pressed={showPage} title="Show the page beside the tags" onClick={() => setShowPage(shown => !shown)}>Page</button>
+        ) : null}
         {tools}
         {onClose ? <button type="button" className="tf-close" aria-label="Close the PDF tags panel" onClick={onClose}>×</button> : null}
       </div>
@@ -273,7 +296,7 @@ export function StructureView({ state, hasBytes, tools, onClose }: StructureView
         </section>
       )}
       {read?.tagged && index && error === undefined ? (
-        <div className="tf-main">
+        <div className="tf-main" data-page={showPage}>
           <div className="tf-tree" ref={tree} role="region" aria-label="Tags in reading order">
             {index.pages.map(({ page, nodes }) => {
               const shown = filter ? nodes.filter(each => filter.shown.has(each.path)) : nodes;
@@ -287,8 +310,20 @@ export function StructureView({ state, hasBytes, tools, onClose }: StructureView
             })}
             {filter && filter.found.size === 0 ? <p className="tf-banner" data-tone="quiet">No tag matches “{query.trim()}”.</p> : null}
           </div>
+          {showPage && read ? (
+            <PageView
+              read={read}
+              index={index}
+              page={shownPage}
+              selected={selected}
+              hovered={hovered}
+              onPage={setPage}
+              onHover={at => setHovered(at?.path)}
+              onPick={reveal}
+            />
+          ) : null}
           <aside className="tf-details" aria-label="Selected tag">
-            {node ? <Details node={node} index={index} warnings={warningsAt.get(node.path) ?? []} /> : <p className="tf-hint">Select a tag to see its text, alt text and language, and for a table cell its scope and headers.</p>}
+            {node ? <Details node={node} index={index} warnings={warningsAt.get(node.path) ?? []} /> : <p className="tf-hint">Select a tag, in the list or on the page, to see its text, alt text and language, and for a table cell its scope and headers.</p>}
           </aside>
         </div>
       ) : null}

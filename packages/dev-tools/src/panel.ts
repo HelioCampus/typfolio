@@ -10,7 +10,9 @@ import { css } from './panel/styles.js';
 
 /**
  * The part of pdf.js the panel uses: the module the page imports (`import * as pdfjs from 'pdfjs-dist'`), with its
- * worker set up (`GlobalWorkerOptions.workerSrc`). The panel opens each PDF with it and frees it once read.
+ * worker set up (`GlobalWorkerOptions.workerSrc`). The panel opens each PDF with it, keeps it open
+ * while it is the PDF on show so the page view can draw its pages, and frees it when another takes its place or the
+ * panel is removed.
  */
 export interface StructurePanelPdfJs {
   getDocument(source: { data: Uint8Array; verbosity?: number; isEvalSupported?: boolean; disableFontFace?: boolean; useSystemFonts?: boolean }): {
