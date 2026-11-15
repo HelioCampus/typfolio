@@ -23,7 +23,7 @@
     "setup:verapdf": "node tools/setup-verapdf.ts",
     "trace:verapdf": "node tools/trace-verapdf.ts",
     "build:verapdf": "node tools/build-verapdf.ts",
-    "check:verapdf": "node tools/check-verapdf-package.ts && node tools/check-verapdf-parity.ts",
+    "check:verapdf": "node tools/check-verapdf-package.ts && node tools/check-verapdf-inflater.ts && node tools/check-verapdf-parity.ts",
     "build": "node tools/generate-typst-package.ts && tsc -p packages/core/tsconfig.json && tsc -p packages/dev-tools/tsconfig.json && vite build --config packages/dev-tools/vite.config.ts && tsc -p packages/workers/tsconfig.json && tsc -p packages/react/tsconfig.json && tsc -p packages/paramdoc/tsconfig.json && tsc -p packages/paramdoc-export/tsconfig.json && tsc -p packages/verapdf-wasm/tsconfig.json && tsc -p examples/vite-react/tsconfig.app.json && tsc -p examples/vite-react/tsconfig.node.json && tsc -p examples/pretext-hybrid/tsconfig.app.json && tsc -p examples/pretext-hybrid/tsconfig.node.json && tsc -p tools/tsconfig.json && tsc -p examples/vite-app/tsconfig.app.json && tsc -p examples/vite-app/tsconfig.node.json && tsc -p examples/vite-capture/tsconfig.app.json && tsc -p examples/vite-capture/tsconfig.node.json && tsc -p examples/vite-library/tsconfig.app.json && tsc -p examples/vite-library/tsconfig.node.json && tsc -p tests/tsconfig.json && tsc -p tests/browser/tsconfig.json",
     "dev:react": "vite --config examples/vite-react/vite.config.ts",
     "dev:pretext": "vite --config examples/pretext-hybrid/vite.config.ts",

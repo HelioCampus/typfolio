@@ -5,7 +5,7 @@
 - `packages/verapdf-wasm`: [veraPDF](https://verapdf.org/)'s greenfield validator compiled ahead of time to WebAssembly with GraalVM Web Image, an ES module loader made from GraalVM's JavaScript launcher, and a small typed API (`createValidator`, `validate`). One build runs in Node and in a browser Web Worker.
 - A pinned, scripted build (`tools/setup-verapdf.ts`, `tools/build-verapdf.ts`), checked-in reflection metadata (`tools/trace-verapdf.ts` regenerates it) and a parity check against unmodified veraPDF on the JVM (`tools/check-verapdf-parity.ts`).
 
-Not implemented yet: a faithful replacement for veraPDF's handling of malformed Flate streams, automated browser tests, CI, third-party notices, and publishing. The package is `private`.
+Not implemented yet: automated browser tests, CI, third-party notices, and publishing. The package is `private`.
 
 A veraPDF pass is a machine check of the rules veraPDF implements. It does not establish that a document is accessible.
 
@@ -43,7 +43,7 @@ npm run check:verapdf
 
 `npm run build` then compiles the package's own `src/index.ts` to `dist/`; `npm test` runs `packages/verapdf-wasm/test`, which is skipped when the binary has not been built.
 
-`check:verapdf` verifies the generated files against `provenance.json` and the pins (`tools/check-verapdf-package.ts`) and then runs the parity check below.
+`check:verapdf` verifies the generated files against `provenance.json` and the pins (`tools/check-verapdf-package.ts`), compares the inflater with `java.util.zip.Inflater` (`tools/check-verapdf-inflater.ts`) and runs the parity check below. It takes about a minute.
 
 Generated files and everything under `.build/` are ignored by Git.
 
@@ -53,7 +53,7 @@ Four things in veraPDF or its libraries do not work in an ahead-of-time WebAssem
 
 1. **JAXB's logger.** `com.sun.xml.bind.Util.getClassLogger()` names its logger after `new Exception().getStackTrace()[1]`. A Web Image build has no Java stack frames, so every JAXB class initialiser threw `ArrayIndexOutOfBoundsException` and no validation profile could be read. `java/com/sun/xml/bind/Util.java` shadows the class with the same API and a fallback name.
 2. **Rhino's compiler.** veraPDF runs each rule test as JavaScript in Rhino and asks for optimisation level 9, which compiles scripts to JVM bytecode and loads it at run time. Rhino finds its compiler by reflection and falls back to its interpreter when the lookup fails, so the compiler is left out of the reflection metadata. Rule tests are then interpreted.
-3. **Flate decoding.** `java.util.zip.Inflater` is backed by native zlib, which the image does not have. `java/org/verapdf/cos/filters/COSFilterFlateDecode.java` shadows veraPDF's filter and decodes with `PureInflate`, a plain Java inflater. See the limits below.
+3. **Flate decoding.** `java.util.zip.Inflater` is backed by native zlib, which the image does not have. `java/org/verapdf/cos/filters/COSFilterFlateDecode.java` is veraPDF Parser 1.30.3's file with that one class replaced by `PureInflater`, a plain Java inflater in the same package. See [The inflater](#the-inflater).
 4. **Reflection and resources.** Rule tests call model getters through Rhino by reflection, and CMaps, font metrics and profiles are loaded by name. The image only contains what the metadata lists.
 
 The shadowed classes work because the build puts our compiled classes before the jars on the class path. Two SAX helper classes are also initialised at build time (`initializeAtBuildTime` in the pin), because JAXB keeps instances of them in static fields that end up in the image heap.
@@ -69,19 +69,40 @@ The shadowed classes work because the build puts our compiled classes before the
 
 Entries are sorted, so a re-trace only shows real changes. Run it after changing the veraPDF version or the Java sources, review the diff and commit it. What tracing still decides is the JAXB side (which annotated classes and proxies are needed to read a profile); a profile that none of the 15 flavours loads would be missing its part. The WCAG flavours are such a case, and are not offered: their profiles need veraPDF's optional `wcag-validation` jar, which is not among the pinned jars.
 
+## The inflater
+
+What veraPDF's Flate filter does with a damaged stream depends on exactly when the inflater reports an error, how much it has written by then and how much input it has taken: on an error the filter resets the inflater, starts again from where the failed call began and reads one byte at a time until the error comes back. A replacement that decodes correct streams correctly is therefore not enough. `PureInflater` follows zlib's `inflate()` state by state:
+
+- it keeps decoding after the output is full until it has to write, so an error in the next symbol is reported by the call before;
+- a distance that reaches back before the start of the data is only detected when the match is about to be copied;
+- an incomplete Huffman code is accepted only when its longest code is one bit, and a code without codes behaves like zlib's table of invalid entries;
+- bytes written by a call that ends in an error are not reported, an error stays until `reset()`, and `getRemaining()` counts whole bytes not taken.
+
+`tools/check-verapdf-inflater.ts` checks this on the JVM, where both inflaters exist, with `java-test/org/verapdf/cos/filters/InflaterFuzz.java`:
+
+1. Both are driven with the same calls over generated zlib streams: varied data at four levels and three strategies, left intact or damaged (bit flips, truncation, overwritten and inserted bytes, trailing bytes, a preset-dictionary flag, raw deflate, random bytes behind a valid header), fed in chunks of 1 byte to 1 MB, read 1 to 70,000 bytes at a time, with resets at arbitrary points. Every result, exception, written byte and remaining-input count must be the same.
+2. The same streams are decoded through `COSFilterFlateDecode`, with veraPDF's own class and with the shadowed one, including a reset after a few reads. What comes out must be the same.
+
+Measured: 8,000 cases identical in both modes (about 5,600 of them end in a data error). The harness was checked against planted bugs: a missing checksum comparison, no decoding past a full output, a wrong rule for incomplete codes, and a `reset()` that left a half-read symbol behind were each reported. That last one was a real bug, found by the damaged-file parity run before the harness could see it; the harness then got resets that start again from the beginning of the stream.
+
+This is evidence for the cases generated, not a proof. The JVM runs the Java source; the image runs the same source compiled by GraalVM, which the damaged-file parity run covers for 88 files.
+
 ## Parity
 
-`tools/check-verapdf-parity.ts` validates every PDF in `.build/test-output` under 15 flavours (`ua1`, `ua2`, `1a`, `1b`, `2a`, `2b`, `2u`, `3a`, `3b`, `3u`, `4`, `4e`, `4f`, `wt1a`, `wt1r`) with the WebAssembly build and with veraPDF on the JVM, and fails unless the verdict, the number of assertions and the failed rules with their failed-check counts are the same. The JVM side puts the jars before our classes, so it runs veraPDF's own Flate filter and JAXB's own `Util`. The order of failed rules is not compared: with the replacement Flate filter, two rules of one report were seen in the other order.
+`tools/check-verapdf-parity.ts` validates every PDF in `.build/test-output` under 15 flavours (`ua1`, `ua2`, `1a`, `1b`, `2a`, `2b`, `2u`, `3a`, `3b`, `3u`, `4`, `4e`, `4f`, `wt1a`, `wt1r`) with the WebAssembly build and with veraPDF on the JVM, and fails unless the verdict, the number of assertions and the failed rules with their failed-check counts are the same. The JVM side puts the jars before our classes, so it runs veraPDF's own Flate filter and JAXB's own `Util`. The order of failed rules is not compared.
 
-Measured on macOS arm64, Node 24: 330 of 330 runs match (22 files × 15 flavours). The files are Typfolio's own test outputs, all well formed, with no encrypted files, no embedded files with unusual filters and no damaged streams. The same build was run by hand in a browser module worker through `createValidator` (24 runs, no console errors, no globals added); that is not automated. The page is `experiments/verapdf-wasm/browser/`.
+It then does the same for damaged copies: four per file, each with one to three bytes inside stream data overwritten (a fixed pseudo-random sequence, so the copies are the same on every run), under `ua1` and `2b`. Here the two sides must agree on whatever comes out, an error included.
+
+Measured on macOS arm64, Node 24: 330 of 330 runs on intact files match (22 files × 15 flavours), and 176 of 176 on damaged ones (88 files × 2 flavours). The files are Typfolio's own test outputs: no encrypted files and no embedded files with unusual filters. The same build was run by hand in a browser module worker through `createValidator` (24 runs, no console errors, no globals added); that is not automated. The page is `experiments/verapdf-wasm/browser/`.
 
 ## Compatibility and limits
 
 | Topic | State |
 |---|---|
-| Malformed Flate streams | The replacement filter reads the whole stream and decodes it at once. On an error it keeps the bytes decoded so far, and fails only when there are none. veraPDF's own filter retries byte by byte, so a damaged PDF can give a different report. Not tested. |
+| Malformed Flate streams | Same as veraPDF on the JVM for everything tested (see [The inflater](#the-inflater)); not proven beyond that. |
+| Log output | veraPDF's warnings (an unreadable font program, for example) go to the console through `java.util.logging`. They are not part of the report and cannot be turned off yet. |
 | Other stream filters | LZW, ASCII85, ASCIIHex, RunLength and DCT/JPX handling are veraPDF's own Java and were not changed; only the well-formed sample files exercise them. |
-| Speed | About 0.2 s to start, about 0.3 s for the first validation, then 7 to 30 ms per sample file in Node. Rule tests are interpreted, and `PureInflate` reads Huffman codes one bit at a time. |
+| Speed | About 0.2 s to start, about 0.3 s for the first validation, then 7 to 30 ms per sample file in Node. Rule tests are interpreted, and `PureInflater` reads Huffman codes one bit at a time. |
 | Size | About 30.8 MB, 9.6 MB with gzip -9. The exact size varies between builds. |
 | Runtime | Needs WebAssembly garbage collection, exception handling and typed function references: Node 22 with `--experimental-wasm-exnref`, Node 24+ without, and current browsers. |
 | Input size | The PDF crosses into the image as a string with one UTF-16 code unit per byte, so a file briefly takes about three times its size (the bytes, the string, the Java copy). Not measured on large files. |

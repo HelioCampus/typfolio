@@ -8,6 +8,7 @@ The files in `generated/` are produced by `npm run build:verapdf` at the reposit
 
 - `java/` is the source compiled into the image next to the veraPDF jars: the entry (`Validate`, `WasmMain`) and two
   classes that shadow ones in the jars (`com.sun.xml.bind.Util`, `org.verapdf.cos.filters.COSFilterFlateDecode`).
+- `java-test/` is a JVM-only test that compares the replacement inflater with `java.util.zip.Inflater`.
 - `native-image/` is the checked-in list of what the image may reach by reflection or load as a resource.
 - `generated/verapdf.wasm` is the binary and `generated/verapdf.js` the loader made from GraalVM's launcher.
 - `src/index.ts` is the API.
