@@ -31,12 +31,14 @@ accessible.
 
 ## Licence
 
-The binary combines code under different terms, and is not open source as a whole:
+The package is not under one licence, and its binary is not open source as a whole. [`LICENSE`](./LICENSE) says which
+terms apply to which part:
 
-- veraPDF is used under the Mozilla Public License 2.0 (it is dual-licensed GPLv3+ / MPLv2+).
-  `java/org/verapdf/cos/filters/COSFilterFlateDecode.java` replaces a veraPDF file and is under the MPL 2.0 as well.
-- Rhino is under the MPL 2.0; the JAXB runtime under CDDL 1.1 or GPLv2 with the Classpath exception.
-- The runtime that GraalVM Native Image compiles into the binary comes from Oracle GraalVM and stays under the
-  [GraalVM Free Terms and Conditions](https://www.oracle.com/downloads/licenses/graal-free-license.html): it may be
-  used, and redistributed unmodified free of charge, but not as part of something a fee is charged for.
-- The build scripts and the other files in `java/` are Apache-2.0, like the rest of this repository.
+- the code written for this package is Apache-2.0;
+- veraPDF is used under the Mozilla Public License 2.0, and the one veraPDF file that is modified stays under it;
+- the runtime that GraalVM Native Image compiles into the binary stays under Oracle's
+  [GraalVM Free Terms and Conditions](https://www.oracle.com/downloads/licenses/graal-free-license.html): free to
+  use, also inside a company, and to redistribute unmodified, but not as part of something a fee is charged for.
+
+`generated/THIRD_PARTY_NOTICES.md` lists every library and the font data in the binary with its licence, and
+`generated/licenses/` has the texts. Both are written by the build from the jars and the GraalVM it used.

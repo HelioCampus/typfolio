@@ -63,8 +63,12 @@ export interface VerapdfPin {
   /** The veraPDF library version; every `org.verapdf` artifact must be at it. */
   verapdf: string;
   mavenRepository: string;
-  /** The jars on the build class path, in order, each with the SHA-256 of the file. */
-  artifacts: { group: string; artifact: string; version: string; sha256: string }[];
+  /**
+   * The jars on the build class path, in order, each with the SHA-256 of the file and the licence it is used under,
+   * as an SPDX expression: the choice made where a jar offers several (veraPDF: MPL, not GPL; the JAXB API: CDDL).
+   * The build refuses a licence that tools/build-verapdf.ts does not know how to give notice for.
+   */
+  artifacts: { group: string; artifact: string; version: string; sha256: string; license: string }[];
   graalvm: {
     distribution: string;
     /** `GRAALVM_VERSION` in the distribution's `release` file. */
@@ -101,4 +105,6 @@ export interface VerapdfProvenance {
   git: { commit: string | null; dirty: boolean };
   wasm: { bytes: number; gzip9Bytes: number; sha256: string };
   launcherSha256: string;
+  /** The files under generated/licenses and THIRD_PARTY_NOTICES.md, each with its SHA-256. */
+  notices: Record<string, string>;
 }

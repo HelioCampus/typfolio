@@ -12,6 +12,7 @@ import { copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSyn
 import { join } from 'node:path';
 import { gzipSync } from 'node:zlib';
 import { capture, classpath, graalvmHome, javaSources, pin, platform, root, run, sha256, verapdfSourceSha256, verifiedJars, wasmAs, work } from './verapdf-source.ts';
+import { verifyNotices, writeNotices } from './verapdf-notices.ts';
 import type { VerapdfProvenance } from './types.ts';
 
 const home = graalvmHome();
@@ -42,6 +43,7 @@ if (!process.argv.includes('--force')) {
     const current = previous.sourceSha256 === sourceSha256 && previous.graalvm.version === pin.graalvm.version && previous.graalvm.platform === platform &&
       previous.wasmAs === assemblerVersion && sha256(readFileSync(join(output, 'verapdf.wasm'))) === previous.wasm.sha256 &&
       sha256(readFileSync(join(output, 'verapdf.js'))) === previous.launcherSha256 && existsSync(join(classes, 'Validate.class'));
+    if (current) verifyNotices(output, previous.notices);
     if (current) {
       console.log(`packages/verapdf-wasm/generated is up to date with its sources (${sourceSha256.slice(0, 12)}); nothing built. Pass --force to build anyway.`);
       process.exit(0);
@@ -120,6 +122,9 @@ for (const path of [root.replace(/\/$/, ''), home]) {
   if (wasm.includes(Buffer.from(path)) || launcher.includes(Buffer.from(path))) throw new Error(`The generated image contains a local build path: ${path}`);
 }
 
+// The licence texts and the third-party list that have to travel with the binary.
+const notices = writeNotices(home, jars, output);
+
 const provenance: VerapdfProvenance = {
   verapdf: pin.verapdf,
   artifacts: pin.artifacts,
@@ -134,6 +139,7 @@ const provenance: VerapdfProvenance = {
   git,
   wasm: { bytes: wasm.length, gzip9Bytes: gzipSync(wasm, { level: 9 }).length, sha256: sha256(wasm) },
   launcherSha256: sha256(launcher),
+  notices,
 };
 writeFileSync(join(output, 'provenance.json'), JSON.stringify(provenance, null, 2) + '\n');
-console.log(JSON.stringify({ ...provenance, artifacts: `${provenance.artifacts.length} jars` }, null, 2));
+console.log(JSON.stringify({ ...provenance, artifacts: `${provenance.artifacts.length} jars`, notices: `${Object.keys(notices).length} licence and notice files` }, null, 2));

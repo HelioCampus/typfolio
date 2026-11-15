@@ -6,6 +6,7 @@
 // checked by tools/check-verapdf-parity.ts instead.
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { verifyNotices } from './verapdf-notices.ts';
 import { pin, root, sha256, verapdfSourceSha256 } from './verapdf-source.ts';
 import type { VerapdfProvenance } from './types.ts';
 
@@ -21,10 +22,12 @@ if (provenance.graalvm.version !== pin.graalvm.version || provenance.graalvm.dis
 for (const [name, expected] of [['verapdf.wasm', provenance.wasm.sha256], ['verapdf.js', provenance.launcherSha256]]) {
   if (sha256(readFileSync(join(generated, name))) !== expected) throw new Error(`${name} does not match build provenance`);
 }
+// The licence texts and the third-party list the build wrote are all there, unchanged, and nothing else is.
+verifyNotices(generated, provenance.notices);
 // The loader must not construct code: a page may then load it under a Content Security Policy that allows only
 // 'wasm-unsafe-eval'.
 if (/\bnew Function\(|\beval\(/.test(readFileSync(join(generated, 'verapdf.js'), 'utf8'))) throw new Error('verapdf.js constructs JavaScript code');
 for (const [key, actual] of [['wasmSha256', provenance.wasm.sha256], ['launcherSha256', provenance.launcherSha256]] as const) {
   if (pin[key] !== null && pin[key] !== actual) throw new Error(`verapdf-source.json pins ${key} ${pin[key]}, but the build produced ${actual}`);
 }
-console.log('veraPDF artifact hashes, pinned jars and tools, source hash and CSP-safe loader verified.');
+console.log('veraPDF artifact hashes, pinned jars and tools, source hash, licence and notice files and CSP-safe loader verified.');
