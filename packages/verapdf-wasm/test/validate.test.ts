@@ -69,6 +69,11 @@ test('every listed flavour has a profile in the image', { skip }, () => {
 
 test('the same input gives the same report, also from a second instance', { skip }, async () => {
   const first = validator.validate(tagged, { flavour: 'ua2' });
+  // Failed rules come in a defined order, not veraPDF's hash order.
+  const keys = first.failedRules.map(rule => [rule.clause, rule.test] as const);
+  assert.ok(keys.length > 2, 'the tagged file should fail several ua2 rules');
+  const collator = new Intl.Collator('en', { numeric: true });
+  assert.deepEqual(keys, [...keys].sort((a, b) => collator.compare(a[0], b[0]) || a[1] - b[1]));
   assert.deepEqual(validator.validate(tagged, { flavour: 'ua2' }), first);
   const other = await createValidator({ wasm: await WebAssembly.compile(Uint8Array.from(wasm)) });
   assert.deepEqual(other.validate(tagged, { flavour: 'ua2' }), first);

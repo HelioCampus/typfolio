@@ -5,7 +5,7 @@
 // packages/verapdf-wasm/native-image (tools/trace-verapdf.ts regenerates it; the build never traces).
 //
 //   npm run setup:verapdf   # once: the pinned jars and GraalVM into .build/verapdf
-//   npm run build:verapdf
+//   npm run build:verapdf   # does nothing when the artifact is already built from these inputs; -- --force rebuilds
 //
 // See docs/verapdf-build.md.
 import { copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -32,6 +32,22 @@ const git = (() => {
 const classes = join(work, 'classes');
 const image = join(work, 'image');
 const output = join(root, 'packages/verapdf-wasm/generated');
+
+// A build takes most of a minute and does not reproduce its bytes, so one that is already there for these exact
+// inputs is kept: same source hash (the pin, the Java sources, the metadata), same tool versions, and files that
+// still match the hashes recorded with them. `--force` builds anyway.
+if (!process.argv.includes('--force')) {
+  try {
+    const previous: VerapdfProvenance = JSON.parse(readFileSync(join(output, 'provenance.json'), 'utf8'));
+    const current = previous.sourceSha256 === sourceSha256 && previous.graalvm.version === pin.graalvm.version && previous.graalvm.platform === platform &&
+      previous.wasmAs === assemblerVersion && sha256(readFileSync(join(output, 'verapdf.wasm'))) === previous.wasm.sha256 &&
+      sha256(readFileSync(join(output, 'verapdf.js'))) === previous.launcherSha256 && existsSync(join(classes, 'Validate.class'));
+    if (current) {
+      console.log(`packages/verapdf-wasm/generated is up to date with its sources (${sourceSha256.slice(0, 12)}); nothing built. Pass --force to build anyway.`);
+      process.exit(0);
+    }
+  } catch { /* no artifact yet, or an unreadable one: build */ }
+}
 for (const directory of [classes, image, output]) {
   rmSync(directory, { recursive: true, force: true });
   mkdirSync(directory, { recursive: true });

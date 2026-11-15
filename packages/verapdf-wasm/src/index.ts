@@ -41,7 +41,7 @@ export interface ValidationReport {
   compliant: boolean;
   /** How many checks veraPDF ran, passed and failed together. */
   totalAssertions: number;
-  /** One entry per rule with at least one failed check; empty when `compliant`. */
+  /** One entry per rule with at least one failed check, ordered by specification, clause and test; empty when `compliant`. */
   failedRules: FailedRule[];
 }
 
@@ -69,6 +69,12 @@ function byteString(bytes: Uint8Array): string {
   return text;
 }
 
+// veraPDF keeps failed rules in a hash map, and their order differs between JavaScript engines for the same file.
+// Clauses are compared part by part, numbers as numbers: 7.2 before 7.10, and before "Table 5. P-TR".
+const collator = new Intl.Collator('en', { numeric: true });
+const byRule = (a: FailedRule, b: FailedRule) =>
+  collator.compare(a.specification, b.specification) || collator.compare(a.clause, b.clause) || a.test - b.test;
+
 /** Starts a validator. Each call starts an instance of its own; an instance is freed when nothing refers to it. */
 export async function createValidator(options: ValidatorOptions): Promise<Validator> {
   const wasm = options?.wasm;
@@ -95,7 +101,7 @@ export async function createValidator(options: ValidatorOptions): Promise<Valida
       if (raw.error !== undefined) throw new VerapdfError('VALIDATION', `veraPDF could not validate the file: ${raw.error}`, { cause: raw.trace });
       // The image reports the flavour it validated against; a different one would be a wrong answer, not a detail.
       if (raw.flavour !== flavour) throw new VerapdfError('VALIDATION', `veraPDF validated against ${JSON.stringify(raw.flavour)}, not ${flavour}`);
-      return { flavour, compliant: raw.compliant === true, totalAssertions: raw.totalAssertions ?? 0, failedRules: raw.failedRules ?? [] };
+      return { flavour, compliant: raw.compliant === true, totalAssertions: raw.totalAssertions ?? 0, failedRules: (raw.failedRules ?? []).sort(byRule) };
     },
   };
 }

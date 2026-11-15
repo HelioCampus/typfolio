@@ -5,7 +5,7 @@
 - `packages/verapdf-wasm`: [veraPDF](https://verapdf.org/)'s greenfield validator compiled ahead of time to WebAssembly with GraalVM Web Image, an ES module loader made from GraalVM's JavaScript launcher, and a small typed API (`createValidator`, `validate`). One build runs in Node and in a browser Web Worker.
 - A pinned, scripted build (`tools/setup-verapdf.ts`, `tools/build-verapdf.ts`), checked-in reflection metadata (`tools/trace-verapdf.ts` regenerates it) and a parity check against unmodified veraPDF on the JVM (`tools/check-verapdf-parity.ts`).
 
-Not implemented yet: automated browser tests, CI, third-party notices, and publishing. The package is `private`.
+Not implemented yet: third-party notices and publishing; the package is `private`. The validator is built and checked on a developer's machine only. CI does not build it, and the tests that need the binary are skipped where it is absent.
 
 A veraPDF pass is a machine check of the rules veraPDF implements. It does not establish that a document is accessible.
 
@@ -40,6 +40,8 @@ npm run check:verapdf
 `setup:verapdf` downloads the pinned jars and Oracle GraalVM into `.build/verapdf` and checks every file against its pinned SHA-256. Downloading Oracle GraalVM means accepting the [GraalVM Free Terms and Conditions](https://www.oracle.com/downloads/licenses/graal-free-license.html). `GRAALVM_HOME` selects an existing installation instead; the build checks that its `release` file names Oracle GraalVM at the pinned version. There is no pinned archive hash for Linux yet, so on Linux setup stops until one is added or `GRAALVM_HOME` is set.
 
 `build:verapdf` compiles the Java sources against the jars, builds the image, and writes `packages/verapdf-wasm/generated/`: `verapdf.wasm`, `verapdf.js` with its `verapdf.d.ts` (the loader, see below) and `provenance.json`. A build takes about 45 seconds on an Apple M-series machine and fails if the binary or the loader contains the repository's or GraalVM's local path.
+
+Nothing is fetched or built twice. `setup:verapdf` keeps every jar and the GraalVM archive that is already in `.build/verapdf` with the pinned hash, and an unpacked GraalVM of the pinned version. `build:verapdf` does nothing when `generated/` was already built from the same inputs: the same `sourceSha256` (the pin, the Java sources, the metadata), the same GraalVM, platform and Binaryen, and files that still match the hashes in `provenance.json`. `npm run build:verapdf -- --force` builds anyway. Since two builds do not give the same bytes, keeping a build is also what keeps the binary you tested the binary you use.
 
 `npm run build` then compiles the package's own `src/index.ts` to `dist/`; `npm test` runs `packages/verapdf-wasm/test`, which is skipped when the binary has not been built.
 
@@ -93,7 +95,9 @@ This is evidence for the cases generated, not a proof. The JVM runs the Java sou
 
 It then does the same for damaged copies: four per file, each with one to three bytes inside stream data overwritten (a fixed pseudo-random sequence, so the copies are the same on every run), under `ua1` and `2b`. Here the two sides must agree on whatever comes out, an error included.
 
-Measured on macOS arm64, Node 24: 330 of 330 runs on intact files match (22 files × 15 flavours), and 176 of 176 on damaged ones (88 files × 2 flavours). The files are Typfolio's own test outputs: no encrypted files and no embedded files with unusual filters. The same build was run by hand in a browser module worker through `createValidator` (24 runs, no console errors, no globals added); that is not automated. The page is `experiments/verapdf-wasm/browser/`.
+Measured on macOS arm64, Node 24: 330 of 330 runs on intact files match (22 files × 15 flavours), and 176 of 176 on damaged ones (88 files × 2 flavours). The files are Typfolio's own test outputs: no encrypted files and no embedded files with unusual filters. ### Browsers
+
+`tests/browser/verapdf.spec.ts` (part of `npm run test:browsers`) starts the validator in a module worker in Chromium, Firefox and WebKit, validates two PDFs compiled by the test under `ua1`, `ua2`, `2b` and `wt1r`, and requires each report to equal the one the same build gives in Node. The page and the worker are served with `Content-Security-Policy: default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; worker-src 'self'; connect-src 'self'; img-src 'self'` (`tools/serve-smoke.ts`), and the test checks that the policy is in force (`new Function` is refused in the page and in the worker), that nothing else violates it, that the worker gains no globals and that errors arrive with their codes. All three engines pass. Measured there: 160 to 410 ms until the validator is ready, 250 to 340 ms for the first validation, 10 to 30 ms after that.
 
 ## Compatibility and limits
 
@@ -117,7 +121,7 @@ GraalVM's launcher is a classic script: it starts the VM as soon as it is loaded
 - the binary comes from the caller, as bytes or a compiled `WebAssembly.Module`, and there is no default location, so a bundler does not discover and inline a 30 MB asset;
 - the launcher's body runs inside the function, so every call starts a VM of its own and nothing is added to `globalThis`. The Java entry hands its function to a variable of that function (`typfolioVerapdfExport`, see `java/WasmMain.java`).
 
-Each patch names the exact text it replaces and the build fails when that text is not there exactly once, so a GraalVM update that changes the launcher is noticed. The loader constructs no code (`new Function`, `eval`); the build, `check-verapdf-package` and the package's tests check that, so a page can load it under a Content Security Policy that allows `'wasm-unsafe-eval'` without `'unsafe-eval'`. That policy itself was not tried in a browser.
+Each patch names the exact text it replaces and the build fails when that text is not there exactly once, so a GraalVM update that changes the launcher is noticed. The loader constructs no code (`new Function`, `eval`); the build, `check-verapdf-package` and the package's tests check that, so a page can load it under a Content Security Policy that allows `'wasm-unsafe-eval'` without `'unsafe-eval'`. The browser test runs under such a policy.
 
 The Web Image API cannot turn a JavaScript typed array into a Java `byte[]`: `JSObject.as(byte[].class)` throws `ClassCastException` for `Uint8Array`, `Int8Array` and `ArrayBuffer` (checked with GraalVM 25.5), and a proxied array costs one call per byte. Strings cross in one piece. So `validate` takes a `Uint8Array` and the package turns it into a string with one code unit per byte, which the Java entry maps back with ISO-8859-1.
 
@@ -125,6 +129,7 @@ The Web Image API cannot turn a JavaScript typed array into a Java `byte[]`: `JS
 
 - The Java entry looks the flavour up with `PDFAFlavour.byFlavourId`, not `fromString`. `fromString("wt1a")` returns PDF/A-1a, on the JVM as well, so the WTPDF accessibility flavour would silently have been validated as something else.
 - The report carries the flavour the image actually used, and `validate` throws if it is not the one asked for.
+- `failedRules` is sorted by specification, clause (numbers as numbers) and test. veraPDF keeps failed rules in a hash map, and for the same file and build their order differed between Node and the browsers.
 
 ## Reproducibility
 
