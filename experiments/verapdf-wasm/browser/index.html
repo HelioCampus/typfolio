@@ -1,0 +1,55 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>veraPDF WASM spike</title>
+<style>
+  body { font: 14px/1.4 system-ui, sans-serif; margin: 24px; }
+  table { border-collapse: collapse; }
+  td, th { border: 1px solid #ccc; padding: 4px 10px; text-align: left; }
+  .pass { color: #0a7a2f; } .fail { color: #b3261e; }
+</style>
+<h1>veraPDF as WebAssembly, in a Web Worker</h1>
+<p id="status">starting…</p>
+<table id="results"><tr><th>file</th><th>flavour</th><th>verdict</th><th>assertions</th><th>failed rules</th><th>ms</th></tr></table>
+<script type="module">
+  // Served from the repository root (python3 -m http.server 4193), after npm run build:verapdf and npm run build.
+  const files = ['standard-ua-1', 'untagged', 'ua', 'standard-a-1a', 'standard-a-4', 'outcome-sets'];
+  const flavours = ['ua1', 'ua2', '2b', 'wt1r'];
+  const status = document.getElementById('status');
+  const table = document.getElementById('results');
+  const started = performance.now();
+  const worker = new Worker('./worker.js', { type: 'module' });
+  const pending = new Map();
+  let ready;
+  const whenReady = new Promise(resolve => { ready = resolve; });
+  worker.onerror = event => { status.textContent = 'worker error: ' + event.message; };
+  worker.onmessage = event => {
+    if (event.data.ready) return ready();
+    pending.get(event.data.id)(event.data);
+    pending.delete(event.data.id);
+  };
+  const validate = (pdf, flavour) => new Promise(resolve => {
+    const id = crypto.randomUUID();
+    pending.set(id, resolve);
+    worker.postMessage({ id, pdf, flavour });
+  });
+
+  await whenReady;
+  const startupMs = Math.round(performance.now() - started);
+  window.spike = { startupMs, rows: [], done: false, globals: ['GraalVM', 'verapdfValidate'].filter(name => name in globalThis) };
+  for (const file of files) {
+    const pdf = new Uint8Array(await (await fetch(`/.build/test-output/${file}.pdf`)).arrayBuffer());
+    for (const flavour of flavours) {
+      status.textContent = `startup ${startupMs} ms — validating ${file}.pdf as ${flavour}…`;
+      const { report, error, ms } = await validate(pdf, flavour);
+      const row = { file, flavour, compliant: report?.compliant, totalAssertions: report?.totalAssertions,
+        failedRules: (report?.failedRules ?? []).map(r => `${r.clause}-${r.test}`), error, ms: Math.round(ms) };
+      window.spike.rows.push(row);
+      const tr = table.insertRow();
+      for (const text of [file + '.pdf', flavour, error ? 'ERROR' : report.compliant ? 'PASS' : 'FAIL',
+        report?.totalAssertions ?? '', error ?? row.failedRules.join(', '), row.ms]) tr.insertCell().textContent = text;
+      tr.cells[2].className = report?.compliant ? 'pass' : 'fail';
+    }
+  }
+  window.spike.done = true;
+  status.textContent = `done — worker startup ${startupMs} ms (includes fetching and compiling the .wasm)`;
+</script>
