@@ -1,6 +1,6 @@
 {
   "name": "@typfolio/verapdf-wasm",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "private": true,
   "description": "veraPDF's PDF/A and PDF/UA validator built to WebAssembly with GraalVM Web Image (not published yet)",
   "type": "module",

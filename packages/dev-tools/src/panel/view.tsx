@@ -3,6 +3,8 @@ import { headingLevel, type PdfStructureElement, type PdfStructureWarning, type 
 import { PageView } from './page.js';
 import type { ReadState } from './read.js';
 import { ancestors, filterTree, indexPages, type TreeIndex, type TreeNode } from './tree.js';
+import { Validation } from './validation.js';
+import type { StructurePanelValidator } from '../panel.js';
 
 const marks: Record<PdfStructureWarningKind, string> = {
   'untagged': 'Not tagged',
@@ -155,6 +157,9 @@ export interface StructureViewProps {
   state: ReadState;
   /** Whether the page gave a PDF to read. */
   hasBytes: boolean;
+  /** The PDF itself and a validator for it: together they add the veraPDF control. */
+  bytes?: Uint8Array;
+  validator?: StructurePanelValidator;
   /** Controls of the panel's own, shown in its toolbar before the close button. */
   tools?: ReactNode;
   /** Shows a close button that calls it. */
@@ -166,7 +171,7 @@ export interface StructureViewProps {
  * opens the tag it is about. Which tags are open, the selection and the filter are kept by position, so they stay
  * across a new compile of the same template.
  */
-export function StructureView({ state, hasBytes, tools, onClose }: StructureViewProps) {
+export function StructureView({ state, hasBytes, bytes, validator, tools, onClose }: StructureViewProps) {
   const { read, reading, error } = state;
   const index = useMemo(() => read && indexPages(read.pages), [read]);
   const [selected, setSelected] = useState<string>();
@@ -410,6 +415,7 @@ export function StructureView({ state, hasBytes, tools, onClose }: StructureView
           </ul>
         </section>
       )}
+      {validator ? <Validation validator={validator} bytes={bytes} /> : null}
       {read?.tagged && index && error === undefined ? (
         <div className="tf-main" ref={main} data-stacked={stacked}>
           <div {...pane('tree')}>

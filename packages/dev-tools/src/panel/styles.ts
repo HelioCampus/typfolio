@@ -116,6 +116,16 @@ export const css = `
 button.tf-problem:hover { text-decoration: underline; }
 .tf-problem-page { font-weight: 600; }
 
+.tf-validation { flex-shrink: 0; max-height: 40%; display: flex; flex-direction: column; min-height: 0; border-bottom: 1px solid var(--tf-border); }
+.tf-validation-bar { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding: 4px 10px; font-size: 12px; }
+.tf-validation .tf-banner { border-bottom: 0; }
+.tf-validation .tf-problems { max-height: none; flex: 1; min-height: 0; border-bottom: 0; background: var(--tf-error-bg); color: var(--tf-error-fg); }
+.tf select.tf-flavour { font: inherit; color: inherit; background: var(--tf-bg); border: 1px solid var(--tf-border); border-radius: 4px; padding: 2px 4px; }
+.tf-side.tf-validate { padding: 3px 10px; border: 1px solid var(--tf-border); color: var(--tf-fg); font-size: 12px; }
+.tf-side.tf-validate:disabled { opacity: 0.5; cursor: default; }
+.tf-validation-hint { color: var(--tf-muted); }
+.tf-rule-context { display: block; font: 11px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; opacity: 0.8; overflow-wrap: anywhere; }
+
 .tf-main { display: flex; flex: 1; min-height: 0; }
 .tf-main[data-stacked="true"] { flex-direction: column; }
 .tf-pane { display: flex; flex-direction: column; flex-basis: 0; flex-shrink: 1; min-width: 0; min-height: 0; overflow: hidden; }

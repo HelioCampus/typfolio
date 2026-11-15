@@ -17,21 +17,28 @@
   "exports": {
     ".": { "types": "./dist/index.d.ts", "import": "./dist/index.js" },
     "./pdf": { "types": "./dist/pdf.d.ts", "import": "./dist/pdf.js" },
-    "./panel": { "types": "./dist/panel.d.ts", "import": "./dist/panel.js" }
+    "./panel": { "types": "./dist/panel.d.ts", "import": "./dist/panel.js" },
+    "./validate": { "types": "./dist/validate.d.ts", "import": "./dist/validate.js" }
+  },
+  "bin": {
+    "typfolio-validate": "./dist/validate-cli.js"
   },
   "typesVersions": {
     "*": {
       "pdf": ["./dist/pdf.d.ts"],
-      "panel": ["./dist/panel.d.ts"]
+      "panel": ["./dist/panel.d.ts"],
+      "validate": ["./dist/validate.d.ts"]
     }
   },
   "dependencies": {
     "@typfolio/core": "^0.5.0"
   },
   "peerDependencies": {
+    "@typfolio/verapdf-wasm": "^0.1.0",
     "pdfjs-dist": "^6.3.0"
   },
   "peerDependenciesMeta": {
+    "@typfolio/verapdf-wasm": { "optional": true },
     "pdfjs-dist": { "optional": true }
   },
   "publishConfig": {

@@ -5,7 +5,8 @@ import { JSDOM } from 'jsdom';
 import { configure, fireEvent, waitFor, within } from '@testing-library/dom';
 import { createCompiler, defineTemplate, TypstPdfError } from '@typfolio/core';
 import type { PdfCompiler, PdfOptions } from '@typfolio/core';
-import type { StructurePanelPdfJs } from '../dist/panel.js';
+import type { StructurePanelPdfJs, StructurePanelValidator } from '../dist/panel.js';
+import type { PdfValidationReport } from '../dist/validate.js';
 
 const root = new URL('../../../', import.meta.url);
 const file = (path: string) => readFile(new URL(path, root));
@@ -463,3 +464,98 @@ test('a tag\'s row and its details have a button that copies its whole text', as
     delete (dom.window.navigator as { clipboard?: unknown }).clipboard;
   }
 });
+
+const rule = { specification: 'ISO 14289-1:2014', clause: '7.2', test: 3, failedChecks: 2, message: 'Table cells shall have headers', context: 'root/document[0]/StructTreeRoot[0]' };
+/** A validator that answers from a list, in a later task like one in a worker, and records what it was asked. */
+function scripted(...answers: (PdfValidationReport | Error)[]) {
+  const calls: { bytes: Uint8Array; flavour: string }[] = [];
+  const validator: StructurePanelValidator = {
+    async validate(pdf, { flavour }) {
+      calls.push({ bytes: pdf, flavour });
+      const answer = answers[Math.min(calls.length, answers.length) - 1]!;
+      if (answer instanceof Error) throw answer;
+      return { ...answer, flavour };
+    },
+  };
+  return { calls, validator };
+}
+
+test('without a validator there is no veraPDF control; with one, the button validates against the chosen flavour', async () => {
+  const bytes = await withHeader();
+  const plain = target();
+  const without = mountStructurePanel(plain.element, { pdfjs, bytes });
+  const { element, view } = target();
+  const { calls, validator } = scripted({ flavour: 'ua1', compliant: true, totalAssertions: 734, failedRules: [] }, { flavour: 'ua1', compliant: false, totalAssertions: 1350, failedRules: [rule] });
+  const panel = mountStructurePanel(element, { pdfjs, bytes, validator });
+  try {
+    await plain.view().findByText('1 page · 1 heading · 1 table · 0 figures');
+    assert.equal(plain.view().queryByRole('region', { name: 'veraPDF validation' }), null);
+
+    const region = within(await view().findByRole('region', { name: 'veraPDF validation' }));
+    // Nothing is validated until asked.
+    assert.ok(region.getByText('Checks the file against the standard’s machine-checkable rules.'));
+    assert.equal(calls.length, 0);
+    const choice = region.getByRole('combobox', { name: 'What to validate against' }) as HTMLSelectElement;
+    assert.equal(choice.value, 'ua1');
+    assert.deepEqual([...choice.options].slice(0, 3).map(option => option.textContent), ['PDF/UA-1', 'PDF/UA-2', 'PDF/A-1a']);
+
+    fireEvent.click(region.getByRole('button', { name: 'Validate' }));
+    await region.findByText('Passes veraPDF’s PDF/UA-1 rules (734 checks). That is a machine check: it does not show that the document is accessible.');
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0]!.flavour, 'ua1');
+    // The validator got a copy: the page's bytes are left as they are.
+    assert.notEqual(calls[0]!.bytes, bytes);
+    assert.deepEqual(calls[0]!.bytes, bytes);
+
+    fireEvent.change(choice, { target: { value: 'ua2' } });
+    // Choosing a flavour does not validate; the verdict on show is still the one asked for.
+    assert.equal(calls.length, 1);
+    fireEvent.click(region.getByRole('button', { name: 'Validate' }));
+    await region.findByText('Fails 1 rule of PDF/UA-2: 2 of 1350 checks');
+    assert.equal(calls[1]!.flavour, 'ua2');
+    assert.ok(region.getByText('ISO 14289-1:2014, 7.2, test 3 (2×):'));
+    assert.ok(region.getByText(/Table cells shall have headers/));
+    assert.ok(region.getByText('root/document[0]/StructTreeRoot[0]'));
+    assert.equal(region.queryByText(/^Passes veraPDF/), null);
+  } finally {
+    panel.unmount();
+    without.unmount();
+  }
+});
+
+test('once asked, a new PDF is validated too, and a validator that fails says why', async () => {
+  const { element, view } = target();
+  const first = await withHeader();
+  const { calls, validator } = scripted({ flavour: 'ua1', compliant: true, totalAssertions: 10, failedRules: [] }, new Error('veraPDF could not read the file'), { flavour: 'ua1', compliant: true, totalAssertions: 12, failedRules: [] });
+  const panel = mountStructurePanel(element, { pdfjs, validator });
+  try {
+    const region = within(await view().findByRole('region', { name: 'veraPDF validation' }));
+    // No PDF, nothing to validate.
+    assert.ok(region.getByText('No PDF yet.'));
+    assert.equal((region.getByRole('button', { name: 'Validate' }) as HTMLButtonElement).disabled, true);
+
+    panel.update({ bytes: first });
+    await waitFor(() => assert.equal((region.getByRole('button', { name: 'Validate' }) as HTMLButtonElement).disabled, false));
+    assert.equal(calls.length, 0);
+    fireEvent.click(region.getByRole('button', { name: 'Validate' }));
+    await region.findByText(/^Passes veraPDF’s PDF\/UA-1 rules \(10 checks\)/);
+
+    panel.update({ bytes: await headerless() });
+    assert.equal((await region.findByRole('alert')).textContent, 'veraPDF could not validate the PDF: veraPDF could not read the file');
+    assert.equal(calls.length, 2);
+
+    // The same flavour again runs again.
+    fireEvent.click(region.getByRole('button', { name: 'Validate' }));
+    await region.findByText(/^Passes veraPDF’s PDF\/UA-1 rules \(12 checks\)/);
+    assert.equal(calls.length, 3);
+    assert.equal(region.queryByRole('alert'), null);
+  } finally {
+    panel.unmount();
+  }
+});
+
+test('a validator without a validate function is refused', async () => {
+  const { element } = target();
+  assert.throws(() => mountStructurePanel(element, { pdfjs, validator: {} as never }), (error: unknown) => error instanceof TypstPdfError && error.code === 'INVALID_REQUEST' && /validator must have a validate function/.test(error.message));
+});
+

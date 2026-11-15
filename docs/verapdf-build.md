@@ -5,6 +5,8 @@
 - `packages/verapdf-wasm`: [veraPDF](https://verapdf.org/)'s greenfield validator compiled ahead of time to WebAssembly with GraalVM Web Image, an ES module loader made from GraalVM's JavaScript launcher, and a small typed API (`createValidator`, `validate`). One build runs in Node and in a browser Web Worker.
 - A pinned, scripted build (`tools/setup-verapdf.ts`, `tools/build-verapdf.ts`), checked-in reflection metadata (`tools/trace-verapdf.ts` regenerates it) and a parity check against unmodified veraPDF on the JVM (`tools/check-verapdf-parity.ts`).
 
+`@typfolio/dev-tools/validate`, the `typfolio-validate` command and the tags panel's "veraPDF" row use it as an optional peer dependency ([packages/dev-tools/README.md](../packages/dev-tools/README.md#validation-with-verapdf)); nothing in dev-tools contains it.
+
 Not implemented yet: third-party notices and publishing; the package is `private`. The validator is built and checked on a developer's machine only. CI does not build it, and the tests that need the binary are skipped where it is absent.
 
 A veraPDF pass is a machine check of the rules veraPDF implements. It does not establish that a document is accessible.

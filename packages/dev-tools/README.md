@@ -1,6 +1,6 @@
 # @typfolio/dev-tools
 
-Dev-time tools for Typfolio templates. Build-time template checks, a PDF structure inspector with checks for the structure a screen reader needs, and a panel that shows a PDF's tags in the page while you work.
+Dev-time tools for Typfolio templates. Build-time template checks, a PDF structure inspector with checks for the structure a screen reader needs, PDF/UA and PDF/A validation with veraPDF, and a panel that shows a PDF's tags in the page while you work.
 
 Install it as a devDependency. Nothing here is needed at runtime: `@typfolio/core` never imports this package, so none of it reaches a production bundle.
 
@@ -59,7 +59,7 @@ const report = await inspectPdf(bytes); // the bytes of a compiled PDF
 // report.structure: [{ page, elements: [{ role, text, alt?, lang?, summary?, scope?, id?, headers?, children }] }]  the tags of each page
 ```
 
-`inspectPdf` reports facts about the file so a test can assert on them. It never says a file conforms to anything: a tagged PDF with PDF/UA metadata, a title, a language and alt text can still fail PDF/UA. Use a validator such as veraPDF for conformance.
+`inspectPdf` reports facts about the file so a test can assert on them. It never says a file conforms to anything: a tagged PDF with PDF/UA metadata, a title, a language and alt text can still fail PDF/UA. Use a validator such as veraPDF for conformance; [`@typfolio/dev-tools/validate`](#validation-with-verapdf) runs it.
 
 `structure` is the structure tree as a screen reader gets it: each page's elements in reading order, with the text drawn in them, a figure's alt text and the language an element sets. A table carries what Typst wrote for it: the table's `summary` (`pdf.table-summary`), a header cell's `scope` (`Row`, `Column` or `Both`) and `id`, and on each cell `headers`, the ids of the header cells that label it. A row header made with `pdf.header-cell(scope: "row")` is a `TH` with scope `Row`, and the cells of its row name it in `headers`. Text an artifact draws (a running header, a page number) belongs to no element.
 
@@ -90,6 +90,44 @@ await checkStructure(bytes); // the same, and one `untagged` warning for a PDF t
 
 `readStructure(document)` reads the same pages from a pdf.js document (`PDFDocumentProxy`) you already have, such as one a browser page loaded with its own pdf.js build, so a page can show the tags and their warnings without this package loading pdf.js.
 
+## Validation with veraPDF
+
+`@typfolio/dev-tools/validate` validates a PDF against PDF/UA or PDF/A with [veraPDF](https://verapdf.org/), compiled to WebAssembly: no Java, in Node and in a browser.
+
+```ts
+import { formatValidationReport, validatePdf } from '@typfolio/dev-tools/validate'; // needs @typfolio/verapdf-wasm
+
+const report = await validatePdf(result.bytes, { flavour: 'ua1' });
+// report.compliant: whether the file passes every rule of the flavour
+// report.totalAssertions: how many checks were run
+// report.failedRules: [{ specification, clause, test, failedChecks, message, context }], ordered by clause
+assert.ok(report.compliant, formatValidationReport(report));
+```
+
+- `validatePdf(bytes, { flavour, wasm? })` starts a validator on the first call and keeps it. In Node it reads the binary from the installed package; a browser passes `wasm`, the bytes of `@typfolio/verapdf-wasm/verapdf.wasm` (about 31 MB, 10 MB gzipped) or a compiled `WebAssembly.Module`.
+- `createPdfValidator({ wasm? })` gives a validator of your own, whose `validate(bytes, { flavour })` is synchronous: for many files, or to run in a worker. The first validation takes about 0.3 s, later ones tens of milliseconds for a few pages.
+- `flavour` is one of veraPDF's ids: `ua1`, `ua2`, `1a`, `1b`, `2a`, `2b`, `2u`, `3a`, `3b`, `3u`, `4`, `4e`, `4f`, `wt1a`, `wt1r`. `pdfValidationFlavours` names each (`'PDF/UA-1'`) and `pdfValidationFlavourIds` lists them. The flavour is not read from the file: say which standard you compiled for.
+- `formatValidationReport(report, name?)` is the report as text, one failed rule per pair of lines.
+- Errors are `TypstPdfError`s: `INITIALIZATION` when `@typfolio/verapdf-wasm` is not installed or its binary cannot be started, `INVALID_REQUEST` for a flavour that does not exist, for bytes veraPDF cannot read as a PDF, and in a browser when no `wasm` is given.
+
+`typfolio-validate` does the same from a shell or a CI step:
+
+```sh
+npx typfolio-validate --flavour ua1 out/report.pdf out/letter.pdf
+# out/report.pdf: PASS PDF/UA-1 (734 checks)
+# out/letter.pdf: FAIL PDF/UA-1: 2 rules, 2 of 730 checks
+#   ISO 14289-1:2014 5, test 1 (1x): The PDF/UA version and conformance level of a file shall be specified using the PDF/UA Identification extension schema
+#     at root/document[0]/metadata[0](45 0 obj PDMetadata)/XMPPackage[0]
+#   ISO 14289-1:2014 7.1, test 10 (1x): The document catalog dictionary shall include a ViewerPreferences dictionary containing a DisplayDocTitle key, whose value shall be true
+#     at root
+```
+
+`--flavour` (`-f`) defaults to `ua1`, `--format json` prints the reports as JSON, and `--wasm <file>` names another binary. It exits with 0 when every file passes, 1 when one fails, and 2 for wrong usage or a file that could not be validated.
+
+What a pass means: the file meets the rules of that standard that a machine can check, as veraPDF implements them. It does not show that the document is accessible. Whether the tags fit the content, the reading order makes sense and the alternative text says what the figure shows still needs a person, and `structureWarnings` above catches some of what the standard accepts.
+
+`@typfolio/verapdf-wasm` is an **optional peer dependency** that you install yourself, loaded on the first call and only from this entry. It is a package of its own because its binary is not open source as a whole: it contains veraPDF (MPL 2.0) and a runtime under Oracle's GraalVM Free Terms and Conditions, which allow use, also inside a company, and free redistribution, but not shipping it as part of something a fee is charged for. Nothing in `@typfolio/dev-tools` contains it. It is not published to npm yet; until it is, it has to be built from this repository ([docs/verapdf-build.md](../../docs/verapdf-build.md)).
+
 ## Structure panel
 
 `@typfolio/dev-tools/panel` shows a PDF's tags in the page while you work on a template: each page's tags in reading order, the warnings above with a link to the tag each is about, and the text, alt text and language of the tag you select. A header cell shows its scope, a table its summary, and a selected cell the header cells that label it, by their text.
@@ -110,6 +148,18 @@ devtools.unmount();
 - `mountStructureDevtools(options)` adds a button to a corner of the page (`buttonPosition`: `'bottom-right'`, the default, `'bottom-left'`, `'top-right'` or `'top-left'`) that opens the panel along a side of the page (`position`: `'bottom'`, the default, `'top'`, `'left'` or `'right'`), like React Query's devtools. The buttons in its toolbar move it to another side, and `update({ position })` does too. Drag its inner edge to resize it, or use the arrow keys on that edge; Escape closes it. `initialIsOpen: true` starts it open. The PDF is read while the panel is closed too, for the button's count.
 - `mountStructurePanel(element, options)` shows the panel inside an element of yours instead, such as a tab beside a PDF preview. Give the element a height.
 - Both take `pdfjs`, `bytes` (absent until there is a PDF) and `theme` (`'system'`, the default, `'light'` or `'dark'`), and return `update(options)`, which changes the options given, and `unmount()`. Options they cannot use throw `INVALID_REQUEST`. The panel gives pdf.js a copy of the bytes and frees each document once it is read; a new PDF replaces the one being read.
+
+Both also take `validator`, which adds a "veraPDF" row to the panel: a standard to pick, a "Validate" button, and the verdict with every failed rule, its clause and where veraPDF found it. Nothing is validated until the button is used; after that each new PDF is validated against the same standard, so the verdict follows the template you are editing. The panel loads no validator itself: pass what `createPdfValidator` gives, or an object of your own whose `validate(bytes, { flavour })` forwards to one in a worker and returns a promise.
+
+```ts
+import { createPdfValidator } from '@typfolio/dev-tools/validate';
+import wasmUrl from '@typfolio/verapdf-wasm/verapdf.wasm?url';
+
+const validator = await createPdfValidator({ wasm: await (await fetch(wasmUrl)).arrayBuffer() });
+const devtools = mountStructureDevtools({ pdfjs, validator });
+```
+
+A failed rule is shown with veraPDF's own path to the object (`root/document[0]/StructTreeRoot[0]/…`); it is not linked to a tag in the list, because that path and the tags pdf.js reads do not line up one to one.
 
 Load it only in development, so that neither it nor pdf.js reaches a production bundle: behind `import.meta.env.DEV` (or your bundler's flag), with dynamic `import()`s. [`examples/vite-react/src/structureDevtools.ts`](../../examples/vite-react/src/structureDevtools.ts) does this for `usePdf`'s `result?.bytes`.
 
