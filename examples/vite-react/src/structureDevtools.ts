@@ -12,7 +12,23 @@ async function mount() {
     import('pdfjs-dist/build/pdf.worker.min.mjs?url'),
   ]);
   pdfjs.GlobalWorkerOptions.workerSrc = workerSrc;
-  return mountStructureDevtools({ pdfjs });
+  return mountStructureDevtools({ pdfjs, validator: await validator() });
+}
+
+// The veraPDF view of the panel, when the validator has been built here (`npm run build:verapdf`; it is not built in
+// CI and not published yet). A glob, not an import: a file that is not there is an empty match, not a build error.
+const binaries = import.meta.glob<string>('../../../packages/verapdf-wasm/generated/verapdf.wasm', { query: '?url', import: 'default' });
+
+async function validator() {
+  const binary = Object.values(binaries)[0];
+  if (!binary) return undefined;
+  try {
+    const [{ createPdfValidator }, url] = await Promise.all([import('@typfolio/dev-tools/validate'), binary()]);
+    return await createPdfValidator({ wasm: await (await fetch(url)).arrayBuffer() });
+  } catch (error) {
+    console.warn('The veraPDF view is left out: the validator could not be started.', error);
+    return undefined;
+  }
 }
 
 /** Shows the PDF in the panel while the component is mounted: pass `usePdf`'s `result?.bytes`. */
