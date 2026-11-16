@@ -1,11 +1,12 @@
 import java.nio.charset.StandardCharsets;
-import java.util.function.BiFunction;
+import java.util.function.Function;
 
 import org.graalvm.webimage.api.JS;
+import org.graalvm.webimage.api.JSObject;
 import org.graalvm.webimage.api.JSString;
 
 /**
- * Web Image entry: hands JavaScript one function, (pdf, flavour) -> JSON report.
+ * Web Image entry: hands JavaScript one function, ({ pdf, flavour, maxChecksPerRule }) -> JSON report.
  *
  * The Web Image API cannot turn a JavaScript typed array into a Java byte[] (JSObject.as(byte[].class) throws
  * ClassCastException for Uint8Array, Int8Array and ArrayBuffer alike, checked with GraalVM 25.5), and a proxied
@@ -16,10 +17,12 @@ public final class WasmMain {
   // `typfolioVerapdfExport` is not a global: tools/build-verapdf.ts wraps GraalVM's launcher, which this snippet is
   // emitted into, in a function that declares it. The build fails if the launcher is no longer wrapped that way.
   @JS(args = {"fn"}, value = "typfolioVerapdfExport(fn);")
-  private static native void export(BiFunction<JSString, JSString, JSString> fn);
+  private static native void export(Function<JSObject, JSString> fn);
 
   public static void main(String[] args) {
-    export((pdf, flavour) ->
-      JSString.of(Validate.validate(pdf.asString().getBytes(StandardCharsets.ISO_8859_1), flavour.asString())));
+    export(request -> JSString.of(Validate.validate(
+      request.get("pdf", String.class).getBytes(StandardCharsets.ISO_8859_1),
+      request.get("flavour", String.class),
+      request.get("maxChecksPerRule", Integer.class))));
   }
 }

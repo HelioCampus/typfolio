@@ -56,6 +56,29 @@ test('a tagged compile without the PDF/UA identifier fails ua1 with the rule tha
   assert.equal(identification.failedChecks, 1);
   assert.match(identification.message, /PDF\/UA/);
   assert.notEqual(identification.context, '');
+  // What the rule is checked on, its topic, and each failed check with what was wrong there.
+  assert.equal(identification.object, 'MainXMPPackage');
+  assert.equal(identification.condition, 'containsPDFUAIdentification == true');
+  assert.deepEqual(identification.tags, ['metadata']);
+  assert.deepEqual(identification.checks, [{ context: identification.context, error: 'The document metadata stream doesn\'t contain PDF/UA Identification Schema' }]);
+  assert.deepEqual(report.profile, { name: 'PDF/UA-1 validation profile', description: 'Validation rules against ISO 14289-1:2014', rules: 106 });
+});
+
+test('an error says what was found, and the number of failed checks is exact when fewer are listed', { skip }, () => {
+  // The file declares PDF/UA-1, so PDF/UA-2 finds the wrong part number, with the value.
+  const part = validator.validate(ua1, { flavour: 'ua2' }).failedRules.find(rule => rule.clause === '5' && rule.test === 2);
+  assert.equal(part?.checks[0]?.error, 'The "part" property of the PDF/UA Identification Schema is 1 instead of 2 for PDF/UA-2 conforming file');
+  const all = validator.validate(tagged, { flavour: '1b', maxChecksPerRule: 10000 });
+  const most = all.failedRules.reduce((a, b) => (b.failedChecks > a.failedChecks ? b : a));
+  assert.ok(most.failedChecks > 1, 'the tagged file should fail some PDF/A-1b rule more than once');
+  assert.equal(most.checks.length, most.failedChecks);
+  const one = validator.validate(tagged, { flavour: '1b', maxChecksPerRule: 1 });
+  const same = one.failedRules.find(rule => rule.clause === most.clause && rule.test === most.test)!;
+  assert.equal(same.failedChecks, most.failedChecks);
+  assert.deepEqual(same.checks, [most.checks[0]]);
+  // The default lists up to 20.
+  for (const rule of validator.validate(tagged, { flavour: '1b' }).failedRules) assert.equal(rule.checks.length, Math.min(rule.failedChecks, 20));
+  for (const bad of [0, 1.5, 10001, '5']) assert.throws(() => validator.validate(ua1, { flavour: 'ua1', maxChecksPerRule: bad as never }), hasCode('INVALID_REQUEST'));
 });
 
 test('every listed flavour has a profile in the image', { skip }, () => {

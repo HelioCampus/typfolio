@@ -465,7 +465,12 @@ test('a tag\'s row and its details have a button that copies its whole text', as
   }
 });
 
-const rule = { specification: 'ISO 14289-1:2014', clause: '7.2', test: 3, failedChecks: 2, message: 'Table cells shall have headers', context: 'root/document[0]/StructTreeRoot[0]' };
+const rule = {
+  specification: 'ISO 14289-1:2014', clause: '7.2', test: 3, failedChecks: 2, message: 'Table cells shall have headers', context: 'root/document[0]/StructTreeRoot[0]',
+  object: 'SETD', condition: 'hasConnectedHeader == true', tags: ['structure', 'table'],
+  checks: [{ context: 'root/document[0]/StructTreeRoot[0]', error: 'TD does not contain Headers attribute' }],
+};
+const profile = { name: 'A profile', description: 'Rules', rules: 106 };
 /** A validator that answers from a list, in a later task like one in a worker, and records what it was asked. */
 function scripted(...answers: (PdfValidationReport | Error)[]) {
   const calls: { bytes: Uint8Array; flavour: string }[] = [];
@@ -485,7 +490,7 @@ test('without a validator there is no veraPDF control; with one, the button vali
   const plain = target();
   const without = mountStructurePanel(plain.element, { pdfjs, bytes });
   const { element, view } = target();
-  const { calls, validator } = scripted({ flavour: 'ua1', compliant: true, totalAssertions: 734, failedRules: [] }, { flavour: 'ua1', compliant: false, totalAssertions: 1350, failedRules: [rule] });
+  const { calls, validator } = scripted({ flavour: 'ua1', compliant: true, totalAssertions: 734, profile, failedRules: [] }, { flavour: 'ua1', compliant: false, totalAssertions: 1350, profile, failedRules: [rule] });
   const panel = mountStructurePanel(element, { pdfjs, bytes, validator });
   try {
     await plain.view().findByText('1 page · 1 heading · 1 table · 0 figures');
@@ -515,7 +520,11 @@ test('without a validator there is no veraPDF control; with one, the button vali
     assert.equal(calls[1]!.flavour, 'ua2');
     assert.ok(region.getByText('ISO 14289-1:2014, 7.2, test 3 (2×):'));
     assert.ok(region.getByText(/Table cells shall have headers/));
+    // Under the rule: its topics, each listed check with what was wrong and where, and how many are not listed.
+    assert.deepEqual([...region.getByText(/Table cells shall have headers/).querySelectorAll('.tf-rule-tag')].map(tag => tag.textContent), ['structure', 'table']);
+    assert.ok(region.getByText('TD does not contain Headers attribute'));
     assert.ok(region.getByText('root/document[0]/StructTreeRoot[0]'));
+    assert.ok(region.getByText('… and 1 more'));
     assert.equal(region.queryByText(/^Passes veraPDF/), null);
   } finally {
     panel.unmount();
@@ -526,7 +535,7 @@ test('without a validator there is no veraPDF control; with one, the button vali
 test('once asked, a new PDF is validated too, and a validator that fails says why', async () => {
   const { element, view } = target();
   const first = await withHeader();
-  const { calls, validator } = scripted({ flavour: 'ua1', compliant: true, totalAssertions: 10, failedRules: [] }, new Error('veraPDF could not read the file'), { flavour: 'ua1', compliant: true, totalAssertions: 12, failedRules: [] });
+  const { calls, validator } = scripted({ flavour: 'ua1', compliant: true, totalAssertions: 10, profile, failedRules: [] }, new Error('veraPDF could not read the file'), { flavour: 'ua1', compliant: true, totalAssertions: 12, profile, failedRules: [] });
   const panel = mountStructurePanel(element, { pdfjs, validator });
   try {
     const region = within(await view().findByRole('region', { name: 'veraPDF validation' }));

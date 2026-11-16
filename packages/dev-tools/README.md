@@ -100,14 +100,18 @@ import { formatValidationReport, validatePdf } from '@typfolio/dev-tools/validat
 const report = await validatePdf(result.bytes, { flavour: 'ua1' });
 // report.compliant: whether the file passes every rule of the flavour
 // report.totalAssertions: how many checks were run
-// report.failedRules: [{ specification, clause, test, failedChecks, message, context }], ordered by clause
+// report.profile: { name, description, rules }  the validation profile that was applied
+// report.failedRules: [{ specification, clause, test, failedChecks, message, tags, object, condition, checks, context }], ordered by clause
+//   message: what the standard requires; tags: veraPDF's topics, such as ['structure', 'table']
+//   checks: [{ error, context }]  each failed check: what was wrong, with the values found, and where
 assert.ok(report.compliant, formatValidationReport(report));
 ```
 
 - `validatePdf(bytes, { flavour, wasm? })` starts a validator on the first call and keeps it. In Node it reads the binary from the installed package; a browser passes `wasm`, the bytes of `@typfolio/verapdf-wasm/verapdf.wasm` (about 31 MB, 10 MB gzipped) or a compiled `WebAssembly.Module`.
 - `createPdfValidator({ wasm? })` gives a validator of your own, whose `validate(bytes, { flavour })` is synchronous: for many files, or to run in a worker. The first validation takes about 0.3 s, later ones tens of milliseconds for a few pages.
 - `flavour` is one of veraPDF's ids: `ua1`, `ua2`, `1a`, `1b`, `2a`, `2b`, `2u`, `3a`, `3b`, `3u`, `4`, `4e`, `4f`, `wt1a`, `wt1r`. `pdfValidationFlavours` names each (`'PDF/UA-1'`) and `pdfValidationFlavourIds` lists them. The flavour is not read from the file: say which standard you compiled for.
-- `formatValidationReport(report, name?)` is the report as text, one failed rule per pair of lines.
+- A rule that fails often lists its first 20 checks; `maxChecksPerRule` (1 to 10000) changes that, and `failedChecks` is exact either way. A check's `error` is veraPDF's own sentence with the values it found, such as `The "part" property of the PDF/UA Identification Schema is 1 instead of 2`. Its `context` is a path in veraPDF's model of the file, with PDF object numbers (`…/pages[0](14 0 obj PDPage)/…`); for a glyph it contains a number that changes from run to run.
+- `formatValidationReport(report, name?)` is the report as text: each failed rule, and under it the checks that are listed.
 - Errors are `TypstPdfError`s: `INITIALIZATION` when `@typfolio/verapdf-wasm` is not installed or its binary cannot be started, `INVALID_REQUEST` for a flavour that does not exist, for bytes veraPDF cannot read as a PDF, and in a browser when no `wasm` is given.
 
 `typfolio-validate` does the same from a shell or a CI step:
@@ -116,13 +120,15 @@ assert.ok(report.compliant, formatValidationReport(report));
 npx typfolio-validate --flavour ua1 out/report.pdf out/letter.pdf
 # out/report.pdf: PASS PDF/UA-1 (734 checks)
 # out/letter.pdf: FAIL PDF/UA-1: 2 rules, 2 of 730 checks
-#   ISO 14289-1:2014 5, test 1 (1x): The PDF/UA version and conformance level of a file shall be specified using the PDF/UA Identification extension schema
-#     at root/document[0]/metadata[0](45 0 obj PDMetadata)/XMPPackage[0]
-#   ISO 14289-1:2014 7.1, test 10 (1x): The document catalog dictionary shall include a ViewerPreferences dictionary containing a DisplayDocTitle key, whose value shall be true
-#     at root
+#   ISO 14289-1:2014 5, test 1 (1x) [metadata]: The PDF/UA version and conformance level of a file shall be specified using the PDF/UA Identification extension schema
+#     The document metadata stream doesn't contain PDF/UA Identification Schema
+#       at root/document[0]/metadata[0](45 0 obj PDMetadata)/XMPPackage[0]
+#   ISO 14289-1:2014 7.1, test 10 (1x) [syntax]: The document catalog dictionary shall include a ViewerPreferences dictionary containing a DisplayDocTitle key, whose value shall be true
+#     ViewerPreferences dictionary is not present in the document Catalog, or DisplayDocTitle key is set to false or is not present in the ViewerPreferences dictionary (ViewerPreferences = dictionary(size = 1), DisplayDocTitle = null)
+#       at root
 ```
 
-`--flavour` (`-f`) defaults to `ua1`, `--format json` prints the reports as JSON, and `--wasm <file>` names another binary. It exits with 0 when every file passes, 1 when one fails, and 2 for wrong usage or a file that could not be validated.
+`--flavour` (`-f`) defaults to `ua1`, `--format json` prints the reports as JSON, `--max-checks <n>` sets how many failed checks of one rule are listed (3 as text, 20 as JSON), and `--wasm <file>` names another binary. It exits with 0 when every file passes, 1 when one fails, and 2 for wrong usage or a file that could not be validated.
 
 What a pass means: the file meets the rules of that standard that a machine can check, as veraPDF implements them. It does not show that the document is accessible. Whether the tags fit the content, the reading order makes sense and the alternative text says what the figure shows still needs a person, and `structureWarnings` above catches some of what the standard accepts.
 
@@ -149,7 +155,7 @@ devtools.unmount();
 - `mountStructurePanel(element, options)` shows the panel inside an element of yours instead, such as a tab beside a PDF preview. Give the element a height.
 - Both take `pdfjs`, `bytes` (absent until there is a PDF) and `theme` (`'system'`, the default, `'light'` or `'dark'`), and return `update(options)`, which changes the options given, and `unmount()`. Options they cannot use throw `INVALID_REQUEST`. The panel gives pdf.js a copy of the bytes and frees each document once it is read; a new PDF replaces the one being read.
 
-Both also take `validator`, which adds a "veraPDF" row to the panel: a standard to pick, a "Validate" button, and the verdict with every failed rule, its clause and where veraPDF found it. Nothing is validated until the button is used; after that each new PDF is validated against the same standard, so the verdict follows the template you are editing. The panel loads no validator itself: pass what `createPdfValidator` gives, or an object of your own whose `validate(bytes, { flavour })` forwards to one in a worker and returns a promise.
+Both also take `validator`, which adds a "veraPDF" row to the panel: a standard to pick, a "Validate" button, and the verdict with every failed rule: its clause, what the standard requires and veraPDF's topics for it, and, when opened, each failed check with what was wrong and where. Nothing is validated until the button is used; after that each new PDF is validated against the same standard, so the verdict follows the template you are editing. The panel loads no validator itself: pass what `createPdfValidator` gives, or an object of your own whose `validate(bytes, { flavour })` forwards to one in a worker and returns a promise.
 
 ```ts
 import { createPdfValidator } from '@typfolio/dev-tools/validate';
@@ -159,7 +165,7 @@ const validator = await createPdfValidator({ wasm: await (await fetch(wasmUrl)).
 const devtools = mountStructureDevtools({ pdfjs, validator });
 ```
 
-A failed rule is shown with veraPDF's own path to the object (`root/document[0]/StructTreeRoot[0]/…`); it is not linked to a tag in the list, because that path and the tags pdf.js reads do not line up one to one.
+A failed check is shown with veraPDF's own path to the object (`root/document[0]/StructTreeRoot[0]/…`); it is not linked to a tag in the list, because that path and the tags pdf.js reads do not line up one to one.
 
 Load it only in development, so that neither it nor pdf.js reaches a production bundle: behind `import.meta.env.DEV` (or your bundler's flag), with dynamic `import()`s. [`examples/vite-react/src/structureDevtools.ts`](../../examples/vite-react/src/structureDevtools.ts) does this for `usePdf`'s `result?.bytes`.
 

@@ -69,11 +69,22 @@ export function Validation({ validator, bytes }: { validator: StructurePanelVali
           <ul>
             {report.failedRules.map(rule => (
               <li key={`${rule.specification} ${rule.clause} ${rule.test}`}>
-                <p className="tf-problem">
-                  <span className="tf-problem-page">{rule.specification}, {rule.clause}, test {rule.test}{rule.failedChecks > 1 ? ` (${rule.failedChecks}×)` : ''}:</span>{' '}
-                  {rule.message}
-                  {rule.context ? <span className="tf-rule-context" title="Where the first failed check was, in veraPDF’s model of the file">{rule.context}</span> : null}
-                </p>
+                <details className="tf-rule">
+                  <summary className="tf-problem">
+                    <span className="tf-problem-page">{rule.specification}, {rule.clause}, test {rule.test}{rule.failedChecks > 1 ? ` (${rule.failedChecks}×)` : ''}:</span>{' '}
+                    {rule.message}
+                    {(rule.tags ?? []).map(tag => <span key={tag} className="tf-rule-tag">{tag}</span>)}
+                  </summary>
+                  <ol className="tf-rule-checks">
+                    {(rule.checks ?? [{ context: rule.context, error: '' }]).map((check, position) => (
+                      <li key={position}>
+                        {check.error ? <span>{check.error}</span> : null}
+                        <span className="tf-rule-context" title="Where the check failed, in veraPDF’s model of the file">{check.context}</span>
+                      </li>
+                    ))}
+                    {rule.checks && rule.failedChecks > rule.checks.length ? <li className="tf-rule-more">… and {rule.failedChecks - rule.checks.length} more</li> : null}
+                  </ol>
+                </details>
               </li>
             ))}
           </ul>

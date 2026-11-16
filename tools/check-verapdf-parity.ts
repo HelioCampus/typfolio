@@ -1,6 +1,6 @@
 // Checks the WebAssembly build of veraPDF against unmodified veraPDF on the JVM: every sample PDF under every
-// flavour must give the same verdict, the same number of assertions and the same failed rules with the same number of
-// failed checks (the order of failed rules is not compared). Then the same for copies of the files with damaged
+// flavour must give the same report: the verdict, the number of assertions, the profile, and each failed rule with its
+// count, description, tags and listed checks (the order of failed rules is not compared). Then the same for copies of the files with damaged
 // stream data, where an error must be the same error.
 //
 //   node tools/check-verapdf-parity.ts [<directory of sample PDFs>]     (default: .build/test-output, written by npm test)
@@ -21,18 +21,26 @@ if (pdfs.length === 0) throw new Error(`No sample PDFs in ${samples}. Run npm te
 const classes = join(work, 'classes');
 if (!existsSync(join(classes, 'Validate.class'))) throw new Error('No compiled entry in .build/verapdf/classes. Run npm run build:verapdf.');
 
-interface Report { error?: string; compliant: boolean; totalAssertions: number; failedRules: { specification: string; clause: string; test: number; failedChecks: number }[] }
+interface Report { error?: string; compliant: boolean; totalAssertions: number; profile: unknown;
+  failedRules: { specification: string; clause: string; test: number; failedChecks: number; message: string; object: string; condition: string; tags: string[]; checks: { context: string; error: string }[] }[] }
+const stable = (value: unknown) => JSON.stringify(value).replace(/(usedGlyphs\[\d+\]\([^()]*? \d+ \d+ )\d+( \d+ (?:true|false)\))/g, '$1#$2');
 const normalise = (json: string) => {
   const report: Report = JSON.parse(json);
   if (report.error) return `error: ${report.error}`;
-  return JSON.stringify([report.compliant, report.totalAssertions,
-    report.failedRules.map(rule => `${rule.specification} ${rule.clause}-${rule.test} x${rule.failedChecks}`).sort()]);
+  // Everything in the report, with the rules in a fixed order; a rule's checks stay in veraPDF's order. veraPDF
+  // names a glyph in a context by, among other things, a number that is not derived from the file:
+  // `usedGlyphs[0](Font Font 1 0 234952919 0 true)`. It was the same in two JVM runs and another one in the image,
+  // where it also changes from call to call, as an object's default hash code would. That number is left out.
+  return stable([report.compliant, report.totalAssertions, report.profile,
+    report.failedRules.map(rule => JSON.stringify([`${rule.specification} ${rule.clause}-${rule.test} x${rule.failedChecks}`, rule.message, rule.object, rule.condition, rule.tags, rule.checks])).sort()]);
 };
 
 const generated = join(root, 'packages/verapdf-wasm/generated');
-const { instantiate }: { instantiate(wasm: Uint8Array): Promise<(pdf: string, flavour: string) => unknown> } =
+const { instantiate }: { instantiate(wasm: Uint8Array): Promise<(request: { pdf: string; flavour: string; maxChecksPerRule: number }) => unknown> } =
   await import(pathToFileURL(join(generated, 'verapdf.js')).href);
-const validate = await instantiate(readFileSync(join(generated, 'verapdf.wasm')));
+const entry = await instantiate(readFileSync(join(generated, 'verapdf.wasm')));
+// The same limit as the JVM entry's default, so that the listed checks can be compared too.
+const validate = (pdf: string, flavour: string) => entry({ pdf, flavour, maxChecksPerRule: 20 });
 // The entry takes one UTF-16 code unit per byte.
 const encoded = pdfs.map(path => readFileSync(path).toString('latin1'));
 const java = join(graalvmHome(), 'bin/java');

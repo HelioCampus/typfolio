@@ -15,18 +15,37 @@ export const pdfValidationFlavours: Readonly<Record<PdfValidationFlavour, string
   'wt1a': 'WTPDF 1.0 Accessibility', 'wt1r': 'WTPDF 1.0 Reuse',
 };
 
+/** One failed check: where it was, and what was wrong there. */
+export interface PdfValidationCheck {
+  /**
+   * A path in veraPDF's model of the file, with PDF object numbers where it has them. A glyph is named by, among
+   * other things, a number that changes from run to run, so two reports on the same file can differ there.
+   */
+  context: string;
+  /** What was wrong at this place, with the values found; empty when veraPDF gives none. */
+  error: string;
+}
+
 export interface PdfValidationRule {
   /** The specification the rule comes from, for example `ISO 14289-1:2014`. */
   specification: string;
   clause: string;
   /** The number of the test within the clause. */
   test: number;
-  /** How many checks of this rule failed. */
+  /** How many checks of this rule failed: exact, also when `checks` lists fewer. */
   failedChecks: number;
-  /** veraPDF's description of the rule. */
+  /** veraPDF's description of the rule: what the standard requires. */
   message: string;
-  /** Where the first failed check was, as a path in veraPDF's model of the file. */
+  /** Where the first failed check was: `checks[0].context`. */
   context: string;
+  /** The kind of object in veraPDF's model that the rule is checked on, such as `SETable` or `PDFont`. */
+  object: string;
+  /** The expression over that object that has to hold, in veraPDF's profile language. */
+  condition: string;
+  /** veraPDF's topics for the rule, sorted: `structure`, `table`, `font`, `metadata`, `alt-text` and so on. */
+  tags: string[];
+  /** The failed checks, in the order veraPDF met them, up to `maxChecksPerRule` (20 unless you say). */
+  checks: PdfValidationCheck[];
 }
 
 export interface PdfValidationReport {
@@ -34,6 +53,8 @@ export interface PdfValidationReport {
   compliant: boolean;
   /** How many checks veraPDF ran. */
   totalAssertions: number;
+  /** The validation profile that was applied: its name, what it validates against, and how many rules it has. */
+  profile: { name: string; description: string; rules: number };
   /** One entry per rule with at least one failed check, ordered by specification, clause and test. */
   failedRules: PdfValidationRule[];
 }

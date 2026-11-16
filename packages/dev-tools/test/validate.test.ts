@@ -68,8 +68,16 @@ test('every flavour has a name, in listing order, and a report formats as text',
   assert.match(formatValidationReport(await validatePdf(ua1, { flavour: 'ua1' }), 'a.pdf'), /^a\.pdf: PASS PDF\/UA-1 \(\d+ checks\)$/);
   const lines = formatValidationReport(await validatePdf(tagged, { flavour: 'ua1' })).split('\n');
   assert.match(lines[0]!, /^FAIL PDF\/UA-1: \d+ rules?, \d+ of \d+ checks$/);
-  assert.ok(lines.some(line => /^  ISO 14289-1:2014 5, test 1 \(1x\): .*PDF\/UA/.test(line)));
-  assert.ok(lines.some(line => line.startsWith('    at root')));
+  const at = lines.findIndex(line => /^  ISO 14289-1:2014 5, test 1 \(1x\) \[metadata\]: .*PDF\/UA/.test(line));
+  assert.ok(at > 0, lines.join('\n'));
+  // Under the rule, what was wrong and where.
+  assert.equal(lines[at + 1], '    The document metadata stream doesn\'t contain PDF/UA Identification Schema');
+  assert.match(lines[at + 2]!, /^      at root\/document\[0\]\/metadata\[0\]/);
+  // A rule that failed more often than it lists says how many are left out; the count is exact.
+  const short = await validatePdf(tagged, { flavour: '1b', maxChecksPerRule: 1 });
+  const repeated = short.failedRules.find(rule => rule.failedChecks > 1)!;
+  assert.equal(repeated.checks.length, 1);
+  assert.ok(formatValidationReport(short).includes(`    … and ${repeated.failedChecks - 1} more`));
 });
 
 test('the main entry does not carry the validation exports', () => {
@@ -103,6 +111,14 @@ test('typfolio-validate prints a report per file and exits 0, 1 or 2', { skip },
     const [entry] = JSON.parse(json.stdout);
     assert.deepEqual({ file: entry.file, flavour: entry.flavour, compliant: entry.compliant }, { file: bad, flavour: 'ua2', compliant: false });
     assert.ok(entry.failedRules.length > 0);
+    assert.equal(entry.profile.rules > 100, true);
+    assert.ok(entry.failedRules.every((rule: { checks: unknown[]; tags: unknown[] }) => rule.checks.length >= 1 && Array.isArray(rule.tags)));
+
+    // --max-checks limits what is listed, in text and in JSON.
+    const limited = JSON.parse((await cli('--format', 'json', '--max-checks', '1', '-f', '1b', bad)).stdout)[0];
+    assert.ok(limited.failedRules.every((rule: { checks: unknown[] }) => rule.checks.length === 1));
+    assert.ok(limited.failedRules.some((rule: { failedChecks: number }) => rule.failedChecks > 1));
+    assert.equal((await cli('--max-checks', '0', bad)).code, 2);
 
     const unreadable = await cli(good, junk);
     assert.equal(unreadable.code, 2);

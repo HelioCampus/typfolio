@@ -13,6 +13,7 @@ Options:
   -f, --flavour <id>   What to validate against (default: ua1):
 ${pdfValidationFlavourIds.map(id => `                         ${id.padEnd(6)}${pdfValidationFlavours[id]}`).join('\n')}
       --format <kind>  text (default) or json
+      --max-checks <n> How many failed checks of one rule to list (default: 3 as text, 20 as json)
       --wasm <file>    The validator's binary, when not the installed @typfolio/verapdf-wasm
   -h, --help           Show this text
 
@@ -27,6 +28,7 @@ const args = process.argv.slice(2);
 let flavour = 'ua1';
 let format = 'text';
 let wasmPath: string | undefined;
+let maxChecks: string | undefined;
 const files: string[] = [];
 for (let index = 0; index < args.length; index++) {
   const arg = args[index]!;
@@ -38,6 +40,8 @@ for (let index = 0; index < args.length; index++) {
   else if (arg.startsWith('--flavour=') || arg.startsWith('--flavor=')) flavour = arg.slice(arg.indexOf('=') + 1);
   else if (arg === '--format') format = value(arg);
   else if (arg.startsWith('--format=')) format = arg.slice('--format='.length);
+  else if (arg === '--max-checks') maxChecks = value(arg);
+  else if (arg.startsWith('--max-checks=')) maxChecks = arg.slice('--max-checks='.length);
   else if (arg === '--wasm') wasmPath = value(arg);
   else if (arg.startsWith('--wasm=')) wasmPath = arg.slice('--wasm='.length);
   else if (arg === '--') { files.push(...args.slice(index + 1)); break; }
@@ -46,6 +50,8 @@ for (let index = 0; index < args.length; index++) {
 }
 if (!(flavour in pdfValidationFlavours)) fail(`unknown flavour ${JSON.stringify(flavour)}; the flavours are ${pdfValidationFlavourIds.join(', ')}`);
 if (format !== 'text' && format !== 'json') fail(`unknown format ${JSON.stringify(format)}; it is text or json`);
+const maxChecksPerRule = maxChecks === undefined ? (format === 'json' ? 20 : 3) : Number(maxChecks);
+if (!Number.isInteger(maxChecksPerRule) || maxChecksPerRule < 1 || maxChecksPerRule > 10000) fail(`--max-checks must be a whole number from 1 to 10000, not ${JSON.stringify(maxChecks)}`);
 if (files.length === 0) fail(`no file given\n\n${usage}`);
 
 const message = (error: unknown) => error instanceof Error ? error.message : String(error);
@@ -60,7 +66,7 @@ type Result = { file: string } & (PdfValidationReport | { error: string });
 const results: Result[] = [];
 for (const file of files) {
   try {
-    results.push({ file, ...validator.validate(await readFile(file), { flavour: flavour as PdfValidationFlavour }) });
+    results.push({ file, ...validator.validate(await readFile(file), { flavour: flavour as PdfValidationFlavour, maxChecksPerRule }) });
   } catch (error) {
     results.push({ file, error: message(error) });
   }

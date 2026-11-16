@@ -124,6 +124,11 @@ button.tf-problem:hover { text-decoration: underline; }
 .tf-side.tf-validate { padding: 3px 10px; border: 1px solid var(--tf-border); color: var(--tf-fg); font-size: 12px; }
 .tf-side.tf-validate:disabled { opacity: 0.5; cursor: default; }
 .tf-validation-hint { color: var(--tf-muted); }
+.tf-rule > summary { cursor: pointer; }
+.tf-rule-tag { display: inline-block; margin-left: 6px; padding: 0 6px; border-radius: 999px; background: var(--tf-role); color: var(--tf-fg); font-size: 11px; }
+.tf ol.tf-rule-checks { list-style: decimal; margin: 0; padding: 2px 10px 6px 38px; }
+.tf-rule-checks li { padding: 2px 0; }
+.tf-rule-more { list-style: none; opacity: 0.8; }
 .tf-rule-context { display: block; font: 11px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; opacity: 0.8; overflow-wrap: anywhere; }
 
 .tf-main { display: flex; flex: 1; min-height: 0; }

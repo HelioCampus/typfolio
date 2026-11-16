@@ -18,12 +18,16 @@ import { createValidator } from '@typfolio/verapdf-wasm';
 
 const validator = await createValidator({ wasm });          // the bytes of verapdf.wasm, or a WebAssembly.Module
 const report = validator.validate(pdfBytes, { flavour: 'ua1' });
-// { flavour, compliant, totalAssertions, failedRules: [{ specification, clause, test, failedChecks, message, context }] }
+// { flavour, compliant, totalAssertions, profile: { name, description, rules },
+//   failedRules: [{ specification, clause, test, failedChecks, message, tags, object, condition, context,
+//                   checks: [{ error, context }] }] }
 ```
 
 `@typfolio/verapdf-wasm/verapdf.wasm` is the binary (about 31 MB, 10 MB gzipped); there is no default location, so
 load it explicitly. `validate` is synchronous: in a browser, call it from a worker. Flavours are veraPDF's ids:
-`ua1`, `ua2`, `1a` to `4f`, `wt1a`, `wt1r` (exported as `flavours`). Wrong input throws a `VerapdfError` with a
+`ua1`, `ua2`, `1a` to `4f`, `wt1a`, `wt1r` (exported as `flavours`). A failed rule lists its first 20 failed checks, each with veraPDF's
+own sentence for what was wrong and where; `maxChecksPerRule` changes that, and `failedChecks` is exact either way.
+Wrong input throws a `VerapdfError` with a
 `code`: `INVALID_REQUEST`, `INITIALIZATION` or `VALIDATION` (veraPDF could not read the file).
 
 A veraPDF pass is a machine check of the rules veraPDF implements. It does not establish that a document is

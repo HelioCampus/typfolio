@@ -9,11 +9,17 @@ import { TypstPdfError } from '@typfolio/core';
 import { pdfValidationFlavours, type PdfValidationFlavour, type PdfValidationReport } from './validation.js';
 
 export { pdfValidationFlavourIds, pdfValidationFlavours } from './validation.js';
-export type { PdfValidationFlavour, PdfValidationReport, PdfValidationRule } from './validation.js';
+export type { PdfValidationCheck, PdfValidationFlavour, PdfValidationReport, PdfValidationRule } from './validation.js';
+
+export interface PdfValidateOptions {
+  flavour: PdfValidationFlavour;
+  /** How many failed checks of one rule to list, from 1 to 10000; 20 unless given. The counts are exact either way. */
+  maxChecksPerRule?: number;
+}
 
 export interface PdfValidator {
   /** Synchronous, and from milliseconds to seconds long: in a page, consider a worker. */
-  validate(pdf: Uint8Array, options: { flavour: PdfValidationFlavour }): PdfValidationReport;
+  validate(pdf: Uint8Array, options: PdfValidateOptions): PdfValidationReport;
 }
 
 export interface PdfValidatorOptions {
@@ -109,15 +115,18 @@ let shared: Promise<PdfValidator> | undefined;
  * 'ua1' })).compliant`. The validator is started on the first call and kept; `wasm` is used by that first call only.
  * Rejects like `createPdfValidator` and its `validate`.
  */
-export async function validatePdf(bytes: Uint8Array, options: { flavour: PdfValidationFlavour } & PdfValidatorOptions): Promise<PdfValidationReport> {
+export async function validatePdf(bytes: Uint8Array, options: PdfValidateOptions & PdfValidatorOptions): Promise<PdfValidationReport> {
   shared ??= createPdfValidator({ wasm: options?.wasm }).catch(cause => {
     shared = undefined;
     throw cause;
   });
-  return (await shared).validate(bytes, { flavour: options?.flavour });
+  return (await shared).validate(bytes, { flavour: options?.flavour, maxChecksPerRule: options?.maxChecksPerRule });
 }
 
-/** A report as lines of text: the verdict, then each failed rule with its clause, test, count, description and place. */
+/**
+ * A report as lines of text: the verdict, then each failed rule with its clause, test, count and description, and
+ * under it the failed checks that are listed, each with what was wrong and where.
+ */
 export function formatValidationReport(report: PdfValidationReport, name?: string): string {
   const flavour = pdfValidationFlavours[report.flavour] ?? report.flavour;
   const subject = name === undefined ? '' : `${name}: `;
@@ -125,7 +134,9 @@ export function formatValidationReport(report: PdfValidationReport, name?: strin
   const failed = report.failedRules.reduce((sum, rule) => sum + rule.failedChecks, 0);
   const lines = [`${subject}FAIL ${flavour}: ${report.failedRules.length} rule${report.failedRules.length === 1 ? '' : 's'}, ${failed} of ${report.totalAssertions} checks`];
   for (const rule of report.failedRules) {
-    lines.push(`  ${rule.specification} ${rule.clause}, test ${rule.test} (${rule.failedChecks}x): ${rule.message}`, `    at ${rule.context}`);
+    lines.push(`  ${rule.specification} ${rule.clause}, test ${rule.test} (${rule.failedChecks}x)${rule.tags.length > 0 ? ` [${rule.tags.join(', ')}]` : ''}: ${rule.message}`);
+    for (const check of rule.checks) lines.push(...(check.error ? [`    ${check.error}`] : []), `      at ${check.context}`);
+    if (rule.failedChecks > rule.checks.length) lines.push(`    … and ${rule.failedChecks - rule.checks.length} more`);
   }
   return lines.join('\n');
 }

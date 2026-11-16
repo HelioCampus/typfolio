@@ -28,7 +28,7 @@ export interface StructurePanelPdfJs {
  * and returns a promise. The panel loads no validator itself.
  */
 export interface StructurePanelValidator {
-  validate(pdf: Uint8Array, options: { flavour: PdfValidationFlavour }): PdfValidationReport | Promise<PdfValidationReport>;
+  validate(pdf: Uint8Array, options: { flavour: PdfValidationFlavour; maxChecksPerRule?: number }): PdfValidationReport | Promise<PdfValidationReport>;
 }
 
 export interface StructurePanelOptions {
