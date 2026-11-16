@@ -7,7 +7,7 @@
 
 `@typfolio/dev-tools/validate`, the `typfolio-validate` command and the tags panel's "veraPDF" row use it as an optional peer dependency ([packages/dev-tools/README.md](../packages/dev-tools/README.md#validation-with-verapdf)); nothing in dev-tools contains it.
 
-Not implemented yet: third-party notices and publishing; the package is `private`. The validator is built and checked on a developer's machine only. CI does not build it, and the tests that need the binary are skipped where it is absent.
+Not published: the package is `private`. The validator is built and checked on a developer's machine only. CI does not build it, and the tests that need the binary are skipped where it is absent.
 
 A veraPDF pass is a machine check of the rules veraPDF implements. It does not establish that a document is accessible.
 
@@ -20,6 +20,7 @@ The source of truth is [`verapdf-source.json`](../verapdf-source.json):
 | veraPDF | `1.30.3`: `core`, `parser`, `pdf-model`, `validation-model`, `verapdf-xmp-core`, `metadata-fixer`, `feature-reporting` from Maven Central |
 | Other jars | Rhino `1.7.15.1`, `jaxb-api` `2.3.1`, `jaxb-impl` `2.3.2`, `jaxb-core` `2.3.0.1`, `javax.activation-api` `1.2.0` |
 | Jar integrity | SHA-256 of every jar, checked by setup and again by every build |
+| Jar licences | The licence each jar is used under (`license`, an SPDX expression), which the build needs a text for |
 | GraalVM | Oracle GraalVM `25.5.5.0.3` (Java `25.0.5.0.3`); the archive hash is pinned for macOS arm64 only |
 | Binaryen | `133` (`wasm-as`) |
 | Our sources | `packages/verapdf-wasm/java` and `packages/verapdf-wasm/native-image` |
@@ -41,7 +42,7 @@ npm run check:verapdf
 
 `setup:verapdf` downloads the pinned jars and Oracle GraalVM into `.build/verapdf` and checks every file against its pinned SHA-256. Downloading Oracle GraalVM means accepting the [GraalVM Free Terms and Conditions](https://www.oracle.com/downloads/licenses/graal-free-license.html). `GRAALVM_HOME` selects an existing installation instead; the build checks that its `release` file names Oracle GraalVM at the pinned version. There is no pinned archive hash for Linux yet, so on Linux setup stops until one is added or `GRAALVM_HOME` is set.
 
-`build:verapdf` compiles the Java sources against the jars, builds the image, and writes `packages/verapdf-wasm/generated/`: `verapdf.wasm`, `verapdf.js` with its `verapdf.d.ts` (the loader, see below) and `provenance.json`. A build takes about 45 seconds on an Apple M-series machine and fails if the binary or the loader contains the repository's or GraalVM's local path.
+`build:verapdf` compiles the Java sources against the jars, builds the image, and writes `packages/verapdf-wasm/generated/`: `verapdf.wasm`, `verapdf.js` with its `verapdf.d.ts` (the loader, see below), `licenses/` and `THIRD_PARTY_NOTICES.md` (see [Licences](#licences)) and `provenance.json`. A build takes about 45 seconds on an Apple M-series machine and fails if the binary or the loader contains the repository's or GraalVM's local path.
 
 Nothing is fetched or built twice. `setup:verapdf` keeps every jar and the GraalVM archive that is already in `.build/verapdf` with the pinned hash, and an unpacked GraalVM of the pinned version. `build:verapdf` does nothing when `generated/` was already built from the same inputs: the same `sourceSha256` (the pin, the Java sources, the metadata), the same GraalVM, platform and Binaryen, and files that still match the hashes in `provenance.json`. `npm run build:verapdf -- --force` builds anyway. Since two builds do not give the same bytes, keeping a build is also what keeps the binary you tested the binary you use.
 
@@ -146,10 +147,24 @@ If a later GraalVM makes the output stable, set the two hashes in the pin; `tool
 
 ## Licences
 
-The binary is not open source as a whole, which is why it is a package of its own and nothing else in the repository may bundle it:
+The binary is not open source as a whole, which is why it is a package of its own and nothing else in the repository may bundle it. `packages/verapdf-wasm/LICENSE` says which terms apply to which part:
 
-- veraPDF is dual-licensed GPLv3+ / MPLv2+ and is used under the MPL 2.0. The replacement `COSFilterFlateDecode.java` is a modified veraPDF file and stays under the MPL 2.0.
-- Rhino is MPL 2.0. The JAXB runtime is CDDL 1.1 or GPLv2 with the Classpath exception. These were not read file by file; that belongs to generating the third-party notices.
+- The code written for the package is Apache-2.0.
+- veraPDF is dual-licensed GPLv3+ / MPLv2+ and is used under the MPL 2.0. The replacement `COSFilterFlateDecode.java` is a modified veraPDF file and stays under the MPL 2.0; its source ships in the package under `java/`.
 - The runtime that Native Image compiles into the binary comes from Oracle GraalVM and stays under the GraalVM Free Terms and Conditions: it may be used, including inside a company, and redistributed unmodified free of charge "under the terms of this License", but not as part of a product or service that a fee is charged for.
+
+### Notice files
+
+`tools/verapdf-notices.ts`, called by the build, writes what has to travel with the binary, from what the binary was built from:
+
+- `generated/licenses/<artifact>/`: the `LICENSE*` and `NOTICE*` files in each pinned jar's `META-INF`. Rhino (MPL 2.0, and a notice for the code it takes from V8 and others), the JAXB API and the Activation API (CDDL 1.1 or GPLv2 with the Classpath exception, used under CDDL 1.1) and the JAXB runtime (Eclipse Distribution License, a 3-clause BSD) have them; `jaxb-core` and the veraPDF jars have none.
+- `generated/licenses/verapdf/`: veraPDF's MPL text and the licence file of its `xmp-core` module, which is derived from Adobe's XMP Toolkit. No jar contains these, so they are kept in [`tools/notices/verapdf`](../tools/notices/verapdf), taken from the tag of the pinned version.
+- `generated/licenses/adobe-font-data/`: the notices of the font data in veraPDF's parser jar, which is in the binary whole. The 118 Adobe CMap resources each carry a BSD-style licence in their header; the distinct ones are collected, and the build fails if a CMap has none. The 14 Core font metric files may not be distributed without their `MustRead.html`, which is copied with their copyright lines. The Adobe Glyph List carries no notice in the jar.
+- `generated/licenses/oracle-graalvm/`: `LICENSE.txt`, `NOTICE.txt` and `license-information-user-manual.zip`, copied unchanged from the pinned GraalVM. The build fails if that licence is not the GraalVM Free Terms and Conditions, since the package's `LICENSE` describes those.
+- `generated/THIRD_PARTY_NOTICES.md`: every jar with its version, the licence it is used under and where its texts and source are, and the sections above in short.
+
+Each jar's licence comes from the pin, where a person chose it (MPL where veraPDF offers GPL or MPL, CDDL where the JAXB API offers CDDL or GPL). A licence that `tools/verapdf-notices.ts` has no text for stops the build, so a new dependency is not shipped without someone reading its terms. `provenance.json` records the hash of every notice file, and `tools/check-verapdf-package.ts` fails when one is missing or changed, or when `generated/licenses` holds a file the build did not write.
+
+What was not done: the jars' licences were taken from their Maven poms and the files they ship, not from reading every source file, and which parts of the Java class library end up in the binary was not listed; Oracle's licence information manual covers GraalVM as a whole.
 
 This is a reading of the licence texts, not legal advice.
