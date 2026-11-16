@@ -36,8 +36,8 @@ export interface StructurePanelValidator {
 export interface StructurePanelOptions {
   readonly pdfjs: StructurePanelPdfJs;
   /**
-   * Adds a "veraPDF" view beside the tags, which validates the PDF on show: the panel then has two views to switch
-   * between. Without it the panel shows the tags only.
+   * Adds veraPDF's findings as a view beside the tags and the page, which validates the PDF on show. Without it the
+   * panel shows the tags and the page only.
    */
   readonly validator?: StructurePanelValidator;
   /**

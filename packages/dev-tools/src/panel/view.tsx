@@ -3,7 +3,7 @@ import { headingLevel, type PdfStructureElement, type PdfStructureWarning, type 
 import { PageView } from './page.js';
 import type { ReadState } from './read.js';
 import { ancestors, filterTree, indexPages, type TreeIndex, type TreeNode } from './tree.js';
-import { Validation, type ValidationSummary } from './validation.js';
+import { Validation } from './validation.js';
 import type { StructurePanelValidator } from '../panel.js';
 
 const marks: Record<PdfStructureWarningKind, string> = {
@@ -77,22 +77,20 @@ function CopyButton({ text, label }: { text: string; label: string }) {
 /** What there is to copy from a tag: a figure's alt text, any other tag's text. */
 const copyable = (element: PdfStructureElement) => (element.role === 'Figure' ? element.alt?.trim() : element.text) || undefined;
 
+/**
+ * What the selected tag's row does not say, shown under it: where it is in the tree, a figure's alt text, a table's
+ * columns and summary, a cell's scope and the header cells that label it, what it holds, and its problems. The row
+ * itself has the tag's whole text.
+ */
 function Details({ node, index, warnings }: { node: TreeNode; index: TreeIndex; warnings: readonly PdfStructureWarning[] }) {
   const { element } = node;
   const children = new Map<string, number>();
   for (const child of element.children) children.set(child.role, (children.get(child.role) ?? 0) + 1);
-  const text = element.text.length > 2000 ? `${element.text.slice(0, 2000)}…` : element.text;
   return (
     <>
-      <h2>
-        <span className="tf-role" data-heading={isHeading(element)}>{element.role}</span>
-        Page {node.page}
-      </h2>
       <dl>
         <dt>Path</dt>
         <dd>{[...ancestors(node), node].map(each => each.element.role).join(' › ')}</dd>
-        <dt>Text</dt>
-        <dd>{text || 'None'}{element.text ? <CopyButton text={element.text} label="Copy the text" /> : null}</dd>
         {element.alt !== undefined || element.role === 'Figure' ? (
           <>
             <dt>Alt text</dt>
@@ -144,9 +142,10 @@ function Details({ node, index, warnings }: { node: TreeNode; index: TreeIndex; 
   );
 }
 
-type Pane = 'tree' | 'page' | 'details';
+type Pane = 'tree' | 'page' | 'verapdf';
 // The share of the panel each view starts with.
-const startShares: Record<Pane, number> = { tree: 5, page: 4, details: 3 };
+const startShares: Record<Pane, number> = { tree: 5, page: 4, verapdf: 4 };
+const paneNames: Record<Pane, string> = { tree: 'tags', page: 'page', verapdf: 'veraPDF findings' };
 // The least a view is dragged down to, in pixels, and the step of an arrow key as a part of the two views' size.
 const minPane = 60;
 const keyStep = 0.05;
@@ -157,7 +156,7 @@ export interface StructureViewProps {
   state: ReadState;
   /** Whether the page gave a PDF to read. */
   hasBytes: boolean;
-  /** The PDF itself and a validator for it: together they add the veraPDF control. */
+  /** The PDF itself and a validator for it: together they add veraPDF's findings as a view beside the tags. */
   bytes?: Uint8Array;
   validator?: StructurePanelValidator;
   /** Controls of the panel's own, shown in its toolbar before the close button. */
@@ -168,8 +167,9 @@ export interface StructureViewProps {
 
 /**
  * The tags of the PDF, page by page in reading order, and what a screen reader user would trip over: each problem
- * opens the tag it is about. Which tags are open, the selection and the filter are kept by position, so they stay
- * across a new compile of the same template.
+ * opens the tag it is about. Beside them the page, and with a validator veraPDF's findings; the selected tag says
+ * the rest about itself under its row. Which tags are open, the selection and the filter are kept by position, so
+ * they stay across a new compile of the same template.
  */
 export function StructureView({ state, hasBytes, bytes, validator, tools, onClose }: StructureViewProps) {
   const { read, reading, error } = state;
@@ -182,10 +182,6 @@ export function StructureView({ state, hasBytes, bytes, validator, tools, onClos
   const [showPage, setShowPage] = useState(true);
   const [page, setPage] = useState(1);
   const [hovered, setHovered] = useState<string>();
-  // With a validator the panel has two views, the tags and veraPDF's findings; one shows at a time.
-  const [view, setView] = useState<'tags' | 'verapdf'>('tags');
-  const [validation, setValidation] = useState<ValidationSummary>();
-  const showsTags = !validator || view === 'tags';
   const tree = useRef<HTMLDivElement>(null);
   // The views side by side, or stacked in a narrow panel, and the share of the room each has: the dividers move it.
   const main = useRef<HTMLDivElement>(null);
@@ -207,7 +203,7 @@ export function StructureView({ state, hasBytes, bytes, validator, tools, onClos
     tree.current?.querySelector(`[data-path="${selected}"]`)?.scrollIntoView?.({ block: 'nearest' });
   }, [revealed]);
 
-  const tagged = read?.tagged === true && index !== undefined && error === undefined;
+  const tagged = read !== undefined && read.tagged === true && index !== undefined && error === undefined;
   useEffect(() => {
     const element = main.current;
     const Observer = element?.ownerDocument.defaultView?.ResizeObserver;
@@ -215,7 +211,7 @@ export function StructureView({ state, hasBytes, bytes, validator, tools, onClos
     const observer = new Observer(() => setStacked(element.clientWidth < stackUnder));
     observer.observe(element);
     return () => observer.disconnect();
-  }, [tagged]);
+  }, [tagged, validator !== undefined]);
   useEffect(() => () => stopDragging.current?.(), []);
 
   const extent = (pane: Pane) => {
@@ -264,7 +260,7 @@ export function StructureView({ state, hasBytes, bytes, validator, tools, onClos
         className="tf-split"
         role="separator"
         aria-orientation={stacked ? 'horizontal' : 'vertical'}
-        aria-label={`Resize the ${before === 'tree' ? 'tags' : before} and the ${after === 'details' ? 'selected tag' : after}`}
+        aria-label={`Resize the ${paneNames[before]} and the ${paneNames[after]}`}
         aria-valuenow={Math.round(shares[before] / (shares[before] + shares[after]) * 100)}
         aria-valuemin={0}
         aria-valuemax={100}
@@ -331,6 +327,11 @@ export function StructureView({ state, hasBytes, bytes, validator, tools, onClos
           </button>
           {copyable(element) ? <CopyButton text={copyable(element)!} label={`Copy the ${element.role === 'Figure' ? 'alt text' : 'text'} of this ${element.role}`} /> : null}
         </div>
+        {selected === node.path ? (
+          <aside className="tf-details" aria-label="Selected tag">
+            <Details node={node} index={index!} warnings={warningsAt.get(node.path) ?? []} />
+          </aside>
+        ) : null}
         {open ? renderList(children) : null}
       </li>
     );
@@ -371,21 +372,13 @@ export function StructureView({ state, hasBytes, bytes, validator, tools, onClos
     <div className="tf-panel">
       <div className="tf-bar">
         <h2 className="tf-title">PDF tags</h2>
-        {validator ? (
-          <div className="tf-views" role="tablist" aria-label="Views of the PDF">
-            <button type="button" role="tab" id="tf-tab-tags" className="tf-view-tab" aria-selected={view === 'tags'} aria-controls="tf-view-tags" onClick={() => setView('tags')}>Tags</button>
-            <button type="button" role="tab" id="tf-tab-verapdf" className="tf-view-tab" aria-selected={view === 'verapdf'} aria-controls="tf-view-verapdf" aria-label={validation ? `veraPDF: ${validation.label}` : 'veraPDF'} onClick={() => setView('verapdf')}>
-              veraPDF{validation ? <span className="tf-badge" data-tone={validation.tone === 'error' ? 'error' : validation.tone} aria-hidden="true">{validation.text}</span> : null}
-            </button>
-          </div>
-        ) : null}
-        {showsTags && read && index ? (
+        {read && index ? (
           <span className="tf-counts">
             {[plural(read.pages.length, 'page'), plural(index.counts.headings, 'heading'), plural(index.counts.tables, 'table'), plural(index.counts.figures, 'figure')].join(' · ')}
           </span>
         ) : null}
         {reading && read ? <span className="tf-reading" role="status">Reading the new PDF…</span> : null}
-        {showsTags && read?.tagged ? (
+        {read?.tagged ? (
           <input
             type="search"
             className="tf-filter"
@@ -395,15 +388,14 @@ export function StructureView({ state, hasBytes, bytes, validator, tools, onClos
             onChange={event => setQuery(event.target.value)}
           />
         ) : null}
-        {showsTags && read?.tagged ? (
+        {read?.tagged ? (
           <button type="button" className="tf-side tf-page-toggle" aria-pressed={showPage} title="Show the page beside the tags" onClick={() => setShowPage(shown => !shown)}>Page</button>
         ) : null}
         {/* The filter pushes the panel's own controls to the far end; without it, this does. */}
-        {showsTags && read?.tagged ? null : <span className="tf-spacer" />}
+        {read?.tagged ? null : <span className="tf-spacer" />}
         {tools}
         {onClose ? <button type="button" className="tf-close" aria-label="Close the PDF tags panel" onClick={onClose}>×</button> : null}
       </div>
-      <div className="tf-view" id="tf-view-tags" role={validator ? 'tabpanel' : undefined} aria-labelledby={validator ? 'tf-tab-tags' : undefined} hidden={!showsTags}>
       {error !== undefined ? (
         <p className="tf-banner" data-tone="error" role="alert">The tags could not be read: {describe(error)}</p>
       ) : !read ? (
@@ -430,25 +422,27 @@ export function StructureView({ state, hasBytes, bytes, validator, tools, onClos
           </ul>
         </section>
       )}
-      {read?.tagged && index && error === undefined ? (
+      {tagged || validator ? (
         <div className="tf-main" ref={main} data-stacked={stacked}>
-          <div {...pane('tree')}>
-          <div className="tf-tree" ref={tree} role="region" aria-label="Tags in reading order">
-            {index.pages.map(({ page, nodes }) => {
-              const shown = filter ? nodes.filter(each => filter.shown.has(each.path)) : nodes;
-              if (filter && shown.length === 0) return null;
-              return (
-                <section key={page} aria-label={`Page ${page}`}>
-                  <h3 className="tf-page-title">Page {page}</h3>
-                  {shown.length > 0 ? renderList(shown) : <p className="tf-banner" data-tone="quiet">No tags on this page.</p>}
-                </section>
-              );
-            })}
-            {filter && filter.found.size === 0 ? <p className="tf-banner" data-tone="quiet">No tag matches “{query.trim()}”.</p> : null}
-          </div>
-          </div>
-          {showPage && read ? divider('tree', 'page') : null}
-          {showPage && read ? (
+          {tagged ? (
+            <div {...pane('tree')}>
+            <div className="tf-tree" ref={tree} role="region" aria-label="Tags in reading order">
+              {index.pages.map(({ page, nodes }) => {
+                const shown = filter ? nodes.filter(each => filter.shown.has(each.path)) : nodes;
+                if (filter && shown.length === 0) return null;
+                return (
+                  <section key={page} aria-label={`Page ${page}`}>
+                    <h3 className="tf-page-title">Page {page}</h3>
+                    {shown.length > 0 ? renderList(shown) : <p className="tf-banner" data-tone="quiet">No tags on this page.</p>}
+                  </section>
+                );
+              })}
+              {filter && filter.found.size === 0 ? <p className="tf-banner" data-tone="quiet">No tag matches “{query.trim()}”.</p> : null}
+            </div>
+            </div>
+          ) : null}
+          {tagged && showPage ? divider('tree', 'page') : null}
+          {tagged && showPage ? (
             <div {...pane('page')}>
             <PageView
               read={read}
@@ -462,18 +456,13 @@ export function StructureView({ state, hasBytes, bytes, validator, tools, onClos
             />
             </div>
           ) : null}
-          {divider(showPage && read ? 'page' : 'tree', 'details')}
-          <div {...pane('details')}>
-          <aside className="tf-details" aria-label="Selected tag">
-            {node ? <Details node={node} index={index} warnings={warningsAt.get(node.path) ?? []} /> : <p className="tf-hint">Select a tag, in the list or on the page, to see its text, alt text and language, and for a table cell its scope and headers.</p>}
-          </aside>
-          </div>
-        </div>
-      ) : null}
-      </div>
-      {validator ? (
-        <div className="tf-view" id="tf-view-verapdf" role="tabpanel" aria-labelledby="tf-tab-verapdf" hidden={view !== 'verapdf'}>
-          <Validation validator={validator} bytes={bytes} onSummary={setValidation} />
+          {/* veraPDF's findings: beside the tags and the page, or alone for a PDF whose tags cannot be shown. */}
+          {tagged && validator ? divider(showPage ? 'page' : 'tree', 'verapdf') : null}
+          {validator ? (
+            <div {...pane('verapdf')}>
+              <Validation validator={validator} bytes={bytes} />
+            </div>
+          ) : null}
         </div>
       ) : null}
     </div>

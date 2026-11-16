@@ -11,25 +11,9 @@ type Outcome =
   | { undeclared: true }
   | { error: unknown };
 
-/** What the veraPDF tab shows beside its name. */
-export interface ValidationSummary {
-  tone: 'ok' | 'error' | 'quiet';
-  text: string;
-  label: string;
-}
-
 const describe = (error: unknown) => error instanceof Error ? error.message : String(error);
 const plural = (count: number, word: string) => `${count} ${word}${count === 1 ? '' : 's'}`;
 const name = (id: PdfValidationFlavour) => pdfValidationFlavours[id] ?? id;
-
-function summarise(outcome: Outcome | undefined, running: boolean): ValidationSummary | undefined {
-  if (running && !outcome) return { tone: 'quiet', text: '…', label: 'validating' };
-  if (!outcome) return undefined;
-  if ('error' in outcome) return { tone: 'error', text: '!', label: 'the PDF could not be validated' };
-  if ('undeclared' in outcome) return { tone: 'quiet', text: '?', label: 'the PDF declares no standard' };
-  const failed = outcome.reports.reduce((sum, report) => sum + report.failedRules.length, 0);
-  return failed > 0 ? { tone: 'error', text: String(failed), label: `${plural(failed, 'rule')} failed` } : { tone: 'ok', text: '✓', label: 'passes' };
-}
 
 function Report({ report }: { report: PdfValidationReport }) {
   if (report.compliant) {
@@ -70,12 +54,12 @@ function Report({ report }: { report: PdfValidationReport }) {
 }
 
 /**
- * The veraPDF view: what to validate against, a button, and the verdict with each failed rule and its checks. With
+ * veraPDF's findings, the view beside the tags and the page: what to validate against, a button, and the verdict with each failed rule and its checks. With
  * a validator that can read what a file declares, that is the first choice. Nothing is validated until the button is
  * used; after that every new PDF is validated the same way, so the verdict follows the template being edited, and
  * the last verdict stays on show until the new one is in.
  */
-export function Validation({ validator, bytes, onSummary }: { validator: StructurePanelValidator; bytes?: Uint8Array; onSummary?: (summary: ValidationSummary | undefined) => void }) {
+export function Validation({ validator, bytes }: { validator: StructurePanelValidator; bytes?: Uint8Array }) {
   const detects = typeof validator.detectFlavours === 'function';
   const [choice, setChoice] = useState<Choice>(detects ? 'declared' : 'ua1');
   // What the button asked for; undefined until it is used. `run` counts the presses, so the same choice runs again.
@@ -107,14 +91,11 @@ export function Validation({ validator, bytes, onSummary }: { validator: Structu
     return () => { current = false; };
   }, [validator, bytes, asked]);
 
-  const summary = summarise(outcome, running);
-  useEffect(() => onSummary?.(summary), [summary?.tone, summary?.text]);
-
   return (
     <section className="tf-validation" aria-label="veraPDF validation">
       <div className="tf-validation-bar">
         <label>
-          Validate against{' '}
+          <span className="tf-title">veraPDF</span>{' '}
           <select className="tf-flavour" aria-label="What to validate against" value={choice} onChange={event => setChoice(event.target.value as Choice)}>
             {detects ? <option value="declared">What the file declares</option> : null}
             {pdfValidationFlavourIds.map(id => <option key={id} value={id}>{name(id)}</option>)}

@@ -117,11 +117,6 @@ button.tf-problem:hover { text-decoration: underline; }
 .tf-problem-page { font-weight: 600; }
 
 .tf-spacer { flex: 1; }
-.tf-view { display: flex; flex-direction: column; flex: 1; min-height: 0; }
-.tf-view[hidden] { display: none; }
-.tf-views { display: flex; gap: 2px; padding: 2px; border-radius: 6px; background: var(--tf-bg-soft); }
-.tf-view-tab { display: flex; align-items: center; gap: 6px; padding: 2px 10px; border: 0; border-radius: 4px; background: none; color: var(--tf-muted); font-size: 12px; }
-.tf-view-tab[aria-selected="true"] { background: var(--tf-bg); color: var(--tf-fg); box-shadow: 0 0 0 1px var(--tf-border); }
 .tf-validation { display: flex; flex-direction: column; flex: 1; min-height: 0; }
 .tf-validation-bar { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding: 6px 10px; border-bottom: 1px solid var(--tf-border); font-size: 12px; }
 .tf-validation-results { flex: 1; min-height: 0; overflow: auto; }
@@ -248,12 +243,12 @@ button.tf-problem:hover { text-decoration: underline; }
   font-weight: 600;
 }
 
-.tf-details { overflow: auto; padding: 10px 12px; background: var(--tf-bg-soft); }
-.tf-details h2 { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; font-size: 13px; font-weight: 600; }
+/* Under the selected tag's row, in line with its text. */
+.tf-details { display: block; margin: 0 8px 4px 34px; padding: 6px 10px; border-left: 2px solid var(--tf-accent); border-radius: 0 4px 4px 0; background: var(--tf-bg-soft); font-size: 12px; }
 .tf-details dl { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 4px 12px; }
 .tf-details dt { color: var(--tf-muted); }
 .tf-details dd { overflow-wrap: anywhere; white-space: pre-wrap; }
-.tf-details .tf-problem-note { margin-top: 10px; padding: 6px 8px; border-radius: 4px; background: var(--tf-warn-bg); color: var(--tf-warn-fg); }
+.tf-details .tf-problem-note { margin-top: 6px; padding: 6px 8px; border-radius: 4px; background: var(--tf-warn-bg); color: var(--tf-warn-fg); }
 .tf-hint { color: var(--tf-muted); }
 
 .tf-toggle {
