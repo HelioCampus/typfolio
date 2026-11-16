@@ -29,7 +29,10 @@ export interface StructurePanelPdfJs {
  */
 export interface StructurePanelValidator {
   validate(pdf: Uint8Array, options: { flavour: PdfValidationFlavour; maxChecksPerRule?: number }): PdfValidationReport | Promise<PdfValidationReport>;
-  /** The flavours the file declares. With it, the view's first choice is to validate against those. */
+  /**
+   * The flavours the file declares. With it, the panel validates each PDF against those without being asked, while
+   * it is open.
+   */
   detectFlavours?(pdf: Uint8Array): PdfValidationFlavour[] | Promise<PdfValidationFlavour[]>;
 }
 

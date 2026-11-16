@@ -54,20 +54,23 @@ function Report({ report }: { report: PdfValidationReport }) {
 }
 
 /**
- * veraPDF's findings, the view beside the tags and the page: what to validate against, a button, and the verdict with each failed rule and its checks. With
- * a validator that can read what a file declares, that is the first choice. Nothing is validated until the button is
- * used; after that every new PDF is validated the same way, so the verdict follows the template being edited, and
- * the last verdict stays on show until the new one is in.
+ * veraPDF's findings, the view beside the tags and the page: what to validate against, a button, and the verdict
+ * with each failed rule and its checks. With a validator that can read what a file declares, every PDF is validated
+ * against that without being asked, and a PDF that declares nothing says so. Otherwise nothing is validated until
+ * the button is used. Either way each new PDF is then validated the same way, so the verdict follows the template
+ * being edited, and the last verdict stays on show until the new one is in.
  */
-export function Validation({ validator, bytes }: { validator: StructurePanelValidator; bytes?: Uint8Array }) {
+export function Validation({ validator, bytes, active = true }: { validator: StructurePanelValidator; bytes?: Uint8Array; active?: boolean }) {
   const detects = typeof validator.detectFlavours === 'function';
   const [choice, setChoice] = useState<Choice>(detects ? 'declared' : 'ua1');
-  // What the button asked for; undefined until it is used. `run` counts the presses, so the same choice runs again.
-  const [asked, setAsked] = useState<{ choice: Choice; run: number }>();
+  // What to validate against, on every PDF; `run` counts the presses of the button, so the same choice runs again.
+  // A validator that can read what a file declares starts without being asked: there is no choice to wait for.
+  const [asked, setAsked] = useState<{ choice: Choice; run: number } | undefined>(detects ? { choice: 'declared', run: 0 } : undefined);
   const [outcome, setOutcome] = useState<Outcome>();
   const [running, setRunning] = useState(false);
   useEffect(() => {
-    if (asked === undefined || bytes === undefined) return;
+    // Not while the panel is closed: the PDF on show when it opens is validated then.
+    if (asked === undefined || bytes === undefined || !active) return;
     let current = true;
     setRunning(true);
     (async () => {
@@ -89,7 +92,7 @@ export function Validation({ validator, bytes }: { validator: StructurePanelVali
       setRunning(false);
     })();
     return () => { current = false; };
-  }, [validator, bytes, asked]);
+  }, [validator, bytes, asked, active]);
 
   return (
     <section className="tf-validation" aria-label="veraPDF validation">

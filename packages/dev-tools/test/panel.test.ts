@@ -588,7 +588,7 @@ test('once asked, a new PDF is validated too, and a validator that fails says wh
   }
 });
 
-test('a validator that reads what the file declares offers that first: one verdict per declared standard, or none declared', async () => {
+test('a validator that reads what the file declares validates each PDF without being asked: one verdict per declared standard, or none declared', async () => {
   const { element, view } = target();
   const bytes = await withHeader();
   const { calls, validator } = scripted({ flavour: 'ua1', compliant: true, totalAssertions: 5, profile, failedRules: [] }, { flavour: 'ua1', compliant: false, totalAssertions: 7, profile, failedRules: [rule] });
@@ -601,22 +601,52 @@ test('a validator that reads what the file declares offers that first: one verdi
     assert.equal(choice.value, 'declared');
     assert.deepEqual([...choice.options].slice(0, 2).map(option => option.textContent), ['What the file declares', 'PDF/UA-1']);
 
-    fireEvent.click(region.getByRole('button', { name: 'Validate' }));
+    // No button was used: the PDF says what to validate it against.
     await region.findByText('The PDF declares PDF/A-2a and PDF/UA-1.');
     assert.deepEqual(calls.map(call => call.flavour), ['2a', 'ua1']);
     assert.ok(region.getByText(/^Passes veraPDF’s PDF\/A-2a rules \(5 checks\)/));
     assert.ok(region.getByText('Fails 1 rule of PDF/UA-1: 2 of 7 checks'));
     // Detection got a copy of the bytes too.
+    assert.equal(detected.length, 1);
     assert.notEqual(detected[0], bytes);
 
-    // A file that declares nothing is not validated, and says so; that is not a pass.
+    // A new PDF that declares nothing is not validated, and says so; that is not a pass.
     declared = [];
-    fireEvent.click(region.getByRole('button', { name: 'Validate' }));
+    panel.update({ bytes: await headerless() });
     await region.findByText('The PDF declares no standard in its metadata, so there is nothing to validate it against. Pick one above to validate against it anyway.');
+    assert.equal(detected.length, 2);
     assert.equal(calls.length, 2);
     assert.equal(region.queryByText(/^Passes veraPDF/), null);
+
+    // A standard picked by hand is validated against when the button is used, whatever the file declares.
+    fireEvent.change(choice, { target: { value: 'ua2' } });
+    assert.equal(calls.length, 2);
+    fireEvent.click(region.getByRole('button', { name: 'Validate' }));
+    await waitFor(() => assert.equal(calls.length, 3));
+    assert.equal(calls[2]!.flavour, 'ua2');
   } finally {
     panel.unmount();
+  }
+});
+
+test('the devtools panel does not validate while it is closed, and validates the PDF on show when it opens', async () => {
+  const { calls, validator } = scripted({ flavour: 'ua1', compliant: true, totalAssertions: 5, profile, failedRules: [] });
+  const detected: Uint8Array[] = [];
+  const devtools = mountStructureDevtools({ pdfjs, bytes: await withHeader(), validator: { ...validator, detectFlavours: async pdf => { detected.push(pdf); return ['ua1']; } } });
+  try {
+    const host = document.body.querySelector('[data-typfolio-panel]:last-of-type')!;
+    const view = within(host.shadowRoot!.lastElementChild as HTMLElement);
+    // The tags are read while it is closed, for the button's count; veraPDF is not asked.
+    await view.findByRole('button', { name: 'Open the PDF tags panel: no problems found' });
+    devtools.update({ bytes: await headerless() });
+    await view.findByRole('button', { name: 'Open the PDF tags panel: 1 problem' });
+    assert.deepEqual([detected.length, calls.length], [0, 0]);
+
+    fireEvent.click(view.getByRole('button', { name: 'Open the PDF tags panel: 1 problem' }));
+    await within(await view.findByRole('region', { name: 'veraPDF validation' })).findByText(/^Passes veraPDF’s PDF\/UA-1 rules \(5 checks\)/);
+    assert.deepEqual([detected.length, calls.length], [1, 1]);
+  } finally {
+    devtools.unmount();
   }
 });
 

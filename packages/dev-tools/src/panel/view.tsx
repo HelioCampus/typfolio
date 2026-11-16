@@ -159,6 +159,8 @@ export interface StructureViewProps {
   /** The PDF itself and a validator for it: together they add veraPDF's findings as a view beside the tags. */
   bytes?: Uint8Array;
   validator?: StructurePanelValidator;
+  /** Whether the panel is on show; a closed one does not validate. Defaults to true. */
+  active?: boolean;
   /** Controls of the panel's own, shown in its toolbar before the close button. */
   tools?: ReactNode;
   /** Shows a close button that calls it. */
@@ -171,7 +173,7 @@ export interface StructureViewProps {
  * the rest about itself under its row. Which tags are open, the selection and the filter are kept by position, so
  * they stay across a new compile of the same template.
  */
-export function StructureView({ state, hasBytes, bytes, validator, tools, onClose }: StructureViewProps) {
+export function StructureView({ state, hasBytes, bytes, validator, active = true, tools, onClose }: StructureViewProps) {
   const { read, reading, error } = state;
   const index = useMemo(() => read && indexPages(read.pages), [read]);
   const [selected, setSelected] = useState<string>();
@@ -460,7 +462,7 @@ export function StructureView({ state, hasBytes, bytes, validator, tools, onClos
           {tagged && validator ? divider(showPage ? 'page' : 'tree', 'verapdf') : null}
           {validator ? (
             <div {...pane('verapdf')}>
-              <Validation validator={validator} bytes={bytes} />
+              <Validation validator={validator} bytes={bytes} active={active} />
             </div>
           ) : null}
         </div>

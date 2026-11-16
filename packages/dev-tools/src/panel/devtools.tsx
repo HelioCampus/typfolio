@@ -165,7 +165,7 @@ export function Devtools({ pdfjs, bytes, validator, theme, buttonPosition, posit
           onPointerDown={startResizing}
           onKeyDown={resizeWithKeys}
         />
-        <StructureView state={state} hasBytes={bytes !== undefined} bytes={bytes} validator={validator} tools={sidePicker} onClose={() => setOpen(false)} />
+        <StructureView state={state} hasBytes={bytes !== undefined} bytes={bytes} validator={validator} active={open} tools={sidePicker} onClose={() => setOpen(false)} />
       </section>
     </div>
   );
