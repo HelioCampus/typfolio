@@ -96,7 +96,7 @@ This is evidence for the cases generated, not a proof. The JVM runs the Java sou
 
 `tools/check-verapdf-parity.ts` validates every PDF in `.build/test-output` under 15 flavours (`ua1`, `ua2`, `1a`, `1b`, `2a`, `2b`, `2u`, `3a`, `3b`, `3u`, `4`, `4e`, `4f`, `wt1a`, `wt1r`) with the WebAssembly build and with veraPDF on the JVM, and fails unless the whole report is the same: the verdict, the number of assertions, the profile, and every failed rule with its count, description, object, condition, tags and listed checks (each check's place and error text). The JVM side puts the jars before our classes, so it runs veraPDF's own Flate filter and JAXB's own `Util`. The order of failed rules is not compared, and one number is left out: veraPDF names a glyph in a check's place by, among other things, a number that is not derived from the file (`usedGlyphs[0](Font Font 1 0 234952919 0 true)`). It was the same in two JVM runs and another one in the image, where it changes from call to call.
 
-It then does the same for damaged copies: four per file, each with one to three bytes inside stream data overwritten (a fixed pseudo-random sequence, so the copies are the same on every run), under `ua1` and `2b`. Here the two sides must agree on whatever comes out, an error included.
+It also compares which flavours each file declares (`detect`). It then does the same for damaged copies: four per file, each with one to three bytes inside stream data overwritten (a fixed pseudo-random sequence, so the copies are the same on every run), under `ua1` and `2b`. Here the two sides must agree on whatever comes out, an error included.
 
 Measured on macOS arm64, Node 24: 330 of 330 runs on intact files match (22 files × 15 flavours), and 176 of 176 on damaged ones (88 files × 2 flavours). The files are Typfolio's own test outputs: no encrypted files and no embedded files with unusual filters. ### Browsers
 
@@ -115,7 +115,8 @@ To try it by hand, [`examples/verapdf-playground`](../examples/verapdf-playgroun
 | Size | About 30.8 MB, 9.6 MB with gzip -9. The exact size varies between builds. |
 | Runtime | Needs WebAssembly garbage collection, exception handling and typed function references: Node 22 with `--experimental-wasm-exnref`, Node 24+ without, and current browsers. |
 | Input size | The PDF crosses into the image as a string with one UTF-16 code unit per byte, so a file briefly takes about three times its size (the bytes, the string, the Java copy). Not measured on large files. |
-| Flavours | The 15 above, by veraPDF's ids. No WCAG flavours. Flavour detection from the file's metadata is not wired up. |
+| Flavours | The 15 above, by veraPDF's ids. No WCAG flavours. |
+| Declared flavours | `detectFlavours` is veraPDF's parser's own reading of the metadata. It was compared with the JVM for the 22 sample files, each of which declares one flavour or none; a file that declares two was not tested, because Typfolio's compiler takes one standard. |
 | Check places | A check's `context` is veraPDF's text. For a glyph it contains a number that changes from call to call, so two reports on one file can differ there. |
 | Unreadable input | Bytes that veraPDF cannot parse as a PDF throw a `VerapdfError` with code `VALIDATION`; the instance stays usable. |
 
@@ -131,11 +132,12 @@ Each patch names the exact text it replaces and the build fails when that text i
 
 The Web Image API cannot turn a JavaScript typed array into a Java `byte[]`: `JSObject.as(byte[].class)` throws `ClassCastException` for `Uint8Array`, `Int8Array` and `ArrayBuffer` (checked with GraalVM 25.5), and a proxied array costs one call per byte. Strings cross in one piece. So `validate` takes a `Uint8Array` and the package turns it into a string with one code unit per byte, which the Java entry maps back with ISO-8859-1.
 
-`packages/verapdf-wasm/src/index.ts` is the public API on top: `createValidator({ wasm })` and `validator.validate(bytes, { flavour })`, which returns `{ flavour, compliant, totalAssertions, profile, failedRules }` or throws a `VerapdfError` (`INVALID_REQUEST`, `INITIALIZATION`, `VALIDATION`). It is synchronous and has no worker of its own. Two details are deliberate:
+`packages/verapdf-wasm/src/index.ts` is the public API on top: `createValidator({ wasm })`, `validator.detectFlavours(bytes)`, `validator.validateDeclared(bytes)` and `validator.validate(bytes, { flavour })`, which returns `{ flavour, compliant, totalAssertions, profile, failedRules }` or throws a `VerapdfError` (`INVALID_REQUEST`, `INITIALIZATION`, `VALIDATION`). It is synchronous and has no worker of its own. Two details are deliberate:
 
 - The Java entry looks the flavour up with `PDFAFlavour.byFlavourId`, not `fromString`. `fromString("wt1a")` returns PDF/A-1a, on the JVM as well, so the WTPDF accessibility flavour would silently have been validated as something else.
 - The report carries the flavour the image actually used, and `validate` throws if it is not the one asked for.
 - A rule lists at most `maxChecksPerRule` failed checks (20 unless given, up to 10000), because a file with untagged content fails one rule thousands of times. The limit is veraPDF's own "displayed failed checks" setting; `failedChecks` comes from veraPDF's separate count and is exact. The Java entry calls the validator factory with no limit on failures: a limit there makes veraPDF stop at the first failures and report the rest as if nothing had been checked.
+- `detectFlavours` asks the parser for `getFlavours()`, the list. `getFlavour()` throws `IndexOutOfBoundsException` for a file that declares nothing, which is most PDFs. `validateDeclared` validates against each entry and returns no report for such a file; the callers (`typfolio-validate --flavour auto`, the panel, the playground) show that as "not validated", never as a pass.
 - `failedRules` is sorted by specification, clause (numbers as numbers) and test. veraPDF keeps failed rules in a hash map, and for the same file and build their order differed between Node and the browsers.
 
 ## Reproducibility

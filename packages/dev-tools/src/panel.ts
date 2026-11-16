@@ -23,17 +23,22 @@ export interface StructurePanelPdfJs {
 }
 
 /**
- * A veraPDF validator for the panel's "Validate" control: what `createPdfValidator` of `@typfolio/dev-tools/validate`
+ * A veraPDF validator for the panel's "veraPDF" view: what `createPdfValidator` of `@typfolio/dev-tools/validate`
  * or `createValidator` of `@typfolio/verapdf-wasm` gives, or an object of your own that forwards to one in a worker
  * and returns a promise. The panel loads no validator itself.
  */
 export interface StructurePanelValidator {
   validate(pdf: Uint8Array, options: { flavour: PdfValidationFlavour; maxChecksPerRule?: number }): PdfValidationReport | Promise<PdfValidationReport>;
+  /** The flavours the file declares. With it, the view's first choice is to validate against those. */
+  detectFlavours?(pdf: Uint8Array): PdfValidationFlavour[] | Promise<PdfValidationFlavour[]>;
 }
 
 export interface StructurePanelOptions {
   readonly pdfjs: StructurePanelPdfJs;
-  /** Adds a control that validates the PDF on show with veraPDF. Without it the panel has no such control. */
+  /**
+   * Adds a "veraPDF" view beside the tags, which validates the PDF on show: the panel then has two views to switch
+   * between. Without it the panel shows the tags only.
+   */
   readonly validator?: StructurePanelValidator;
   /**
    * The PDF to show, such as `usePdf`'s `result?.bytes`; absent until there is one. Each new one is read in place of
@@ -69,6 +74,7 @@ function checked<Options extends StructureDevtoolsOptions>(caller: string, optio
   if (typeof options !== 'object' || options === null) throw invalid('options must be an object');
   if (typeof options.pdfjs?.getDocument !== 'function') throw invalid('pdfjs must be pdf.js, such as `import * as pdfjs from \'pdfjs-dist\'`');
   if (options.validator !== undefined && typeof options.validator?.validate !== 'function') throw invalid('validator must have a validate function, such as what createPdfValidator gives');
+  if (options.validator?.detectFlavours !== undefined && typeof options.validator.detectFlavours !== 'function') throw invalid('validator.detectFlavours must be a function when it is given');
   if (options.bytes !== undefined && !(options.bytes instanceof Uint8Array)) throw invalid('bytes must be the PDF as a Uint8Array');
   if (options.theme !== undefined && !themes.has(options.theme)) throw invalid('theme must be \'system\', \'light\' or \'dark\'');
   if (options.position !== undefined && !sides.has(options.position)) throw invalid('position must be \'bottom\', \'top\', \'left\' or \'right\'');

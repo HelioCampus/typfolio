@@ -23,6 +23,9 @@ const report = validator.validate(pdfBytes, { flavour: 'ua1' });
 //                   checks: [{ error, context }] }] }
 ```
 
+`validator.detectFlavours(pdfBytes)` returns the flavours the file declares in its metadata (`['ua1']`, or `[]`), and
+`validator.validateDeclared(pdfBytes)` one report for each of them.
+
 `@typfolio/verapdf-wasm/verapdf.wasm` is the binary (about 31 MB, 10 MB gzipped); there is no default location, so
 load it explicitly. `validate` is synchronous: in a browser, call it from a worker. Flavours are veraPDF's ids:
 `ua1`, `ua2`, `1a` to `4f`, `wt1a`, `wt1r` (exported as `flavours`). A failed rule lists its first 20 failed checks, each with veraPDF's

@@ -116,10 +116,16 @@ export const css = `
 button.tf-problem:hover { text-decoration: underline; }
 .tf-problem-page { font-weight: 600; }
 
-.tf-validation { flex-shrink: 0; max-height: 40%; display: flex; flex-direction: column; min-height: 0; border-bottom: 1px solid var(--tf-border); }
-.tf-validation-bar { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding: 4px 10px; font-size: 12px; }
-.tf-validation .tf-banner { border-bottom: 0; }
-.tf-validation .tf-problems { max-height: none; flex: 1; min-height: 0; border-bottom: 0; background: var(--tf-error-bg); color: var(--tf-error-fg); }
+.tf-spacer { flex: 1; }
+.tf-view { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+.tf-view[hidden] { display: none; }
+.tf-views { display: flex; gap: 2px; padding: 2px; border-radius: 6px; background: var(--tf-bg-soft); }
+.tf-view-tab { display: flex; align-items: center; gap: 6px; padding: 2px 10px; border: 0; border-radius: 4px; background: none; color: var(--tf-muted); font-size: 12px; }
+.tf-view-tab[aria-selected="true"] { background: var(--tf-bg); color: var(--tf-fg); box-shadow: 0 0 0 1px var(--tf-border); }
+.tf-validation { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+.tf-validation-bar { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding: 6px 10px; border-bottom: 1px solid var(--tf-border); font-size: 12px; }
+.tf-validation-results { flex: 1; min-height: 0; overflow: auto; }
+.tf-validation .tf-problems { max-height: none; overflow: visible; background: var(--tf-error-bg); color: var(--tf-error-fg); }
 .tf select.tf-flavour { font: inherit; color: inherit; background: var(--tf-bg); border: 1px solid var(--tf-border); border-radius: 4px; padding: 2px 4px; }
 .tf-side.tf-validate { padding: 3px 10px; border: 1px solid var(--tf-border); color: var(--tf-fg); font-size: 12px; }
 .tf-side.tf-validate:disabled { opacity: 0.5; cursor: default; }

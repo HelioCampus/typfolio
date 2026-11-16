@@ -69,6 +69,17 @@ for (const flavour of FLAVOURS) {
 }
 console.log(`${same} of ${same + different} runs match (${pdfs.length} files x ${FLAVOURS.length} flavours)`);
 
+// Which flavours each file declares, as veraPDF's parser reads them.
+const detected = jvmReports('detect', pdfs);
+let sameDetection = 0;
+pdfs.forEach((path, index) => {
+  const wasm = String(entry({ pdf: encoded[index]!, flavour: 'detect', maxChecksPerRule: 1 }));
+  if (wasm === detected[index] && !wasm.includes('"error"')) { sameDetection++; return; }
+  different++;
+  console.error(`DIFFERENT detection ${basename(path)}\n  wasm: ${wasm.slice(0, 300)}\n  jvm:  ${detected[index]!.slice(0, 300)}`);
+});
+console.log(`${sameDetection} of ${pdfs.length} files declare the same flavours on both sides`);
+
 // Damaged files: bytes inside stream data are overwritten, which mostly hits Flate-compressed content, fonts and
 // metadata. Here the two sides must agree on whatever comes out, an error included: this is where the replacement
 // inflater has to fail the way zlib does.

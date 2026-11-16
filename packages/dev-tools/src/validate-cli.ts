@@ -10,7 +10,9 @@ Validates each file with veraPDF and prints a report. A pass is a machine check 
 one flavour's rules; it does not establish that a document is accessible.
 
 Options:
-  -f, --flavour <id>   What to validate against (default: ua1):
+  -f, --flavour <id>   What to validate against (default: ua1). "auto" validates each file against
+                       every standard it declares in its metadata; a file that declares none
+                       counts as not validated.
 ${pdfValidationFlavourIds.map(id => `                         ${id.padEnd(6)}${pdfValidationFlavours[id]}`).join('\n')}
       --format <kind>  text (default) or json
       --max-checks <n> How many failed checks of one rule to list (default: 3 as text, 20 as json)
@@ -48,7 +50,7 @@ for (let index = 0; index < args.length; index++) {
   else if (arg.startsWith('-') && arg !== '-') fail(`unknown option ${arg}\n\n${usage}`);
   else files.push(arg);
 }
-if (!(flavour in pdfValidationFlavours)) fail(`unknown flavour ${JSON.stringify(flavour)}; the flavours are ${pdfValidationFlavourIds.join(', ')}`);
+if (flavour !== 'auto' && !(flavour in pdfValidationFlavours)) fail(`unknown flavour ${JSON.stringify(flavour)}; the flavours are auto, ${pdfValidationFlavourIds.join(', ')}`);
 if (format !== 'text' && format !== 'json') fail(`unknown format ${JSON.stringify(format)}; it is text or json`);
 const maxChecksPerRule = maxChecks === undefined ? (format === 'json' ? 20 : 3) : Number(maxChecks);
 if (!Number.isInteger(maxChecksPerRule) || maxChecksPerRule < 1 || maxChecksPerRule > 10000) fail(`--max-checks must be a whole number from 1 to 10000, not ${JSON.stringify(maxChecks)}`);
@@ -66,7 +68,14 @@ type Result = { file: string } & (PdfValidationReport | { error: string });
 const results: Result[] = [];
 for (const file of files) {
   try {
-    results.push({ file, ...validator.validate(await readFile(file), { flavour: flavour as PdfValidationFlavour, maxChecksPerRule }) });
+    const bytes = await readFile(file);
+    if (flavour === 'auto') {
+      const reports = validator.validateDeclared(bytes, { maxChecksPerRule });
+      if (reports.length === 0) results.push({ file, error: 'the file declares no standard in its metadata; name one with --flavour' });
+      for (const report of reports) results.push({ file, ...report });
+    } else {
+      results.push({ file, ...validator.validate(bytes, { flavour: flavour as PdfValidationFlavour, maxChecksPerRule }) });
+    }
   } catch (error) {
     results.push({ file, error: message(error) });
   }

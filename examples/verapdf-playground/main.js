@@ -5,6 +5,7 @@ const order = ['ua1', 'ua2', '1a', '1b', '2a', '2b', '2u', '3a', '3b', '3u', '4'
 const $ = id => document.getElementById(id);
 const status = $('status');
 const select = $('flavour');
+select.add(new Option('What the file declares', 'declared'));
 for (const id of order) select.add(new Option(flavours[id], id));
 
 const worker = new Worker('./worker.js', { type: 'module' });
@@ -43,43 +44,49 @@ async function run() {
   results.replaceChildren();
   for (const file of chosen) {
     const bytes = new Uint8Array(await file.arrayBuffer());
-    const { report, error, ms } = await validate(bytes, flavour);
+    const { reports, error, ms } = await validate(bytes, flavour);
+    const size = `${(file.size / 1024).toFixed(file.size < 102400 ? 1 : 0)} kB`;
     const header = element('header', {}, element('h2', { textContent: file.name }));
     const card = element('section', { className: 'file' }, header);
-    const size = `${(file.size / 1024).toFixed(file.size < 102400 ? 1 : 0)} kB`;
     if (error) {
       header.append(element('span', { className: 'verdict error', textContent: 'ERROR' }), element('span', { className: 'meta', textContent: `${size} · ${Math.round(ms)} ms` }));
       card.append(element('p', { className: 'note', textContent: error }));
+    } else if (reports.length === 0) {
+      header.append(element('span', { className: 'verdict none', textContent: 'NOT VALIDATED' }), element('span', { className: 'meta', textContent: `${size} · ${Math.round(ms)} ms` }));
+      card.append(element('p', { className: 'note', textContent: 'The file declares no standard in its metadata, so there is nothing to validate it against. Pick a standard above to validate against it anyway.' }));
     } else {
-      const failedChecks = report.failedRules.reduce((sum, rule) => sum + rule.failedChecks, 0);
-      header.append(
-        element('span', { className: `verdict ${report.compliant ? 'pass' : 'fail'}`, textContent: `${report.compliant ? 'PASS' : 'FAIL'} ${flavours[report.flavour]}` }),
-        element('span', { className: 'meta', textContent: `${report.compliant ? '' : `${report.failedRules.length} rule${report.failedRules.length === 1 ? '' : 's'}, ${failedChecks} of `}${report.totalAssertions} checks · ${size} · ${Math.round(ms)} ms` }),
-      );
+      for (const report of reports) header.append(element('span', { className: `verdict ${report.compliant ? 'pass' : 'fail'}`, textContent: `${report.compliant ? 'PASS' : 'FAIL'} ${flavours[report.flavour]}` }));
+      header.append(element('span', { className: 'meta', textContent: `${flavour === 'declared' ? 'declared by the file · ' : ''}${size} · ${Math.round(ms)} ms` }));
       const copy = element('button', { type: 'button', textContent: 'Copy JSON' });
-      copy.onclick = () => navigator.clipboard.writeText(JSON.stringify({ file: file.name, ...report }, null, 2)).then(() => { copy.textContent = 'Copied'; }, () => { copy.textContent = 'Not copied'; });
+      copy.onclick = () => navigator.clipboard.writeText(JSON.stringify({ file: file.name, reports }, null, 2)).then(() => { copy.textContent = 'Copied'; }, () => { copy.textContent = 'Not copied'; });
       header.append(copy);
-      if (!report.compliant) {
-        card.append(element('ul', { className: 'rules' }, ...report.failedRules.map(rule => element('li', {},
-          element('details', {},
-            element('summary', {},
-              element('span', { className: 'clause', textContent: `${rule.specification}, ${rule.clause}, test ${rule.test}` }),
-              element('span', { className: 'count', textContent: rule.failedChecks > 1 ? ` · ${rule.failedChecks} failed checks` : '' }),
-              ...rule.tags.map(tag => element('span', { className: 'tag', textContent: tag })),
-              element('div', { textContent: rule.message }),
+      for (const report of reports) {
+        const failedChecks = report.failedRules.reduce((sum, rule) => sum + rule.failedChecks, 0);
+        card.append(element('p', { className: 'note summary', textContent: report.compliant
+          ? `${flavours[report.flavour]}: passes all ${report.totalAssertions} checks.`
+          : `${flavours[report.flavour]}: fails ${report.failedRules.length} rule${report.failedRules.length === 1 ? '' : 's'}, ${failedChecks} of ${report.totalAssertions} checks.` }));
+        if (!report.compliant) {
+          card.append(element('ul', { className: 'rules' }, ...report.failedRules.map(rule => element('li', {},
+            element('details', {},
+              element('summary', {},
+                element('span', { className: 'clause', textContent: `${rule.specification}, ${rule.clause}, test ${rule.test}` }),
+                element('span', { className: 'count', textContent: rule.failedChecks > 1 ? ` · ${rule.failedChecks} failed checks` : '' }),
+                ...rule.tags.map(tag => element('span', { className: 'tag', textContent: tag })),
+                element('div', { textContent: rule.message }),
+              ),
+              element('ol', { className: 'checks' },
+                ...rule.checks.map(check => element('li', {},
+                  element('span', { textContent: check.error }),
+                  element('code', { className: 'context', textContent: check.context, title: 'Where the check failed, in veraPDF’s model of the file' }),
+                )),
+                ...(rule.failedChecks > rule.checks.length ? [element('li', { className: 'more', textContent: `… and ${rule.failedChecks - rule.checks.length} more` })] : []),
+              ),
+              element('p', { className: 'rule-meta', textContent: `Checked on ${rule.object}: ${rule.condition}` }),
             ),
-            element('ol', { className: 'checks' },
-              ...rule.checks.map(check => element('li', {},
-                element('span', { textContent: check.error }),
-                element('code', { className: 'context', textContent: check.context, title: 'Where the check failed, in veraPDF’s model of the file' }),
-              )),
-              ...(rule.failedChecks > rule.checks.length ? [element('li', { className: 'more', textContent: `… and ${rule.failedChecks - rule.checks.length} more` })] : []),
-            ),
-            element('p', { className: 'rule-meta', textContent: `Checked on ${rule.object}: ${rule.condition}` }),
-          ),
-        ))));
+          ))));
+        }
+        card.append(element('p', { className: 'note', textContent: `${report.profile.name}: ${report.profile.rules} rules. ${report.profile.description}.` }));
       }
-      card.append(element('p', { className: 'note', textContent: `${report.profile.name}: ${report.profile.rules} rules. ${report.profile.description}.` }));
     }
     results.append(card);
   }

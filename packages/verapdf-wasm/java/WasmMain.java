@@ -6,7 +6,8 @@ import org.graalvm.webimage.api.JSObject;
 import org.graalvm.webimage.api.JSString;
 
 /**
- * Web Image entry: hands JavaScript one function, ({ pdf, flavour, maxChecksPerRule }) -> JSON report.
+ * Web Image entry: hands JavaScript one function, ({ pdf, flavour, maxChecksPerRule }) -> JSON report, or, for the
+ * flavour "detect", the flavours the file declares.
  *
  * The Web Image API cannot turn a JavaScript typed array into a Java byte[] (JSObject.as(byte[].class) throws
  * ClassCastException for Uint8Array, Int8Array and ArrayBuffer alike, checked with GraalVM 25.5), and a proxied
@@ -20,9 +21,11 @@ public final class WasmMain {
   private static native void export(Function<JSObject, JSString> fn);
 
   public static void main(String[] args) {
-    export(request -> JSString.of(Validate.validate(
-      request.get("pdf", String.class).getBytes(StandardCharsets.ISO_8859_1),
-      request.get("flavour", String.class),
-      request.get("maxChecksPerRule", Integer.class))));
+    export(request -> {
+      byte[] pdf = request.get("pdf", String.class).getBytes(StandardCharsets.ISO_8859_1);
+      String flavour = request.get("flavour", String.class);
+      // "detect" is not a flavour: it asks which flavours the file declares.
+      return JSString.of(flavour.equals("detect") ? Validate.detect(pdf) : Validate.validate(pdf, flavour, request.get("maxChecksPerRule", Integer.class)));
+    });
   }
 }

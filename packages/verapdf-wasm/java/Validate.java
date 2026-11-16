@@ -27,6 +27,43 @@ import org.verapdf.pdfa.validation.validators.ValidatorFactory;
 public final class Validate {
   private static boolean initialised;
 
+  /**
+   * The flavours the file declares in its metadata, as veraPDF's parser reads them: {"flavours":["2a","ua1"]}, empty
+   * when it declares none. Not PDFAParser.getFlavour(), which throws IndexOutOfBoundsException for such a file.
+   */
+  public static String detect(byte[] pdf) {
+    try {
+      initialise();
+      StringBuilder json = new StringBuilder("{\"flavours\":[");
+      try (VeraPDFFoundry foundry = Foundries.defaultInstance();
+           PDFAParser parser = foundry.createParser(new ByteArrayInputStream(pdf))) {
+        boolean first = true;
+        for (PDFAFlavour flavour : parser.getFlavours()) {
+          if (flavour == null || flavour == PDFAFlavour.NO_FLAVOUR) continue;
+          if (!first) json.append(',');
+          first = false;
+          json.append(quote(flavour.getId()));
+        }
+      }
+      return json.append("]}").toString();
+    } catch (Throwable error) {
+      return failure(error);
+    }
+  }
+
+  private static void initialise() {
+    if (!initialised) {
+      VeraGreenfieldFoundryProvider.initialise();
+      initialised = true;
+    }
+  }
+
+  private static String failure(Throwable error) {
+    java.io.StringWriter trace = new java.io.StringWriter();
+    error.printStackTrace(new java.io.PrintWriter(trace));
+    return "{\"error\":" + quote(String.valueOf(error)) + ",\"trace\":" + quote(trace.toString()) + "}";
+  }
+
   /** How many failed checks of one rule are listed when the caller does not say. */
   public static final int DEFAULT_MAX_CHECKS_PER_RULE = 20;
 
@@ -40,10 +77,7 @@ public final class Validate {
    */
   public static String validate(byte[] pdf, String flavourId, int maxChecksPerRule) {
     try {
-      if (!initialised) {
-        VeraGreenfieldFoundryProvider.initialise();
-        initialised = true;
-      }
+      initialise();
       // Not PDFAFlavour.fromString: it matches loosely, and turns "wt1a" into PDF/A-1a.
       PDFAFlavour flavour = PDFAFlavour.byFlavourId(flavourId);
       if (flavour == null || flavour == PDFAFlavour.NO_FLAVOUR || !flavour.getId().equals(flavourId)) {
@@ -58,9 +92,7 @@ public final class Validate {
         return report(flavour, result);
       }
     } catch (Throwable error) {
-      java.io.StringWriter trace = new java.io.StringWriter();
-      error.printStackTrace(new java.io.PrintWriter(trace));
-      return "{\"error\":" + quote(String.valueOf(error)) + ",\"trace\":" + quote(trace.toString()) + "}";
+      return failure(error);
     }
   }
 
@@ -146,14 +178,15 @@ public final class Validate {
     return out.append('"').toString();
   }
 
-  /** JVM entry, for tracing and for the parity baseline: Validate <flavour> <file.pdf>... prints one report per line. */
+  /** JVM entry, for tracing and for the parity baseline: Validate <flavour | detect> <file.pdf>... prints one report per line. */
   public static void main(String[] args) throws Exception {
     if (args.length < 2) {
       System.err.println("usage: Validate <flavour> <file.pdf>...");
       System.exit(2);
     }
     for (int i = 1; i < args.length; i++) {
-      System.out.println(validate(Files.readAllBytes(Paths.get(args[i])), args[0]));
+      byte[] pdf = Files.readAllBytes(Paths.get(args[i]));
+      System.out.println(args[0].equals("detect") ? detect(pdf) : validate(pdf, args[0]));
     }
   }
 }

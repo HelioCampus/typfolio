@@ -496,9 +496,22 @@ test('without a validator there is no veraPDF control; with one, the button vali
     await plain.view().findByText('1 page · 1 heading · 1 table · 0 figures');
     assert.equal(plain.view().queryByRole('region', { name: 'veraPDF validation' }), null);
 
+    // Two views: the tags show first, and the veraPDF view takes their place when its tab is chosen.
+    await view().findByText('1 page · 1 heading · 1 table · 0 figures');
+    const tabs = within(view().getByRole('tablist', { name: 'Views of the PDF' }));
+    assert.equal(tabs.getByRole('tab', { name: 'Tags' }).getAttribute('aria-selected'), 'true');
+    assert.ok(view().getByRole('region', { name: 'Tags in reading order' }));
+    assert.equal(view().queryByRole('region', { name: 'veraPDF validation' }), null);
+    fireEvent.click(tabs.getByRole('tab', { name: 'veraPDF' }));
+    await waitFor(() => assert.equal(tabs.getByRole('tab', { name: 'veraPDF' }).getAttribute('aria-selected'), 'true'));
+    assert.equal(view().queryByRole('region', { name: 'Tags in reading order' }), null);
+    // The tags' own controls go with them.
+    assert.equal(view().queryByRole('searchbox'), null);
+    assert.equal(view().queryByText('1 page · 1 heading · 1 table · 0 figures'), null);
+
     const region = within(await view().findByRole('region', { name: 'veraPDF validation' }));
     // Nothing is validated until asked.
-    assert.ok(region.getByText('Checks the file against the standard’s machine-checkable rules.'));
+    assert.ok(region.getByText('Checks the file against the standard’s machine-checkable rules, with veraPDF.'));
     assert.equal(calls.length, 0);
     const choice = region.getByRole('combobox', { name: 'What to validate against' }) as HTMLSelectElement;
     assert.equal(choice.value, 'ua1');
@@ -508,6 +521,8 @@ test('without a validator there is no veraPDF control; with one, the button vali
     await region.findByText('Passes veraPDF’s PDF/UA-1 rules (734 checks). That is a machine check: it does not show that the document is accessible.');
     assert.equal(calls.length, 1);
     assert.equal(calls[0]!.flavour, 'ua1');
+    // The tab says how it went, also while the tags are on show.
+    assert.equal((await tabs.findByRole('tab', { name: 'veraPDF: passes' })).textContent, 'veraPDF✓');
     // The validator got a copy: the page's bytes are left as they are.
     assert.notEqual(calls[0]!.bytes, bytes);
     assert.deepEqual(calls[0]!.bytes, bytes);
@@ -525,6 +540,13 @@ test('without a validator there is no veraPDF control; with one, the button vali
     assert.ok(region.getByText('TD does not contain Headers attribute'));
     assert.ok(region.getByText('root/document[0]/StructTreeRoot[0]'));
     assert.ok(region.getByText('… and 1 more'));
+    assert.equal((await tabs.findByRole('tab', { name: 'veraPDF: 1 rule failed' })).textContent, 'veraPDF1');
+    // Back to the tags: the verdict is kept for the way back.
+    fireEvent.click(tabs.getByRole('tab', { name: 'Tags' }));
+    assert.ok(await view().findByRole('region', { name: 'Tags in reading order' }));
+    assert.equal(view().queryByRole('region', { name: 'veraPDF validation' }), null);
+    fireEvent.click(tabs.getByRole('tab', { name: 'veraPDF: 1 rule failed' }));
+    assert.ok(within(await view().findByRole('region', { name: 'veraPDF validation' })).getByText('Fails 1 rule of PDF/UA-2: 2 of 1350 checks'));
     assert.equal(region.queryByText(/^Passes veraPDF/), null);
   } finally {
     panel.unmount();
@@ -538,6 +560,7 @@ test('once asked, a new PDF is validated too, and a validator that fails says wh
   const { calls, validator } = scripted({ flavour: 'ua1', compliant: true, totalAssertions: 10, profile, failedRules: [] }, new Error('veraPDF could not read the file'), { flavour: 'ua1', compliant: true, totalAssertions: 12, profile, failedRules: [] });
   const panel = mountStructurePanel(element, { pdfjs, validator });
   try {
+    fireEvent.click(await view().findByRole('tab', { name: 'veraPDF' }));
     const region = within(await view().findByRole('region', { name: 'veraPDF validation' }));
     // No PDF, nothing to validate.
     assert.ok(region.getByText('No PDF yet.'));
@@ -563,8 +586,44 @@ test('once asked, a new PDF is validated too, and a validator that fails says wh
   }
 });
 
+test('a validator that reads what the file declares offers that first: one verdict per declared standard, or none declared', async () => {
+  const { element, view } = target();
+  const bytes = await withHeader();
+  const { calls, validator } = scripted({ flavour: 'ua1', compliant: true, totalAssertions: 5, profile, failedRules: [] }, { flavour: 'ua1', compliant: false, totalAssertions: 7, profile, failedRules: [rule] });
+  let declared: ('2a' | 'ua1')[] = ['2a', 'ua1'];
+  const detected: Uint8Array[] = [];
+  const panel = mountStructurePanel(element, { pdfjs, bytes, validator: { ...validator, detectFlavours: async pdf => { detected.push(pdf); return declared; } } });
+  try {
+    fireEvent.click(await view().findByRole('tab', { name: 'veraPDF' }));
+    const region = within(await view().findByRole('region', { name: 'veraPDF validation' }));
+    const choice = region.getByRole('combobox', { name: 'What to validate against' }) as HTMLSelectElement;
+    assert.equal(choice.value, 'declared');
+    assert.deepEqual([...choice.options].slice(0, 2).map(option => option.textContent), ['What the file declares', 'PDF/UA-1']);
+
+    fireEvent.click(region.getByRole('button', { name: 'Validate' }));
+    await region.findByText('The PDF declares PDF/A-2a and PDF/UA-1.');
+    assert.deepEqual(calls.map(call => call.flavour), ['2a', 'ua1']);
+    assert.ok(region.getByText(/^Passes veraPDF’s PDF\/A-2a rules \(5 checks\)/));
+    assert.ok(region.getByText('Fails 1 rule of PDF/UA-1: 2 of 7 checks'));
+    assert.ok(await view().findByRole('tab', { name: 'veraPDF: 1 rule failed' }));
+    // Detection got a copy of the bytes too.
+    assert.notEqual(detected[0], bytes);
+
+    // A file that declares nothing is not validated, and says so; that is not a pass.
+    declared = [];
+    fireEvent.click(region.getByRole('button', { name: 'Validate' }));
+    await region.findByText('The PDF declares no standard in its metadata, so there is nothing to validate it against. Pick one above to validate against it anyway.');
+    assert.equal(calls.length, 2);
+    assert.equal(region.queryByText(/^Passes veraPDF/), null);
+    assert.ok(await view().findByRole('tab', { name: 'veraPDF: the PDF declares no standard' }));
+  } finally {
+    panel.unmount();
+  }
+});
+
 test('a validator without a validate function is refused', async () => {
   const { element } = target();
   assert.throws(() => mountStructurePanel(element, { pdfjs, validator: {} as never }), (error: unknown) => error instanceof TypstPdfError && error.code === 'INVALID_REQUEST' && /validator must have a validate function/.test(error.message));
+  assert.throws(() => mountStructurePanel(element, { pdfjs, validator: { validate: () => { throw new Error('unused'); }, detectFlavours: true } as never }), (error: unknown) => error instanceof TypstPdfError && error.code === 'INVALID_REQUEST' && /detectFlavours must be a function/.test(error.message));
 });
 

@@ -78,6 +78,17 @@ export interface ValidateOptions {
 
 export interface Validator {
   /**
+   * The flavours the file declares in its metadata (`pdfaid:part` with `pdfaid:conformance`, `pdfuaid:part`), as
+   * veraPDF reads them: `['2a', 'ua1']` for a file compiled as PDF/A-2a and PDF/UA-1, empty when it declares none. A
+   * declaration is a claim, not a verdict. Throws `VALIDATION` when veraPDF cannot read the file as a PDF.
+   */
+  detectFlavours(pdf: Uint8Array): Flavour[];
+  /**
+   * Validates the file against every flavour it declares: one report each, in `detectFlavours`' order, and none for
+   * a file that declares none. That is not a pass: there was nothing to check it against.
+   */
+  validateDeclared(pdf: Uint8Array, options?: { maxChecksPerRule?: number }): ValidationReport[];
+  /**
    * Validates one PDF against one flavour. Throws a `VerapdfError`: `INVALID_REQUEST` for input that is not bytes, a
    * flavour that is not in `flavours` or a `maxChecksPerRule` out of range, `VALIDATION` when veraPDF cannot read the
    * file as a PDF.
@@ -122,7 +133,18 @@ export async function createValidator(options: ValidatorOptions): Promise<Valida
   } catch (cause) {
     throw new VerapdfError('INITIALIZATION', `The veraPDF image could not be started: ${cause instanceof Error ? cause.message : String(cause)}`, { cause });
   }
-  return {
+  const detectFlavours = (pdf: Uint8Array): Flavour[] => {
+    if (!(pdf instanceof Uint8Array)) throw new VerapdfError('INVALID_REQUEST', 'detectFlavours takes the PDF as a Uint8Array');
+    const raw: { flavours?: string[]; error?: string; trace?: string } = JSON.parse(String(entry({ pdf: byteString(pdf), flavour: 'detect', maxChecksPerRule: 1 })));
+    if (raw.error !== undefined) throw new VerapdfError('VALIDATION', `veraPDF could not read the file: ${raw.error}`, { cause: raw.trace });
+    // A flavour this build has no profile for (none is known) could not be validated against, so it is left out.
+    return (raw.flavours ?? []).filter((id): id is Flavour => (flavours as readonly string[]).includes(id));
+  };
+  const validator: Validator = {
+    detectFlavours,
+    validateDeclared(pdf, options) {
+      return detectFlavours(pdf).map(flavour => validator.validate(pdf, { flavour, maxChecksPerRule: options?.maxChecksPerRule }));
+    },
     validate(pdf, options) {
       if (!(pdf instanceof Uint8Array)) throw new VerapdfError('INVALID_REQUEST', 'validate takes the PDF as a Uint8Array');
       const flavour = options?.flavour;
@@ -146,4 +168,5 @@ export async function createValidator(options: ValidatorOptions): Promise<Valida
       };
     },
   };
+  return validator;
 }

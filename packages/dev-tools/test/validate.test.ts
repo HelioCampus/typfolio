@@ -10,7 +10,7 @@ import { createCompiler, defineTemplate, TypstPdfError } from '@typfolio/core';
 import type { ErrorCode } from '@typfolio/core';
 import * as main from '../dist/index.js';
 import * as validateModule from '../dist/validate.js';
-import { createPdfValidator, formatValidationReport, pdfValidationFlavourIds, pdfValidationFlavours, validatePdf } from '../dist/validate.js';
+import { createPdfValidator, formatValidationReport, pdfValidationFlavourIds, pdfValidationFlavours, validateDeclaredPdf, validatePdf } from '../dist/validate.js';
 
 const root = new URL('../../../', import.meta.url);
 const file = (path: string) => readFile(new URL(path, root));
@@ -51,6 +51,17 @@ test('validatePdf finds the installed binary in Node: a PDF/UA-1 compile passes 
 test('a validator of your own takes the binary you give it and gives the same reports', { skip }, async () => {
   const validator = await createPdfValidator({ wasm: await file('packages/verapdf-wasm/generated/verapdf.wasm') });
   assert.deepEqual(validator.validate(tagged, { flavour: 'ua2' }), await validatePdf(tagged, { flavour: 'ua2' }));
+});
+
+test('validateDeclaredPdf validates against what the file declares, and returns nothing for a file that declares nothing', { skip }, async () => {
+  const [report, ...rest] = await validateDeclaredPdf(ua1);
+  assert.deepEqual(rest, []);
+  assert.deepEqual(report, await validatePdf(ua1, { flavour: 'ua1' }));
+  assert.deepEqual(await validateDeclaredPdf(tagged), []);
+  const validator = await createPdfValidator();
+  assert.deepEqual(validator.detectFlavours(ua1), ['ua1']);
+  assert.deepEqual(validator.detectFlavours(tagged), []);
+  await assert.rejects(validateDeclaredPdf(new TextEncoder().encode('not a pdf')), hasCode('INVALID_REQUEST'));
 });
 
 test('wrong requests and unreadable files are TypstPdfErrors with core\'s codes', { skip }, async () => {
@@ -120,6 +131,14 @@ test('typfolio-validate prints a report per file and exits 0, 1 or 2', { skip },
     assert.ok(limited.failedRules.some((rule: { failedChecks: number }) => rule.failedChecks > 1));
     assert.equal((await cli('--max-checks', '0', bad)).code, 2);
 
+    // --flavour auto: each file against what it declares; one that declares nothing was not validated.
+    const auto = await cli('--flavour', 'auto', good);
+    assert.equal(auto.code, 0);
+    assert.match(auto.stdout, /good\.pdf: PASS PDF\/UA-1 /);
+    const undeclared = await cli('-f', 'auto', good, bad);
+    assert.equal(undeclared.code, 2);
+    assert.match(undeclared.stdout, /bad\.pdf: ERROR the file declares no standard in its metadata; name one with --flavour/);
+
     const unreadable = await cli(good, junk);
     assert.equal(unreadable.code, 2);
     assert.match(unreadable.stdout, /junk\.pdf: ERROR /);
@@ -132,7 +151,7 @@ test('typfolio-validate prints a report per file and exits 0, 1 or 2', { skip },
 test('typfolio-validate refuses wrong usage with status 2 and explains itself', async () => {
   const unknown = await cli('-f', 'ua9', 'a.pdf');
   assert.equal(unknown.code, 2);
-  assert.match(unknown.stderr, /unknown flavour "ua9"; the flavours are ua1, ua2, /);
+  assert.match(unknown.stderr, /unknown flavour "ua9"; the flavours are auto, ua1, ua2, /);
   assert.equal((await cli()).code, 2);
   assert.equal((await cli('--format', 'xml', 'a.pdf')).code, 2);
   assert.equal((await cli('--nope')).code, 2);

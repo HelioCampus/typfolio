@@ -20,6 +20,16 @@ export interface PdfValidateOptions {
 export interface PdfValidator {
   /** Synchronous, and from milliseconds to seconds long: in a page, consider a worker. */
   validate(pdf: Uint8Array, options: PdfValidateOptions): PdfValidationReport;
+  /**
+   * The flavours the file declares in its metadata, as veraPDF reads them: `['2a', 'ua1']` for a file compiled as
+   * PDF/A-2a and PDF/UA-1, empty when it declares none. A declaration is a claim, not a verdict.
+   */
+  detectFlavours(pdf: Uint8Array): PdfValidationFlavour[];
+  /**
+   * Validates the file against every flavour it declares: one report each, and none for a file that declares none,
+   * which is not a pass.
+   */
+  validateDeclared(pdf: Uint8Array, options?: { maxChecksPerRule?: number }): PdfValidationReport[];
 }
 
 export interface PdfValidatorOptions {
@@ -97,18 +107,28 @@ export async function createPdfValidator(options: PdfValidatorOptions = {}): Pro
   } catch (error) {
     throw translated(caller, error);
   }
+  const guarded = <Result>(name: string, call: () => Result): Result => {
+    try {
+      return call();
+    } catch (error) {
+      throw translated(name, error);
+    }
+  };
   return {
-    validate(pdf, validateOptions) {
-      try {
-        return validator.validate(pdf, validateOptions);
-      } catch (error) {
-        throw translated('validate', error);
-      }
-    },
+    validate: (pdf, validateOptions) => guarded('validate', () => validator.validate(pdf, validateOptions)),
+    detectFlavours: pdf => guarded('detectFlavours', () => validator.detectFlavours(pdf)),
+    validateDeclared: (pdf, declaredOptions) => guarded('validateDeclared', () => validator.validateDeclared(pdf, declaredOptions)),
   };
 }
 
 let shared: Promise<PdfValidator> | undefined;
+function sharedValidator(wasm: PdfValidatorOptions['wasm']): Promise<PdfValidator> {
+  shared ??= createPdfValidator({ wasm }).catch(cause => {
+    shared = undefined;
+    throw cause;
+  });
+  return shared;
+}
 
 /**
  * Validates one PDF against one flavour with veraPDF, for a test or a script: `(await validatePdf(bytes, { flavour:
@@ -116,11 +136,17 @@ let shared: Promise<PdfValidator> | undefined;
  * Rejects like `createPdfValidator` and its `validate`.
  */
 export async function validatePdf(bytes: Uint8Array, options: PdfValidateOptions & PdfValidatorOptions): Promise<PdfValidationReport> {
-  shared ??= createPdfValidator({ wasm: options?.wasm }).catch(cause => {
-    shared = undefined;
-    throw cause;
-  });
-  return (await shared).validate(bytes, { flavour: options?.flavour, maxChecksPerRule: options?.maxChecksPerRule });
+  return (await sharedValidator(options?.wasm)).validate(bytes, { flavour: options?.flavour, maxChecksPerRule: options?.maxChecksPerRule });
+}
+
+/**
+ * Validates one PDF against every flavour it declares in its metadata: `const reports = await
+ * validateDeclaredPdf(bytes)`. One report per declared flavour, and none for a file that declares none, so check the
+ * length before `every(report => report.compliant)`. For a test that a template produces a given standard, name the
+ * flavour with `validatePdf`: this only checks what the file claims. Shares `validatePdf`'s validator.
+ */
+export async function validateDeclaredPdf(bytes: Uint8Array, options: { maxChecksPerRule?: number } & PdfValidatorOptions = {}): Promise<PdfValidationReport[]> {
+  return (await sharedValidator(options?.wasm)).validateDeclared(bytes, { maxChecksPerRule: options?.maxChecksPerRule });
 }
 
 /**

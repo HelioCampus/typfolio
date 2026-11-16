@@ -21,6 +21,7 @@ let wasm!: Buffer;
 let validator!: Validator;
 let ua1!: Uint8Array;
 let tagged!: Uint8Array;
+let archival!: Uint8Array;
 before(async () => {
   if (skip) return;
   wasm = await file('packages/verapdf-wasm/generated/verapdf.wasm');
@@ -37,6 +38,24 @@ before(async () => {
   const assets = { 'assets/chart.svg': await file('fixtures/basic/chart.svg') };
   ua1 = (await compiler.compile(request, { assets, pdf: { standards: ['ua-1'], creationTimestamp: 1700000000 } })).bytes;
   tagged = (await compiler.compile(request, { assets, pdf: { creationTimestamp: 1700000000 } })).bytes;
+  // Typfolio's compiler takes one standard, so there is no fixture that declares two.
+  archival = (await compiler.compile(request, { assets, pdf: { standards: ['a-2b'], creationTimestamp: 1700000000 } })).bytes;
+});
+
+test('the flavour a file declares is read from its metadata, and validateDeclared validates against it', { skip }, () => {
+  assert.deepEqual(validator.detectFlavours(ua1), ['ua1']);
+  assert.deepEqual(validator.detectFlavours(archival), ['2b']);
+  // A plain tagged file declares nothing: there is nothing to validate it against, which is not a pass.
+  assert.deepEqual(validator.detectFlavours(tagged), []);
+  assert.deepEqual(validator.validateDeclared(tagged), []);
+
+  const reports = validator.validateDeclared(archival, { maxChecksPerRule: 1 });
+  assert.deepEqual(reports.map(report => [report.flavour, report.compliant]), [['2b', true]]);
+  assert.deepEqual(reports[0], validator.validate(archival, { flavour: '2b', maxChecksPerRule: 1 }));
+  assert.deepEqual(validator.validateDeclared(ua1), [validator.validate(ua1, { flavour: 'ua1' })]);
+
+  assert.throws(() => validator.detectFlavours(new TextEncoder().encode('not a pdf')), hasCode('VALIDATION'));
+  assert.throws(() => validator.detectFlavours('%PDF' as never), hasCode('INVALID_REQUEST'));
 });
 
 test('a PDF/UA-1 compile passes ua1, and the report says what was checked', { skip }, () => {
