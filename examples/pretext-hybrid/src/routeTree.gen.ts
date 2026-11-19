@@ -13,6 +13,7 @@ import { Route as IndexRouteImport } from './routes/index'
 import { Route as AsciiRouteImport } from './routes/ascii'
 import { Route as EditorialRouteImport } from './routes/editorial'
 import { Route as PerformanceRouteImport } from './routes/performance'
+import { Route as ValidateRouteImport } from './routes/validate'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
@@ -34,18 +35,25 @@ const PerformanceRoute = PerformanceRouteImport.update({
   path: '/performance',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ValidateRoute = ValidateRouteImport.update({
+  id: '/validate',
+  path: '/validate',
+  getParentRoute: () => rootRouteImport,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/ascii': typeof AsciiRoute
   '/editorial': typeof EditorialRoute
   '/performance': typeof PerformanceRoute
+  '/validate': typeof ValidateRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/ascii': typeof AsciiRoute
   '/editorial': typeof EditorialRoute
   '/performance': typeof PerformanceRoute
+  '/validate': typeof ValidateRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -53,13 +61,14 @@ export interface FileRoutesById {
   '/ascii': typeof AsciiRoute
   '/editorial': typeof EditorialRoute
   '/performance': typeof PerformanceRoute
+  '/validate': typeof ValidateRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/ascii' | '/editorial' | '/performance'
+  fullPaths: '/' | '/ascii' | '/editorial' | '/performance' | '/validate'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/ascii' | '/editorial' | '/performance'
-  id: '__root__' | '/' | '/ascii' | '/editorial' | '/performance'
+  to: '/' | '/ascii' | '/editorial' | '/performance' | '/validate'
+  id: '__root__' | '/' | '/ascii' | '/editorial' | '/performance' | '/validate'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -67,6 +76,7 @@ export interface RootRouteChildren {
   AsciiRoute: typeof AsciiRoute
   EditorialRoute: typeof EditorialRoute
   PerformanceRoute: typeof PerformanceRoute
+  ValidateRoute: typeof ValidateRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -99,6 +109,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof PerformanceRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/validate': {
+      id: '/validate'
+      path: '/validate'
+      fullPath: '/validate'
+      preLoaderRoute: typeof ValidateRouteImport
+      parentRoute: typeof rootRouteImport
+    }
   }
 }
 
@@ -107,6 +124,7 @@ const rootRouteChildren: RootRouteChildren = {
   AsciiRoute: AsciiRoute,
   EditorialRoute: EditorialRoute,
   PerformanceRoute: PerformanceRoute,
+  ValidateRoute: ValidateRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

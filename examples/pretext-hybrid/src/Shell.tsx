@@ -7,7 +7,7 @@ interface ShellProps {
   readonly title: string;
   readonly lede: string;
   readonly wide?: boolean;
-  readonly section?: 'pretext' | 'performance';
+  readonly section?: 'pretext' | 'performance' | 'validate';
   readonly children: ReactNode;
 }
 
@@ -32,7 +32,9 @@ export function Shell({ eyebrow, title, lede, wide = false, section = 'pretext',
       <footer>
         {section === 'pretext'
           ? 'pretext (MIT) lays out · Typst renders · Libertinus Serif (OFL) on both sides'
-          : 'Typst renders · Web Workers compile · Synthetic data stays in your browser'}
+          : section === 'validate'
+            ? 'veraPDF validates · WebAssembly runs it in a Web Worker · Your files stay in your browser'
+            : 'Typst renders · Web Workers compile · Synthetic data stays in your browser'}
       </footer>
     </div>
   );

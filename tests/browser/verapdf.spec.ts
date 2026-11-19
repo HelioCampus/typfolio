@@ -2,7 +2,7 @@ import { existsSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { test, expect } from '@playwright/test';
-import { createCompiler, defineTemplate } from '@typfolio/core';
+import { samplePdfs } from './sample-pdfs.ts';
 import { createValidator } from '../../packages/verapdf-wasm/dist/index.js';
 import type { Flavour, ValidationReport, Validator } from '../../packages/verapdf-wasm/dist/index.js';
 
@@ -10,7 +10,6 @@ import type { Flavour, ValidationReport, Validator } from '../../packages/verapd
 // 'unsafe-eval', and compared with the same build in Node on PDFs compiled here.
 const root = new URL('../../', import.meta.url);
 const file = (path: string) => readFile(new URL(path, root));
-const text = async (path: string) => (await file(path)).toString();
 const page = 'http://127.0.0.1:4278/fixtures/browser/verapdf.html';
 
 // The binary is built locally by `npm run build:verapdf`; without it there is nothing to test.
@@ -24,18 +23,7 @@ let ua1!: Uint8Array;
 let tagged!: Uint8Array;
 test.beforeAll(async () => {
   reference = await createValidator({ wasm: await file('packages/verapdf-wasm/generated/verapdf.wasm') });
-  const compiler = await createCompiler({
-    wasm: await file('packages/wasm/generated/compiler_bg.wasm'),
-    fonts: await Promise.all(['Regular', 'Bold'].map(style => file(`fixtures/fonts/LibertinusSerif-${style}.otf`))),
-  });
-  const template = defineTemplate({
-    files: { 'main.typ': await text('fixtures/basic/main.typ'), 'partials/layout.typ': await text('fixtures/basic/partials/layout.typ') },
-    schemaPath: 'input.json',
-  });
-  const request = template(JSON.parse(await text('fixtures/basic/input.json')));
-  const assets = { 'assets/chart.svg': await file('fixtures/basic/chart.svg') };
-  ua1 = (await compiler.compile(request, { assets, pdf: { standards: ['ua-1'], creationTimestamp: 1700000000 } })).bytes;
-  tagged = (await compiler.compile(request, { assets, pdf: { creationTimestamp: 1700000000 } })).bytes;
+  ({ ua1, plain: tagged } = await samplePdfs());
 });
 
 test('veraPDF validates in a module worker under a CSP without unsafe-eval, with the same reports as in Node', async ({ page: tab }, testInfo) => {

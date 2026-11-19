@@ -1,7 +1,7 @@
 import { Link } from '@tanstack/react-router';
 import '../../../fixtures/browser/demo-header.css';
 
-export function Topbar({ section }: { readonly section: 'home' | 'pretext' | 'performance' }) {
+export function Topbar({ section }: { readonly section: 'home' | 'pretext' | 'performance' | 'validate' }) {
   return (
     <header className="topbar typfolio-header">
       <Link className="typfolio-brand" to="/" aria-label="Typfolio home">
@@ -13,6 +13,7 @@ export function Topbar({ section }: { readonly section: 'home' | 'pretext' | 'pe
           <Link activeProps={{ className: 'active' }} activeOptions={{ exact: true }} to="/">Overview</Link>
           <Link className={section === 'pretext' ? 'active' : undefined} aria-current={section === 'pretext' ? 'true' : undefined} to="/ascii">Pretext</Link>
           <Link activeProps={{ className: 'active' }} to="/performance">Worker batch</Link>
+          <Link activeProps={{ className: 'active' }} to="/validate">Validate</Link>
         </nav>
         <a className="typfolio-source" href="https://github.com/HelioCampus/typfolio" target="_blank" rel="noreferrer" aria-label="Typfolio on GitHub">GitHub ↗</a>
       </div>
