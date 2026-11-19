@@ -215,10 +215,11 @@ button.tf-problem:hover { text-decoration: underline; }
   text-transform: uppercase;
 }
 .tf-tree ul ul { padding-left: 16px; }
-.tf-row { display: flex; align-items: center; min-width: 0; padding-left: 6px; border-radius: 3px; }
+.tf-row { display: flex; align-items: center; min-width: 0; border-radius: 3px; }
 .tf-row:hover { background: var(--tf-hover); }
 .tf-row[data-selected="true"] { background: var(--tf-selected); }
-.tf-twist, .tf-twist-space { flex-shrink: 0; width: 18px; height: 22px; }
+/* Both buttons of a row are 24px tall, the smallest pointer target WCAG 2.5.8 accepts. */
+.tf-twist, .tf-twist-space { flex-shrink: 0; width: 24px; height: 24px; }
 .tf-twist {
   padding: 0;
   border: 0;
@@ -234,7 +235,7 @@ button.tf-problem:hover { text-decoration: underline; }
   align-items: center;
   gap: 8px;
   min-width: 0;
-  min-height: 22px;
+  min-height: 24px;
   padding: 0 8px 0 2px;
   border: 0;
   background: none;
