@@ -104,6 +104,7 @@ const report = await validatePdf(result.bytes, { flavour: 'ua1' });
 // report.failedRules: [{ specification, clause, test, failedChecks, message, tags, object, condition, checks, context }], ordered by clause
 //   message: what the standard requires; tags: veraPDF's topics, such as ['structure', 'table']
 //   checks: [{ error, context }]  each failed check: what was wrong, with the values found, and where
+// report.logs: [{ level, message, occurrences }]  what veraPDF logged while reading the file
 assert.ok(report.compliant, formatValidationReport(report));
 ```
 
@@ -112,7 +113,8 @@ assert.ok(report.compliant, formatValidationReport(report));
 - `validateDeclaredPdf(bytes)` validates against every standard the file declares in its metadata (`pdfuaid:part`, `pdfaid:part` with `pdfaid:conformance`) and returns one report for each, in an array: for files you did not produce, or a folder of mixed outputs. A file that declares nothing gives an empty array, which is not a pass, so check the length. For a test that a template produces a given standard, name the flavour with `validatePdf`: this only checks what the file claims. A validator's `detectFlavours(bytes)` returns the declared ids alone.
 - `flavour` is one of veraPDF's ids: `ua1`, `ua2`, `1a`, `1b`, `2a`, `2b`, `2u`, `3a`, `3b`, `3u`, `4`, `4e`, `4f`, `wt1a`, `wt1r`. `pdfValidationFlavours` names each (`'PDF/UA-1'`) and `pdfValidationFlavourIds` lists them. `validatePdf` does not read the flavour from the file: say which standard you compiled for.
 - A rule that fails often lists its first 20 checks; `maxChecksPerRule` (1 to 10000) changes that, and `failedChecks` is exact either way. A check's `error` is veraPDF's own sentence with the values it found, such as `The "part" property of the PDF/UA Identification Schema is 1 instead of 2`. Its `context` is a path in veraPDF's model of the file, with PDF object numbers (`…/pages[0](14 0 obj PDPage)/…`); for a glyph it contains a number that changes from run to run.
-- `formatValidationReport(report, name?)` is the report as text: each failed rule, and under it the checks that are listed.
+- `logs` is what veraPDF logged at `WARNING` or `SEVERE` while it read the file, such as a font program or a content stream it could not parse. A file can pass with messages there: veraPDF then validated what it could read, so for a strict test require `report.compliant && report.logs.length === 0`.
+- `formatValidationReport(report, name?)` is the report as text: each failed rule, under it the checks that are listed, and veraPDF's messages.
 - Errors are `TypstPdfError`s: `INITIALIZATION` when `@typfolio/verapdf-wasm` is not installed or its binary cannot be started, `INVALID_REQUEST` for a flavour that does not exist, for bytes veraPDF cannot read as a PDF, and in a browser when no `wasm` is given.
 
 `typfolio-validate` does the same from a shell or a CI step:

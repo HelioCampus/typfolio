@@ -20,7 +20,8 @@ const validator = await createValidator({ wasm });          // the bytes of vera
 const report = validator.validate(pdfBytes, { flavour: 'ua1' });
 // { flavour, compliant, totalAssertions, profile: { name, description, rules },
 //   failedRules: [{ specification, clause, test, failedChecks, message, tags, object, condition, context,
-//                   checks: [{ error, context }] }] }
+//                   checks: [{ error, context }] }],
+//   logs: [{ level, message, occurrences }] }   what veraPDF logged while reading the file
 ```
 
 `validator.detectFlavours(pdfBytes)` returns the flavours the file declares in its metadata (`['ua1']`, or `[]`), and

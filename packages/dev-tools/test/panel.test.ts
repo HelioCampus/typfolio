@@ -489,14 +489,14 @@ const rule = {
 };
 const profile = { name: 'A profile', description: 'Rules', rules: 106 };
 /** A validator that answers from a list, in a later task like one in a worker, and records what it was asked. */
-function scripted(...answers: (PdfValidationReport | Error)[]) {
+function scripted(...answers: (Omit<PdfValidationReport, 'logs'> & { logs?: PdfValidationReport['logs'] } | Error)[]) {
   const calls: { bytes: Uint8Array; flavour: string }[] = [];
   const validator: StructurePanelValidator = {
     async validate(pdf, { flavour }) {
       calls.push({ bytes: pdf, flavour });
       const answer = answers[Math.min(calls.length, answers.length) - 1]!;
       if (answer instanceof Error) throw answer;
-      return { ...answer, flavour };
+      return { logs: [], ...answer, flavour };
     },
   };
   return { calls, validator };
@@ -554,6 +554,26 @@ test('without a validator there is no veraPDF view; with one it is beside the ta
   } finally {
     panel.unmount();
     without.unmount();
+  }
+});
+
+test('what veraPDF logged while reading the file shows with the verdict, open when the file passes', async () => {
+  const { element, view } = target();
+  const logs = [{ level: 'WARNING' as const, message: 'Error while parsing content stream', occurrences: 3 }];
+  const { validator } = scripted({ flavour: 'ua1', compliant: true, totalAssertions: 9, profile, failedRules: [], logs }, { flavour: 'ua1', compliant: false, totalAssertions: 9, profile, failedRules: [rule], logs });
+  const panel = mountStructurePanel(element, { pdfjs, bytes: await withHeader(), validator });
+  try {
+    const region = within(await view().findByRole('region', { name: 'veraPDF validation' }));
+    fireEvent.click(region.getByRole('button', { name: 'Validate' }));
+    // A pass with messages: veraPDF validated what it could read, which is said beside the verdict.
+    const summary = await region.findByText('veraPDF logged 1 message while reading the file: it validated what it could read');
+    assert.equal((summary.closest('details') as HTMLDetailsElement).open, true);
+    assert.equal(summary.closest('details')!.querySelector('li')!.textContent, 'WARNING (3×): Error while parsing content stream');
+    fireEvent.click(region.getByRole('button', { name: 'Validate' }));
+    const failed = await region.findByText('veraPDF logged 1 message while reading the file');
+    assert.equal((failed.closest('details') as HTMLDetailsElement).open, false);
+  } finally {
+    panel.unmount();
   }
 });
 

@@ -91,6 +91,14 @@ test('every flavour has a name, in listing order, and a report formats as text',
   assert.ok(formatValidationReport(short).includes(`    … and ${repeated.failedChecks - 1} more`));
 });
 
+test('a report\'s veraPDF messages are printed with it, and a pass with messages says so', () => {
+  const profile = { name: 'P', description: 'D', rules: 1 };
+  const logs = [{ level: 'WARNING' as const, message: 'Error while parsing content stream', occurrences: 2 }, { level: 'SEVERE' as const, message: 'Broken', occurrences: 1 }];
+  assert.equal(formatValidationReport({ flavour: 'ua1', compliant: true, totalAssertions: 4, profile, failedRules: [], logs }, 'a.pdf'),
+    'a.pdf: PASS PDF/UA-1 (4 checks), with 2 veraPDF messages\n  WARNING (2x): Error while parsing content stream\n  SEVERE: Broken');
+  assert.equal(formatValidationReport({ flavour: 'ua1', compliant: true, totalAssertions: 4, profile, failedRules: [], logs: [] }), 'PASS PDF/UA-1 (4 checks)');
+});
+
 test('the main entry does not carry the validation exports', () => {
   for (const name of Object.keys(validateModule)) assert.equal(name in main, false, `${name} leaked into the main entry`);
 });

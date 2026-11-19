@@ -9,7 +9,7 @@ import { TypstPdfError } from '@typfolio/core';
 import { pdfValidationFlavours, type PdfValidationFlavour, type PdfValidationReport } from './validation.js';
 
 export { pdfValidationFlavourIds, pdfValidationFlavours } from './validation.js';
-export type { PdfValidationCheck, PdfValidationFlavour, PdfValidationReport, PdfValidationRule } from './validation.js';
+export type { PdfValidationCheck, PdfValidationFlavour, PdfValidationLog, PdfValidationReport, PdfValidationRule } from './validation.js';
 
 export interface PdfValidateOptions {
   flavour: PdfValidationFlavour;
@@ -156,7 +156,9 @@ export async function validateDeclaredPdf(bytes: Uint8Array, options: { maxCheck
 export function formatValidationReport(report: PdfValidationReport, name?: string): string {
   const flavour = pdfValidationFlavours[report.flavour] ?? report.flavour;
   const subject = name === undefined ? '' : `${name}: `;
-  if (report.compliant) return `${subject}PASS ${flavour} (${report.totalAssertions} checks)`;
+  // What veraPDF logged while reading the file: a pass with messages means it validated what it could read.
+  const logs = (report.logs ?? []).map(log => `  ${log.level}${log.occurrences > 1 ? ` (${log.occurrences}x)` : ''}: ${log.message}`);
+  if (report.compliant) return [`${subject}PASS ${flavour} (${report.totalAssertions} checks)${logs.length > 0 ? `, with ${logs.length} veraPDF message${logs.length === 1 ? '' : 's'}` : ''}`, ...logs].join('\n');
   const failed = report.failedRules.reduce((sum, rule) => sum + rule.failedChecks, 0);
   const lines = [`${subject}FAIL ${flavour}: ${report.failedRules.length} rule${report.failedRules.length === 1 ? '' : 's'}, ${failed} of ${report.totalAssertions} checks`];
   for (const rule of report.failedRules) {
@@ -164,5 +166,5 @@ export function formatValidationReport(report: PdfValidationReport, name?: strin
     for (const check of rule.checks) lines.push(...(check.error ? [`    ${check.error}`] : []), `      at ${check.context}`);
     if (rule.failedChecks > rule.checks.length) lines.push(`    … and ${rule.failedChecks - rule.checks.length} more`);
   }
-  return lines.join('\n');
+  return [...lines, ...logs].join('\n');
 }

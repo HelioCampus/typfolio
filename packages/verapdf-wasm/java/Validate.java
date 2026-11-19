@@ -6,6 +6,11 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.TreeSet;
+import java.util.logging.Handler;
+import java.util.logging.Level;
+import java.util.logging.LogManager;
+import java.util.logging.LogRecord;
+import java.util.logging.Logger;
 
 import org.verapdf.gf.foundry.VeraGreenfieldFoundryProvider;
 import org.verapdf.pdfa.Foundries;
@@ -34,6 +39,8 @@ public final class Validate {
   public static String detect(byte[] pdf) {
     try {
       initialise();
+      // Nothing is reported from here, but nothing should be printed either.
+      LogManager.getLogManager().reset();
       StringBuilder json = new StringBuilder("{\"flavours\":[");
       try (VeraPDFFoundry foundry = Foundries.defaultInstance();
            PDFAParser parser = foundry.createParser(new ByteArrayInputStream(pdf))) {
@@ -83,20 +90,76 @@ public final class Validate {
       if (flavour == null || flavour == PDFAFlavour.NO_FLAVOUR || !flavour.getId().equals(flavourId)) {
         return "{\"error\":" + quote("unknown flavour: " + flavourId) + "}";
       }
+      LogCollector logs = LogCollector.start();
       try (VeraPDFFoundry foundry = Foundries.defaultInstance();
            PDFAParser parser = foundry.createParser(new ByteArrayInputStream(pdf), flavour);
            // In the factory's order: no passed checks, no limit on failures (a limit makes it stop early), at most
            // this many failed checks listed per rule, each with its own error message, no progress output.
            PDFAValidator validator = ValidatorFactory.createValidator(flavour, false, 0, Math.max(1, Math.min(maxChecksPerRule, 10000)), true, false)) {
         ValidationResult result = validator.validate(parser);
-        return report(flavour, result);
+        return report(flavour, result, logs.stop());
+      } finally {
+        logs.stop();
       }
     } catch (Throwable error) {
       return failure(error);
     }
   }
 
-  private static String report(PDFAFlavour flavour, ValidationResult result) {
+  /**
+   * What veraPDF logs while it reads and validates a file, at WARNING and above: a font program it cannot parse, a
+   * broken content stream. Its own reports list these as "Logs information". The log manager is reset first, which
+   * takes off the console handler, also the one that is only set up at the first message (taking the root logger's
+   * handlers off one by one left that one printing in the image). So the messages are in the report and nowhere else.
+   */
+  private static final class LogCollector extends Handler {
+    private final Map<String, int[]> counts = new LinkedHashMap<>();
+    private final Logger root = Logger.getLogger("");
+
+    static LogCollector start() {
+      LogManager.getLogManager().reset();
+      LogCollector collector = new LogCollector();
+      collector.setLevel(Level.WARNING);
+      collector.root.addHandler(collector);
+      return collector;
+    }
+
+    /** The messages so far as JSON, each once with how often it came; stops collecting. Safe to call twice. */
+    String stop() {
+      root.removeHandler(this);
+      StringBuilder json = new StringBuilder("[");
+      boolean first = true;
+      for (Map.Entry<String, int[]> entry : counts.entrySet()) {
+        if (!first) json.append(',');
+        first = false;
+        int split = entry.getKey().indexOf('\n');
+        json.append("{\"level\":").append(quote(entry.getKey().substring(0, split)))
+            .append(",\"message\":").append(quote(entry.getKey().substring(split + 1)))
+            .append(",\"occurrences\":").append(entry.getValue()[0]).append('}');
+      }
+      return json.append(']').toString();
+    }
+
+    @Override
+    public void publish(LogRecord record) {
+      if (record == null || record.getLevel().intValue() < Level.WARNING.intValue()) return;
+      String message = record.getMessage() == null ? "" : record.getMessage();
+      if (record.getThrown() != null) message = message.isEmpty() ? String.valueOf(record.getThrown()) : message + ": " + record.getThrown();
+      // At most 200 different messages: a damaged file can produce one per object.
+      String key = record.getLevel().getName() + "\n" + message;
+      int[] count = counts.get(key);
+      if (count != null) count[0]++;
+      else if (counts.size() < 200) counts.put(key, new int[] {1});
+    }
+
+    @Override
+    public void flush() {}
+
+    @Override
+    public void close() {}
+  }
+
+  private static String report(PDFAFlavour flavour, ValidationResult result, String logs) {
     // One entry per failed rule, in the order of the first failed check. The listed checks are the ones veraPDF kept
     // (up to the limit given to the validator); the number of failed checks comes from its own count.
     Map<RuleId, List<TestAssertion>> failed = new LinkedHashMap<>();
@@ -113,6 +176,7 @@ public final class Validate {
         .append(",\"profile\":{\"name\":").append(quote(text(profile.getDetails().getName())))
         .append(",\"description\":").append(quote(text(profile.getDetails().getDescription())))
         .append(",\"rules\":").append(profile.getRules().size()).append('}')
+        .append(",\"logs\":").append(logs)
         .append(",\"failedRules\":[");
     boolean firstRule = true;
     for (Map.Entry<RuleId, List<TestAssertion>> entry : failed.entrySet()) {

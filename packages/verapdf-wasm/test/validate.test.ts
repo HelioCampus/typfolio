@@ -100,6 +100,29 @@ test('an error says what was found, and the number of failed checks is exact whe
   for (const bad of [0, 1.5, 10001, '5']) assert.throws(() => validator.validate(ua1, { flavour: 'ua1', maxChecksPerRule: bad as never }), hasCode('INVALID_REQUEST'));
 });
 
+test('what veraPDF logs while reading a damaged file is in the report, not on the console', { skip }, () => {
+  assert.deepEqual(validator.validate(ua1, { flavour: 'ua1' }).logs, []);
+  // Overwrite one byte inside each stream in turn until veraPDF has something to say about the file.
+  const text = Buffer.from(ua1).toString('latin1');
+  let found: ReturnType<Validator['validate']>['logs'] | undefined;
+  for (let at = text.indexOf('stream\n'); at >= 0 && !found; at = text.indexOf('stream\n', at + 1)) {
+    if (text.slice(at - 3, at) === 'end') continue;
+    const damaged = Uint8Array.from(ua1);
+    damaged[at + 40] = damaged[at + 40]! ^ 0xff;
+    try {
+      const { logs } = validator.validate(damaged, { flavour: 'ua1' });
+      if (logs.length > 0) found = logs;
+    } catch { /* a file veraPDF cannot read at all: the next stream */ }
+  }
+  assert.ok(found, 'no damaged copy made veraPDF log anything');
+  for (const log of found) {
+    assert.match(log.level, /^(WARNING|SEVERE)$/);
+    assert.ok(log.message.length > 0 && log.occurrences >= 1, JSON.stringify(log));
+  }
+  // And the validator still works after them.
+  assert.deepEqual(validator.validate(ua1, { flavour: 'ua1' }).logs, []);
+});
+
 test('every listed flavour has a profile in the image', { skip }, () => {
   for (const flavour of flavours) {
     const report = validator.validate(ua1, { flavour });

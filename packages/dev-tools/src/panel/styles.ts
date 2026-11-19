@@ -126,6 +126,9 @@ button.tf-problem:hover { text-decoration: underline; }
 .tf-side.tf-validate:disabled { opacity: 0.5; cursor: default; }
 .tf-validation-hint { color: var(--tf-muted); }
 .tf-rule > summary { cursor: pointer; }
+.tf-logs { padding: 6px 10px; border-bottom: 1px solid var(--tf-border); background: var(--tf-warn-bg); color: var(--tf-warn-fg); }
+.tf-logs > summary { cursor: pointer; font-weight: 600; }
+.tf-logs li { padding: 2px 0 2px 14px; overflow-wrap: anywhere; }
 .tf-rule-tag { display: inline-block; margin-left: 6px; padding: 0 6px; border-radius: 999px; background: var(--tf-role); color: var(--tf-fg); font-size: 11px; }
 .tf ol.tf-rule-checks { list-style: decimal; margin: 0; padding: 2px 10px 6px 38px; }
 .tf-rule-checks li { padding: 2px 0; }

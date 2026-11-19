@@ -48,6 +48,14 @@ export interface PdfValidationRule {
   checks: PdfValidationCheck[];
 }
 
+/** Something veraPDF logged while it read and validated the file. */
+export interface PdfValidationLog {
+  level: 'SEVERE' | 'WARNING';
+  message: string;
+  /** How often the same message came. */
+  occurrences: number;
+}
+
 export interface PdfValidationReport {
   flavour: PdfValidationFlavour;
   compliant: boolean;
@@ -57,4 +65,9 @@ export interface PdfValidationReport {
   profile: { name: string; description: string; rules: number };
   /** One entry per rule with at least one failed check, ordered by specification, clause and test. */
   failedRules: PdfValidationRule[];
+  /**
+   * What veraPDF logged at WARNING and above while reading the file, such as a font program or a content stream it
+   * could not parse. A file can pass with messages here: veraPDF then validated what it could read.
+   */
+  logs: PdfValidationLog[];
 }

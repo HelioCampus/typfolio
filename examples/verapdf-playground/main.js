@@ -36,6 +36,13 @@ const element = (tag, props = {}, ...children) => {
   return node;
 };
 
+// What validated: for the footer, and for a saved report.
+let version = {};
+fetch('/packages/verapdf-wasm/generated/provenance.json').then(response => response.json()).then(provenance => {
+  version = { verapdf: provenance.verapdf, graalvm: provenance.graalvm.version, wasmSha256: provenance.wasm.sha256 };
+  $('version').textContent = `veraPDF ${provenance.verapdf}, built to WebAssembly with ${provenance.graalvm.distribution} ${provenance.graalvm.version}.`;
+}, () => {});
+
 let chosen = [];
 async function run() {
   await ready;
@@ -44,6 +51,8 @@ async function run() {
   results.replaceChildren();
   for (const file of chosen) {
     const bytes = new Uint8Array(await file.arrayBuffer());
+    // The checksum first: the validator may be handed the bytes themselves.
+    const sha256 = [...new Uint8Array(await crypto.subtle.digest('SHA-256', bytes))].map(byte => byte.toString(16).padStart(2, '0')).join('');
     const { reports, error, ms } = await validate(bytes, flavour);
     const size = `${(file.size / 1024).toFixed(file.size < 102400 ? 1 : 0)} kB`;
     const header = element('header', {}, element('h2', { textContent: file.name }));
@@ -57,14 +66,23 @@ async function run() {
     } else {
       for (const report of reports) header.append(element('span', { className: `verdict ${report.compliant ? 'pass' : 'fail'}`, textContent: `${report.compliant ? 'PASS' : 'FAIL'} ${flavours[report.flavour]}` }));
       header.append(element('span', { className: 'meta', textContent: `${flavour === 'declared' ? 'declared by the file · ' : ''}${size} · ${Math.round(ms)} ms` }));
+      const json = () => JSON.stringify({ file: file.name, sha256, bytes: file.size, validator: version, reports }, null, 2);
       const copy = element('button', { type: 'button', textContent: 'Copy JSON' });
-      copy.onclick = () => navigator.clipboard.writeText(JSON.stringify({ file: file.name, reports }, null, 2)).then(() => { copy.textContent = 'Copied'; }, () => { copy.textContent = 'Not copied'; });
-      header.append(copy);
+      copy.onclick = () => navigator.clipboard.writeText(json()).then(() => { copy.textContent = 'Copied'; }, () => { copy.textContent = 'Not copied'; });
+      const save = element('a', { className: 'button', textContent: 'Download JSON', download: `${file.name.replace(/\.pdf$/i, '')}.verapdf.json` });
+      save.onclick = () => { save.href = URL.createObjectURL(new Blob([json()], { type: 'application/json' })); setTimeout(() => URL.revokeObjectURL(save.href), 1000); };
+      header.append(element('span', { className: 'actions' }, copy, save));
       for (const report of reports) {
         const failedChecks = report.failedRules.reduce((sum, rule) => sum + rule.failedChecks, 0);
         card.append(element('p', { className: 'note summary', textContent: report.compliant
           ? `${flavours[report.flavour]}: passes all ${report.totalAssertions} checks.`
-          : `${flavours[report.flavour]}: fails ${report.failedRules.length} rule${report.failedRules.length === 1 ? '' : 's'}, ${failedChecks} of ${report.totalAssertions} checks.` }));
+          : `${flavours[report.flavour]}: fails ${report.failedRules.length} of ${report.profile.rules} rules. ${report.totalAssertions - failedChecks} checks passed, ${failedChecks} failed.` }));
+        if (report.logs.length > 0) {
+          card.append(element('details', { className: 'logs', open: report.compliant },
+            element('summary', { textContent: `veraPDF logged ${report.logs.length} message${report.logs.length === 1 ? '' : 's'} while reading the file${report.compliant ? ': it validated what it could read' : ''}` }),
+            element('ul', {}, ...report.logs.map(log => element('li', { textContent: `${log.level}${log.occurrences > 1 ? ` (${log.occurrences}×)` : ''}: ${log.message}` }))),
+          ));
+        }
         if (!report.compliant) {
           card.append(element('ul', { className: 'rules' }, ...report.failedRules.map(rule => element('li', {},
             element('details', {},
@@ -88,6 +106,7 @@ async function run() {
         card.append(element('p', { className: 'note', textContent: `${report.profile.name}: ${report.profile.rules} rules. ${report.profile.description}.` }));
       }
     }
+    card.append(element('p', { className: 'note checksum', textContent: `SHA-256 ${sha256}` }));
     results.append(card);
   }
   $('again').hidden = chosen.length === 0;

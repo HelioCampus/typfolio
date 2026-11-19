@@ -15,12 +15,29 @@ const describe = (error: unknown) => error instanceof Error ? error.message : St
 const plural = (count: number, word: string) => `${count} ${word}${count === 1 ? '' : 's'}`;
 const name = (id: PdfValidationFlavour) => pdfValidationFlavours[id] ?? id;
 
+/** What veraPDF logged while reading the file; a pass with messages means it validated what it could read. */
+function Logs({ report }: { report: PdfValidationReport }) {
+  const logs = report.logs ?? [];
+  if (logs.length === 0) return null;
+  return (
+    <details className="tf-logs" open={report.compliant}>
+      <summary>veraPDF logged {plural(logs.length, 'message')} while reading the file{report.compliant ? ': it validated what it could read' : ''}</summary>
+      <ul>
+        {logs.map((log, position) => <li key={position}><span className="tf-problem-page">{log.level}{log.occurrences > 1 ? ` (${log.occurrences}×)` : ''}:</span> {log.message}</li>)}
+      </ul>
+    </details>
+  );
+}
+
 function Report({ report }: { report: PdfValidationReport }) {
   if (report.compliant) {
     return (
-      <p className="tf-banner" data-tone="ok">
-        Passes veraPDF’s {name(report.flavour)} rules ({plural(report.totalAssertions, 'check')}). That is a machine check: it does not show that the document is accessible.
-      </p>
+      <>
+        <p className="tf-banner" data-tone="ok">
+          Passes veraPDF’s {name(report.flavour)} rules ({plural(report.totalAssertions, 'check')}). That is a machine check: it does not show that the document is accessible.
+        </p>
+        <Logs report={report} />
+      </>
     );
   }
   const failedChecks = report.failedRules.reduce((sum, rule) => sum + rule.failedChecks, 0);
@@ -49,6 +66,7 @@ function Report({ report }: { report: PdfValidationReport }) {
           </li>
         ))}
       </ul>
+      <Logs report={report} />
     </div>
   );
 }

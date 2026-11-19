@@ -56,6 +56,14 @@ export interface FailedRule {
   checks: FailedCheck[];
 }
 
+/** Something veraPDF logged while it read and validated the file. */
+export interface LogMessage {
+  level: 'SEVERE' | 'WARNING';
+  message: string;
+  /** How often the same message came. */
+  occurrences: number;
+}
+
 export interface ValidationReport {
   flavour: Flavour;
   compliant: boolean;
@@ -65,6 +73,12 @@ export interface ValidationReport {
   profile: { name: string; description: string; rules: number };
   /** One entry per rule with at least one failed check, ordered by specification, clause and test; empty when `compliant`. */
   failedRules: FailedRule[];
+  /**
+   * What veraPDF logged at WARNING and above while reading the file, such as a font program or a content stream it
+   * could not parse; each message once, at most 200. A file can pass with messages here: veraPDF then validated what
+   * it could read, so a pass with messages deserves a look.
+   */
+  logs: LogMessage[];
 }
 
 export interface ValidateOptions {
@@ -165,6 +179,7 @@ export async function createValidator(options: ValidatorOptions): Promise<Valida
         totalAssertions: raw.totalAssertions ?? 0,
         profile: raw.profile ?? { name: '', description: '', rules: 0 },
         failedRules: (raw.failedRules ?? []).sort(byRule),
+        logs: raw.logs ?? [],
       };
     },
   };

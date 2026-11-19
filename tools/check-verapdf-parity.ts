@@ -1,6 +1,6 @@
 // Checks the WebAssembly build of veraPDF against unmodified veraPDF on the JVM: every sample PDF under every
 // flavour must give the same report: the verdict, the number of assertions, the profile, and each failed rule with its
-// count, description, tags and listed checks (the order of failed rules is not compared). Then the same for copies of the files with damaged
+// count, description, tags and listed checks, and what veraPDF logged (the order of failed rules is not compared). Then the same for copies of the files with damaged
 // stream data, where an error must be the same error.
 //
 //   node tools/check-verapdf-parity.ts [<directory of sample PDFs>]     (default: .build/test-output, written by npm test)
@@ -21,7 +21,7 @@ if (pdfs.length === 0) throw new Error(`No sample PDFs in ${samples}. Run npm te
 const classes = join(work, 'classes');
 if (!existsSync(join(classes, 'Validate.class'))) throw new Error('No compiled entry in .build/verapdf/classes. Run npm run build:verapdf.');
 
-interface Report { error?: string; compliant: boolean; totalAssertions: number; profile: unknown;
+interface Report { error?: string; compliant: boolean; totalAssertions: number; profile: unknown; logs: unknown;
   failedRules: { specification: string; clause: string; test: number; failedChecks: number; message: string; object: string; condition: string; tags: string[]; checks: { context: string; error: string }[] }[] }
 const stable = (value: unknown) => JSON.stringify(value).replace(/(usedGlyphs\[\d+\]\([^()]*? \d+ \d+ )\d+( \d+ (?:true|false)\))/g, '$1#$2');
 const normalise = (json: string) => {
@@ -31,7 +31,7 @@ const normalise = (json: string) => {
   // names a glyph in a context by, among other things, a number that is not derived from the file:
   // `usedGlyphs[0](Font Font 1 0 234952919 0 true)`. It was the same in two JVM runs and another one in the image,
   // where it also changes from call to call, as an object's default hash code would. That number is left out.
-  return stable([report.compliant, report.totalAssertions, report.profile,
+  return stable([report.compliant, report.totalAssertions, report.profile, report.logs,
     report.failedRules.map(rule => JSON.stringify([`${rule.specification} ${rule.clause}-${rule.test} x${rule.failedChecks}`, rule.message, rule.object, rule.condition, rule.tags, rule.checks])).sort()]);
 };
 
