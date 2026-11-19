@@ -1,8 +1,7 @@
 {
   "name": "@typfolio/verapdf-wasm",
   "version": "0.1.0",
-  "private": true,
-  "description": "veraPDF's PDF/A and PDF/UA validator built to WebAssembly with GraalVM Web Image (not published yet)",
+  "description": "veraPDF's PDF/A and PDF/UA validator built to WebAssembly with GraalVM Web Image, for Node and browsers",
   "type": "module",
   "license": "SEE LICENSE IN LICENSE",
   "repository": {
@@ -12,7 +11,7 @@
   },
   "homepage": "https://github.com/HelioCampus/typfolio#readme",
   "bugs": { "url": "https://github.com/HelioCampus/typfolio/issues" },
-  "files": ["dist", "generated", "java", "LICENSE", "LICENSE-APACHE", "README.md"],
+  "files": ["dist", "generated", "java", "LICENSE", "LICENSE-APACHE", "README.md", "CHANGELOG.md"],
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
@@ -20,6 +19,10 @@
     },
     "./verapdf.wasm": "./generated/verapdf.wasm",
     "./provenance": "./generated/provenance.json"
+  },
+  "keywords": ["verapdf", "pdf", "pdf-ua", "pdf-a", "accessibility", "validation", "wasm", "webassembly", "browser"],
+  "publishConfig": {
+    "access": "public"
   },
   "engines": { "node": ">=22" },
   "sideEffects": false,

@@ -7,7 +7,7 @@
 
 `@typfolio/dev-tools/validate`, the `typfolio-validate` command and the tags panel's "veraPDF" row use it as an optional peer dependency ([packages/dev-tools/README.md](../packages/dev-tools/README.md#validation-with-verapdf)); nothing in dev-tools contains it.
 
-Not published: the package is `private`. The validator is built and checked on a developer's machine only. CI does not build it, and the tests that need the binary are skipped where it is absent.
+The validator is built and checked on a developer's machine only, and published from there (see [Releasing](#releasing)). CI does not build it, and the tests that need the binary are skipped where it is absent.
 
 A veraPDF pass is a machine check of the rules veraPDF implements. It does not establish that a document is accessible.
 
@@ -152,6 +152,18 @@ For that reason `wasmSha256` and `launcherSha256` in the pin are `null`, and not
 - the behaviour: the parity check.
 
 If a later GraalVM makes the output stable, set the two hashes in the pin; `tools/check-verapdf-package.ts` already compares them when they are not `null`.
+
+## Releasing
+
+The release workflow does not build this package: it has no GraalVM, and the binary does not reproduce, so what is published is the binary that was built and checked on a maintainer's machine.
+
+```sh
+npm run setup:verapdf && npm run build:verapdf   # nothing is built if generated/ is current
+npm run pack:verapdf                             # check:verapdf, then the tarball in .build/
+npm publish --workspace packages/verapdf-wasm    # after npm login
+```
+
+`pack:verapdf` runs the package check, the inflater check and the parity check first, so a tarball is only made from a binary that matches its provenance and agrees with veraPDF on the JVM. The tarball carries `generated/` (the binary, the loader, the provenance, the licence and notice files), `dist/`, `java/` and the package's `LICENSE`. Publish it before a `@typfolio/dev-tools` release that raises its peer range.
 
 ## Licences
 

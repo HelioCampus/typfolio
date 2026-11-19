@@ -34,6 +34,7 @@
     "test": "npm run build && node --test \"packages/core/test/*.test.ts\" \"packages/dev-tools/test/*.test.ts\" \"packages/workers/test/*.test.ts\" \"packages/react/test/*.test.ts\" \"packages/paramdoc/test/*.test.ts\" \"packages/paramdoc-export/test/*.test.ts\" \"packages/verapdf-wasm/test/*.test.ts\"",
     "test:vite": "npm run build && node tools/test-vite-builds.ts",
     "pack:wasm": "node tools/check-package.ts && npm pack --workspace packages/wasm --pack-destination .build",
+    "pack:verapdf": "npm run build && npm run check:verapdf && npm pack --workspace packages/verapdf-wasm --pack-destination .build",
     "pack:core": "npm run build && npm pack --workspace packages/core --pack-destination .build",
     "pack:dev-tools": "npm run build && npm pack --workspace packages/dev-tools --pack-destination .build",
     "pack:paramdoc": "npm run build && npm pack --workspace packages/paramdoc --pack-destination .build",

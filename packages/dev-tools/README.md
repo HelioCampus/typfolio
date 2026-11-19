@@ -135,7 +135,7 @@ npx typfolio-validate --flavour ua1 out/report.pdf out/letter.pdf
 
 What a pass means: the file meets the rules of that standard that a machine can check, as veraPDF implements them. It does not show that the document is accessible. Whether the tags fit the content, the reading order makes sense and the alternative text says what the figure shows still needs a person, and `structureWarnings` above catches some of what the standard accepts.
 
-`@typfolio/verapdf-wasm` is an **optional peer dependency** that you install yourself, loaded on the first call and only from this entry. It is a package of its own because its binary is not open source as a whole: it contains veraPDF (MPL 2.0) and a runtime under Oracle's GraalVM Free Terms and Conditions, which allow use, also inside a company, and free redistribution, but not shipping it as part of something a fee is charged for. Nothing in `@typfolio/dev-tools` contains it. It is not published to npm yet; until it is, it has to be built from this repository ([docs/verapdf-build.md](../../docs/verapdf-build.md)).
+`@typfolio/verapdf-wasm` is an **optional peer dependency** that you install yourself, loaded on the first call and only from this entry. It is a package of its own because its binary is not open source as a whole: it contains veraPDF (MPL 2.0) and a runtime under Oracle's GraalVM Free Terms and Conditions, which allow use, also inside a company, and free redistribution, but not shipping it as part of something a fee is charged for. Nothing in `@typfolio/dev-tools` contains it. Install it beside dev-tools: `npm install --save-dev @typfolio/verapdf-wasm`.
 
 ## Structure panel
 
