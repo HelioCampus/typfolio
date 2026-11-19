@@ -38,7 +38,7 @@ const routes: Record<string, () => Route> = {
 
 before(async () => {
   [wasm, regular, bold] = await Promise.all([
-    file('packages/wasm/generated/compiler_bg.wasm'),
+    file('packages/typst-wasm/generated/compiler_bg.wasm'),
     file('fixtures/fonts/LibertinusSerif-Regular.otf'),
     file('fixtures/fonts/LibertinusSerif-Bold.otf'),
   ]);

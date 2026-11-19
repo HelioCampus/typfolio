@@ -1,4 +1,4 @@
-# The Rust workspace: Typfolio's Typst compiler for WebAssembly (`crates/compiler`, shipped as `@typfolio/wasm`) and the
+# The Rust workspace: Typfolio's Typst compiler for WebAssembly (`crates/compiler`, shipped as `@typfolio/typst-wasm`) and the
 # paramdoc experiment's crates. One workspace, one `Cargo.lock`: the compiler and the paramdoc exporter resolve the same
 # Typst crates, so what the exporter lays out is what the compiler lays out.
 [workspace]

@@ -8,7 +8,7 @@ Use GitHub's private vulnerability reporting: open the repository's **Security**
 
 Include, as far as you can:
 
-- the affected package (`@typfolio/core`, `@typfolio/workers`, `@typfolio/react`, `@typfolio/dev-tools` or `@typfolio/wasm`) and version, or the commit;
+- the affected package (`@typfolio/core`, `@typfolio/workers`, `@typfolio/react`, `@typfolio/dev-tools` or `@typfolio/typst-wasm`) and version, or the commit;
 - what the issue lets an attacker do and under which conditions;
 - steps or a minimal template and input that reproduce it;
 - the environment (browser or Node version, operating system, bundler);

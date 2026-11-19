@@ -11,14 +11,14 @@ const tarballPath = async (name: string) => {
   const { version } = JSON.parse(await readFile(join(root, 'packages', name, 'package.json'), 'utf8'));
   return join(root, `.build/typfolio-${name}-${version}.tgz`);
 };
-const tarballs = Object.fromEntries(await Promise.all(['wasm', 'core', 'workers', 'react', 'dev-tools', 'paramdoc'].map(async name => [name, await tarballPath(name)])));
+const tarballs = Object.fromEntries(await Promise.all(['typst-wasm', 'core', 'workers', 'react', 'dev-tools', 'paramdoc'].map(async name => [name, await tarballPath(name)])));
 const run = (command: string, args: string[]) => {
   const r = spawnSync(command, args, { cwd: dir, stdio: 'inherit' });
   if (r.error || r.status !== 0) throw r.error ?? new Error(`${command} exited ${r.status}`);
 };
 await writeFile(join(dir, 'package.json'), JSON.stringify({ name: 'packed-typfolio-smoke', private: true, type: 'module' }));
 run('npm', ['install', '--offline', '--ignore-scripts', '--no-audit', '--no-fund', '--package-lock=false',
-  tarballs['wasm'],
+  tarballs['typst-wasm'],
   tarballs['core'],
   tarballs['workers'],
   tarballs['react'],
@@ -37,7 +37,7 @@ await assert.rejects(access(join(dir, 'node_modules/html2canvas')), { code: 'ENO
 // The inspect step below resolves it from the workspace's node_modules, which sit above this directory.
 await assert.rejects(access(join(dir, 'node_modules/pdfjs-dist')), { code: 'ENOENT' },
   'pdfjs-dist must not be installed in the consumer');
-for (const name of ['wasm', 'core', 'workers', 'react', 'dev-tools']) {
+for (const name of ['typst-wasm', 'core', 'workers', 'react', 'dev-tools']) {
   const manifest = JSON.parse(await readFile(join(dir, 'node_modules/@typfolio', name, 'package.json'), 'utf8'));
   for (const field of ['dependencies', 'optionalDependencies']) {
     assert.ok(!('html2canvas' in (manifest[field] ?? {})), `@typfolio/${name} must not list html2canvas in ${field}`);
@@ -63,9 +63,9 @@ for (const name of packageFiles) {
   assert.ok(entries.includes(`package/${name}`), `the core tarball must contain ${name}`);
   await access(join(dir, 'node_modules/@typfolio/core', name));
 }
-// Every tarball must carry the licence; the wasm tarball also carries the NOTICE and third-party notices and licence texts.
+// Every tarball must carry the licence; the typst-wasm tarball also carries the NOTICE and third-party notices and licence texts.
 // npm adds LICENSE/NOTICE from a package's own root, so this guards the per-package copies.
-for (const [name, extra] of [['wasm', ['NOTICE', 'THIRD_PARTY_NOTICES.md', 'THIRD_PARTY_LICENSES.md']], ['core', []], ['workers', []], ['react', []], ['dev-tools', ['THIRD_PARTY_NOTICES.md', 'dist/panel.js']], ['paramdoc', ['dist/worker.js']]] as [string, string[]][]) {
+for (const [name, extra] of [['typst-wasm', ['NOTICE', 'THIRD_PARTY_NOTICES.md', 'THIRD_PARTY_LICENSES.md']], ['core', []], ['workers', []], ['react', []], ['dev-tools', ['THIRD_PARTY_NOTICES.md', 'dist/panel.js']], ['paramdoc', ['dist/worker.js']]] as [string, string[]][]) {
   const listing = spawnSync('tar', ['-tzf', tarballs[name]], { encoding: 'utf8' });
   if (listing.error || listing.status !== 0) throw listing.error ?? new Error('tar exited ' + listing.status);
   const files = listing.stdout.split('\n');
@@ -79,14 +79,14 @@ for (const [name, extra] of [['wasm', ['NOTICE', 'THIRD_PARTY_NOTICES.md', 'THIR
   }
   const installed = await readFile(join(dir, 'node_modules/@typfolio', name, 'LICENSE'));
   assert.ok(installed.equals(await readFile(join(root, 'LICENSE'))), `the installed @typfolio/${name} LICENSE must equal the root LICENSE`);
-  if (name === 'wasm') {
-    const notice = await readFile(join(dir, 'node_modules/@typfolio/wasm/NOTICE'));
-    assert.ok(notice.equals(await readFile(join(root, 'NOTICE'))), 'the installed @typfolio/wasm NOTICE must equal the root NOTICE');
+  if (name === 'typst-wasm') {
+    const notice = await readFile(join(dir, 'node_modules/@typfolio/typst-wasm/NOTICE'));
+    assert.ok(notice.equals(await readFile(join(root, 'NOTICE'))), 'the installed @typfolio/typst-wasm NOTICE must equal the root NOTICE');
     // The installed third-party files are the generated ones, made from the Cargo.lock the installed binary was built from.
-    const lockSha = JSON.parse(await readFile(join(dir, 'node_modules/@typfolio/wasm/generated/provenance.json'), 'utf8')).cargoLockSha256;
+    const lockSha = JSON.parse(await readFile(join(dir, 'node_modules/@typfolio/typst-wasm/generated/provenance.json'), 'utf8')).cargoLockSha256;
     for (const file of ['THIRD_PARTY_NOTICES.md', 'THIRD_PARTY_LICENSES.md']) {
-      const installedText = await readFile(join(dir, 'node_modules/@typfolio/wasm', file), 'utf8');
-      assert.equal(installedText, await readFile(join(root, 'packages/wasm', file), 'utf8'), `the installed ${file} must equal the repository copy`);
+      const installedText = await readFile(join(dir, 'node_modules/@typfolio/typst-wasm', file), 'utf8');
+      assert.equal(installedText, await readFile(join(root, 'packages/typst-wasm', file), 'utf8'), `the installed ${file} must equal the repository copy`);
       assert.ok(installedText.includes(`Cargo.lock SHA-256: \`${lockSha}\``), `the installed ${file} must be generated from the Cargo.lock recorded in provenance.json`);
       assert.ok(!installedText.includes('Crates without a bundled licence file'), `the installed ${file} must not list crates without a licence text`);
     }
@@ -149,7 +149,7 @@ assert.equal(typeof svgCapture, 'function');
 assert.equal(typeof domPngCapture, 'function');
 const root = process.argv[2];
 // One WASM source value per JS realm: the compilers and the template checker share it.
-const wasm = await readFile(new URL(import.meta.resolve('@typfolio/wasm/compiler.wasm')));
+const wasm = await readFile(new URL(import.meta.resolve('@typfolio/typst-wasm/compiler.wasm')));
 const font = await readFile(root + '/fixtures/fonts/LibertinusSerif-Regular.otf');
 // A template whose Typst reads its data with json("/input.json"): schemaPath mounts each call's data there.
 const titled = defineTemplate({

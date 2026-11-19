@@ -1,4 +1,4 @@
-// One Typst: the compiler (`@typfolio/wasm`, crates/compiler) and the paramdoc exporter (`@typfolio/paramdoc-export`,
+// One Typst: the compiler (`@typfolio/typst-wasm`, crates/compiler) and the paramdoc exporter (`@typfolio/paramdoc-export`,
 // experiments/paramdoc/export) are built from the same workspace, so the same template must give the same PDF bytes
 // through either. This compiles each paramdoc fixture both ways, with no PDF standard, no timestamp and no clock (the
 // exporter's plain mode), and fails on the first difference. experiments/paramdoc/check.sh runs it; it needs
@@ -9,7 +9,7 @@ import assert from 'node:assert/strict';
 import { readdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import init, { Compiler } from '@typfolio/wasm';
+import init, { Compiler } from '@typfolio/typst-wasm';
 import { createExporter } from '@typfolio/paramdoc-export';
 import { readDirectory } from '@typfolio/paramdoc-export/node';
 
@@ -18,7 +18,7 @@ const fixtures = join(root, 'experiments/paramdoc/fixtures');
 const requested = process.argv.slice(2);
 const names = requested.length ? requested : (await readdir(fixtures, { withFileTypes: true })).filter(e => e.isDirectory()).map(e => e.name).sort();
 
-await init({ module_or_path: await readFile(join(root, 'packages/wasm/generated/compiler_bg.wasm')) });
+await init({ module_or_path: await readFile(join(root, 'packages/typst-wasm/generated/compiler_bg.wasm')) });
 const exporter = await createExporter(await readFile(join(root, 'packages/paramdoc-export/generated/paramdoc_export.wasm')));
 const fonts = await readDirectory(join(root, 'fixtures/fonts'));
 const compiler = new Compiler();

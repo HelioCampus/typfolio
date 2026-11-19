@@ -1,4 +1,4 @@
-import init, { Compiler } from '@typfolio/wasm';
+import init, { Compiler } from '@typfolio/typst-wasm';
 import { errorLink, TypstPdfError, type Diagnostic, type FontSource, type PdfResult, type WasmSource } from './types.js';
 import type { prepareRequest } from './request.js';
 import { bundledPackageDirectory, bundledPackageSpec } from './typst-package.js';

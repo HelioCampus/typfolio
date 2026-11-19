@@ -4,7 +4,7 @@ Framework-independent module-worker execution for `@typfolio/core`. The package 
 
 ```ts
 import { createWorkerClient } from '@typfolio/workers';
-import wasmUrl from '@typfolio/wasm/compiler.wasm?url';
+import wasmUrl from '@typfolio/typst-wasm/compiler.wasm?url';
 
 const client = createWorkerClient({
   compiler: { wasm: wasmUrl, fonts: ['/fonts/report.otf'] },

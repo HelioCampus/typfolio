@@ -1,4 +1,4 @@
-# Third-party notices for @typfolio/wasm
+# Third-party notices for @typfolio/typst-wasm
 
 The WebAssembly compiler in this package is Typfolio's own binding of Typst (`crates/compiler` in the repository), built from the Rust crates listed below.
 Typst is licensed under the Apache License, Version 2.0; see the `NOTICE` file in this package.

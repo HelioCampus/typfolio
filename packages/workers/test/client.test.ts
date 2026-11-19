@@ -850,7 +850,7 @@ test('validate: false posts data its schema would reject, from compile and from 
 
 // A realm accepts one WASM source value, so the runtime tests share one buffer.
 let wasmBytes: Buffer | undefined;
-const loadWasm = async (root: URL) => wasmBytes ??= await readFile(new URL('packages/wasm/generated/compiler_bg.wasm', root));
+const loadWasm = async (root: URL) => wasmBytes ??= await readFile(new URL('packages/typst-wasm/generated/compiler_bg.wasm', root));
 
 test('the worker runtime hands font URLs to core, which fetches them inside the worker', async () => {
   const root = new URL('../../../', import.meta.url);

@@ -271,8 +271,8 @@ through link slots (`slot(name, (text:, href:))`), with rectangles equal to typs
    half of hyphenation: the data producer hyphenates, the runtime draws Typst's `-` where a line ends on one)
    and the middle dot's CJK shrinkability (G51), see `docs/2026-10-26-soft-hyphens-and-middle-dot.md`. The
    decision on hyphenation itself (G2) stands: off, unless it comes without tables.
-7. **One Typst binding for the compiler, the exporter and the runtime**: done for the compiler (M13, 2026-11-01): `@typfolio/wasm` is built from `crates/compiler`, which binds the crates.io Typst the exporter uses from the same workspace lockfile; `tools/check-compiler-parity.ts` (a step of `check.sh`) proves the fixtures compile to the same PDF bytes both ways. What follows is the history of the item.
-   Today `@typfolio/wasm` is typst.ts's compiler crate over a patched Typst 0.15.1 and the exporter is the
+7. **One Typst binding for the compiler, the exporter and the runtime**: done for the compiler (M13, 2026-11-01): `@typfolio/typst-wasm` is built from `crates/compiler`, which binds the crates.io Typst the exporter uses from the same workspace lockfile; `tools/check-compiler-parity.ts` (a step of `check.sh`) proves the fixtures compile to the same PDF bytes both ways. What follows is the history of the item.
+   Today `@typfolio/typst-wasm` is typst.ts's compiler crate over a patched Typst 0.15.1 and the exporter is the
    crates.io 0.15.1 crates; the patch changes no layout (checked), but the agreement is by inspection. An own
    binding crate in the paramdoc workspace, grown from the exporter's `MemWorld` and `--plain-pdf`, gives one
    pin, one provenance, structured diagnostics and possibly a smaller wasm (measure first). It goes before

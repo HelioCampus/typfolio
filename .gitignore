@@ -4,8 +4,8 @@ node_modules/
 .tanstack/
 .wrangler/
 packages/*/dist/
-packages/wasm/generated/*
-!packages/wasm/generated/.gitkeep
+packages/typst-wasm/generated/*
+!packages/typst-wasm/generated/.gitkeep
 packages/verapdf-wasm/generated/*
 !packages/verapdf-wasm/generated/.gitkeep
 packages/paramdoc-export/generated/*

@@ -22,7 +22,7 @@ export interface CompilerPin {
   loaderSha256: string;
 }
 
-/** packages/wasm/generated/provenance.json: what tools/build-wasm.ts recorded about the build it ran. */
+/** packages/typst-wasm/generated/provenance.json: what tools/build-wasm.ts recorded about the build it ran. */
 export interface Provenance {
   crate: string;
   crateVersion: string;

@@ -77,9 +77,9 @@ jobs:
         uses: actions/cache/restore@v6
         with:
           path: |
-            packages/wasm/generated
-            packages/wasm/THIRD_PARTY_NOTICES.md
-            packages/wasm/THIRD_PARTY_LICENSES.md
+            packages/typst-wasm/generated
+            packages/typst-wasm/THIRD_PARTY_NOTICES.md
+            packages/typst-wasm/THIRD_PARTY_LICENSES.md
           key: compiler-artifact-${{ runner.os }}-${{ hashFiles('compiler-source.json', 'Cargo.toml', 'Cargo.lock', 'crates/compiler/**') }}
 
       - name: Restore the Cargo registry and git caches
@@ -162,7 +162,7 @@ jobs:
           node --input-type=module - <<'EOF'
           import { readFileSync, appendFileSync, existsSync } from 'node:fs';
           const pin = JSON.parse(readFileSync('compiler-source.json', 'utf8'));
-          const path = 'packages/wasm/generated/provenance.json';
+          const path = 'packages/typst-wasm/generated/provenance.json';
           const lines = ['## Compiler artifact', ''];
           if (!existsSync(path)) {
             lines.push('The build did not produce `provenance.json`.');
@@ -189,9 +189,9 @@ jobs:
         with:
           name: compiler
           path: |
-            packages/wasm/generated/
-            packages/wasm/THIRD_PARTY_NOTICES.md
-            packages/wasm/THIRD_PARTY_LICENSES.md
+            packages/typst-wasm/generated/
+            packages/typst-wasm/THIRD_PARTY_NOTICES.md
+            packages/typst-wasm/THIRD_PARTY_LICENSES.md
           if-no-files-found: error
           retention-days: 7
 
@@ -203,9 +203,9 @@ jobs:
         uses: actions/cache/save@v6
         with:
           path: |
-            packages/wasm/generated
-            packages/wasm/THIRD_PARTY_NOTICES.md
-            packages/wasm/THIRD_PARTY_LICENSES.md
+            packages/typst-wasm/generated
+            packages/typst-wasm/THIRD_PARTY_NOTICES.md
+            packages/typst-wasm/THIRD_PARTY_LICENSES.md
           key: ${{ steps.cache-artifact.outputs.cache-primary-key }}
 
   release:
@@ -239,12 +239,12 @@ jobs:
         uses: actions/download-artifact@v8
         with:
           name: compiler
-          path: packages/wasm
+          path: packages/typst-wasm
 
       - name: Check that the compiler landed in place
         run: |
           for f in generated/compiler_bg.wasm generated/compiler.js generated/compiler.d.ts generated/provenance.json THIRD_PARTY_NOTICES.md THIRD_PARTY_LICENSES.md; do
-            test -s "packages/wasm/$f" || { echo "::error::packages/wasm/$f is missing from the downloaded compiler artifact"; exit 1; }
+            test -s "packages/typst-wasm/$f" || { echo "::error::packages/typst-wasm/$f is missing from the downloaded compiler artifact"; exit 1; }
           done
 
       - run: npm ci

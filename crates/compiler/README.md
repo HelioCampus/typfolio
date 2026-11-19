@@ -1,6 +1,6 @@
 # typfolio-compiler
 
-Typfolio's Typst compiler for WebAssembly, the Rust side of [`@typfolio/wasm`](../../packages/wasm). It binds the
+Typfolio's Typst compiler for WebAssembly, the Rust side of [`@typfolio/typst-wasm`](../../packages/typst-wasm). It binds the
 [Typst](https://github.com/typst/typst) crates directly: an in-memory world (`world.rs`), PDF export with the options
 `@typfolio/core` offers (`options.rs`), diagnostics as data (`diagnostics.rs`), and a wasm-bindgen surface of two
 classes, `Compiler` and `Compiled` (`lib.rs`). Nothing in it reaches out of the module: no file system, network, clock

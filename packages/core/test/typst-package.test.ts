@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { after, before, test } from 'node:test';
 import { readdir, readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
-import init, { Compiler } from '@typfolio/wasm';
+import init, { Compiler } from '@typfolio/typst-wasm';
 import { capabilities, createCompiler, defineTemplate, TypstPdfError } from '../dist/index.js';
 import type { ErrorCode, PdfCompiler, PdfResult } from '../dist/index.js';
 import { typfolioPackage } from '../dist/typst-package.generated.js';
@@ -107,7 +107,7 @@ const zodSample = {
 };
 
 before(async () => {
-  wasm = await file('packages/wasm/generated/compiler_bg.wasm');
+  wasm = await file('packages/typst-wasm/generated/compiler_bg.wasm');
   compiler = await createCompiler({ wasm, fonts: [await file('fixtures/fonts/LibertinusSerif-Regular.otf')] });
   await init({ module_or_path: wasm });
   raw = await createRaw();

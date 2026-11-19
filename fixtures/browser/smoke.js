@@ -9,7 +9,7 @@ async function resource(path, asText = false) {
 export async function runSmoke() {
   const fonts = await Promise.all(['Regular', 'Bold'].map(style => resource(`../fonts/LibertinusSerif-${style}.otf`)));
   const start = performance.now();
-  const compiler = await createCompiler({ wasm: new URL('/packages/wasm/generated/compiler_bg.wasm', import.meta.url), fonts });
+  const compiler = await createCompiler({ wasm: new URL('/packages/typst-wasm/generated/compiler_bg.wasm', import.meta.url), fonts });
   const initialized = performance.now();
   try {
     // main.typ reads its data with json("/input.json"): schemaPath mounts the call's data there.

@@ -1,4 +1,4 @@
-// Verifies packages/wasm/generated/ before it is packed or tested: the artifact's hashes match its provenance, the
+// Verifies packages/typst-wasm/generated/ before it is packed or tested: the artifact's hashes match its provenance, the
 // provenance matches the pins in compiler-source.json and the sources in the checkout, and the build reproduced the
 // pinned artifact hashes. `npm run pack:wasm` and the CI `compiler` job run this.
 import { readFile, access } from 'node:fs/promises';
@@ -8,7 +8,7 @@ import { compilerSourceSha256 } from './compiler-source.ts';
 import type { CompilerPin, Provenance } from './types.ts';
 const root = new URL('../', import.meta.url);
 const file = (path: string) => readFile(new URL(path, root));
-const provenance: Provenance = JSON.parse((await file('packages/wasm/generated/provenance.json')).toString());
+const provenance: Provenance = JSON.parse((await file('packages/typst-wasm/generated/provenance.json')).toString());
 const pin: CompilerPin = JSON.parse((await file('compiler-source.json')).toString());
 if (provenance.crate !== pin.crate || provenance.crateDirectory !== pin.crateDirectory) throw new Error('WASM provenance does not name the pinned crate');
 if (provenance.typst !== pin.typst) throw new Error(`WASM provenance records Typst ${provenance.typst}, but compiler-source.json pins ${pin.typst}`);
@@ -36,7 +36,7 @@ if (!/^\/rustc\/[0-9a-f]{40}$/.test(provenance.reproducibleBuild.rustStdSourcePr
   throw new Error('WASM provenance does not record the remapped Rust standard library source prefix');
 }
 for (const [path, expected] of [['compiler_bg.wasm', provenance.wasm.sha256], ['compiler.js', provenance.loaderSha256]]) {
-  const hash = createHash('sha256').update(await file(`packages/wasm/generated/${path}`)).digest('hex');
+  const hash = createHash('sha256').update(await file(`packages/typst-wasm/generated/${path}`)).digest('hex');
   if (hash !== expected) throw new Error(`${path} does not match build provenance`);
 }
 // The pinned hashes make a rebuild prove it reproduces the artifact that was reviewed. A mismatch means a different
@@ -51,8 +51,8 @@ for (const [label, key, actual] of [['compiler_bg.wasm', 'wasmSha256', provenanc
 }
 // The loader must not construct code (js_sys::Function, eval): a page may then load the compiler under a Content
 // Security Policy that allows only 'wasm-unsafe-eval'.
-if (/\bnew Function\(|\beval\(/.test((await file('packages/wasm/generated/compiler.js')).toString())) {
+if (/\bnew Function\(|\beval\(/.test((await file('packages/typst-wasm/generated/compiler.js')).toString())) {
   throw new Error('compiler.js constructs JavaScript code; the compiler crate must not import js_sys::Function or eval');
 }
-await access(new URL('packages/wasm/generated/compiler.d.ts', root));
+await access(new URL('packages/typst-wasm/generated/compiler.d.ts', root));
 console.log('WASM package artifact hashes, pinned artifact hashes, pinned build profile, source hash, reproducible-build policy, CSP-safe loader and declarations verified.');

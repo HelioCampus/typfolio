@@ -1,15 +1,19 @@
-# @typfolio/wasm
+# @typfolio/typst-wasm
 
-Typfolio's Typst compiler for WebAssembly: the binary built from [`crates/compiler`](../../crates/compiler) in the
+[Typst](https://typst.app/)'s compiler for WebAssembly, as Typfolio builds it: the binary built from [`crates/compiler`](../../crates/compiler) in the
 repository, its wasm-bindgen JavaScript bindings, and `provenance.json`. This package has no hand-written source and no
 build step of its own; the files in `generated/` are produced by `npm run build:wasm` at the repository root from the
 pins in `compiler-source.json`.
 
-- `@typfolio/wasm` exports the bindings used by `@typfolio/core` (`Compiler`, `Compiled`). They exist for core and are
+This is Typfolio's own binding of the Typst crates, made for `@typfolio/core`. It is not a package of the Typst
+project, and its interface is not Typst's. Up to 0.3.0 it was published as `@typfolio/wasm`; it was renamed when
+`@typfolio/verapdf-wasm` joined it, so that each package says which engine it carries.
+
+- `@typfolio/typst-wasm` exports the bindings used by `@typfolio/core` (`Compiler`, `Compiled`). They exist for core and are
   not a public API. `compile` takes Typst's in-development features by name (`features`: `a11y-extras`, `html`,
   `bundle`); `a11y-extras` is on when the field is absent.
-- `@typfolio/wasm/compiler.wasm` is the WASM binary. Applications load it explicitly (bytes, module, or a hosted URL).
-- `@typfolio/wasm/provenance` is the build provenance (crate, Typst version, tool versions, source and output hashes).
+- `@typfolio/typst-wasm/compiler.wasm` is the WASM binary. Applications load it explicitly (bytes, module, or a hosted URL).
+- `@typfolio/typst-wasm/provenance` is the build provenance (crate, Typst version, tool versions, source and output hashes).
 
 The compiler makes no JavaScript calls of its own: no file system, network, clock or callbacks, and the loader constructs
 no code, so a page can load it under a Content Security Policy that allows `'wasm-unsafe-eval'` without `'unsafe-eval'`.

@@ -1,4 +1,4 @@
-import wasmUrl from '@typfolio/wasm/compiler.wasm?url';
+import wasmUrl from '@typfolio/typst-wasm/compiler.wasm?url';
 import regularUrl from '../../fixtures/fonts/LibertinusSerif-Regular.otf?url';
 import boldUrl from '../../fixtures/fonts/LibertinusSerif-Bold.otf?url';
 import italicUrl from '../../fixtures/fonts/LibertinusSerif-Italic.otf?url';
