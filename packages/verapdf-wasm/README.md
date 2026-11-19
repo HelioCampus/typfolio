@@ -1,7 +1,7 @@
 # @typfolio/verapdf-wasm
 
-[veraPDF](https://verapdf.org/)'s PDF/A and PDF/UA validator as WebAssembly, for Node and browsers. **Not published
-yet**: the package is private while the licence files are being finished. It is built locally, not in CI.
+[veraPDF](https://verapdf.org/)'s PDF/A and PDF/UA validator as WebAssembly, for Node and browsers, with no Java.
+Read [Licence](#licence) before you ship it to others: the binary is not open source as a whole.
 
 The files in `generated/` are produced by `npm run build:verapdf` at the repository root from the pins in
 `verapdf-source.json`; see [docs/verapdf-build.md](../../docs/verapdf-build.md).
