@@ -2,8 +2,9 @@
 // there, beside the validator's own files). A module worker: it fetches the gzipped binary, unpacks it, checks it
 // against the manifest's hash, and then validates what it is sent. Files never leave the page.
 //
-//   in:  { id, pdf: Uint8Array, flavour: 'declared' | <flavour id> }
-//   out: { ready: true, ms } | { failed: message } | { progress: fraction } | { id, reports, ms } | { id, error, ms }
+//   in:  { id, pdf: Uint8Array, flavour: 'declared' | 'detect' | <flavour id> }
+//   out: { ready: true, ms } | { failed: message } | { progress: fraction } | { id, reports, ms } |
+//        { id, flavours, ms } | { id, error, ms }
 import { createValidator } from './dist/index.js';
 
 async function binary(manifest) {
@@ -37,6 +38,8 @@ try {
     const from = performance.now();
     const { id, pdf, flavour } = event.data;
     try {
+      // 'detect' asks which flavours the file declares; 'declared' validates against each of them.
+      if (flavour === 'detect') return self.postMessage({ id, flavours: validator.detectFlavours(pdf), ms: performance.now() - from });
       const reports = flavour === 'declared' ? validator.validateDeclared(pdf) : [validator.validate(pdf, { flavour })];
       self.postMessage({ id, reports, ms: performance.now() - from });
     } catch (error) {

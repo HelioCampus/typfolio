@@ -12,6 +12,7 @@ import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as AsciiRouteImport } from './routes/ascii'
 import { Route as EditorialRouteImport } from './routes/editorial'
+import { Route as InspectRouteImport } from './routes/inspect'
 import { Route as PerformanceRouteImport } from './routes/performance'
 import { Route as ValidateRouteImport } from './routes/validate'
 
@@ -30,6 +31,11 @@ const EditorialRoute = EditorialRouteImport.update({
   path: '/editorial',
   getParentRoute: () => rootRouteImport,
 } as any)
+const InspectRoute = InspectRouteImport.update({
+  id: '/inspect',
+  path: '/inspect',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const PerformanceRoute = PerformanceRouteImport.update({
   id: '/performance',
   path: '/performance',
@@ -45,6 +51,7 @@ export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/ascii': typeof AsciiRoute
   '/editorial': typeof EditorialRoute
+  '/inspect': typeof InspectRoute
   '/performance': typeof PerformanceRoute
   '/validate': typeof ValidateRoute
 }
@@ -52,6 +59,7 @@ export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/ascii': typeof AsciiRoute
   '/editorial': typeof EditorialRoute
+  '/inspect': typeof InspectRoute
   '/performance': typeof PerformanceRoute
   '/validate': typeof ValidateRoute
 }
@@ -60,21 +68,31 @@ export interface FileRoutesById {
   '/': typeof IndexRoute
   '/ascii': typeof AsciiRoute
   '/editorial': typeof EditorialRoute
+  '/inspect': typeof InspectRoute
   '/performance': typeof PerformanceRoute
   '/validate': typeof ValidateRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/ascii' | '/editorial' | '/performance' | '/validate'
+  fullPaths:
+    '/' | '/ascii' | '/editorial' | '/inspect' | '/performance' | '/validate'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/ascii' | '/editorial' | '/performance' | '/validate'
-  id: '__root__' | '/' | '/ascii' | '/editorial' | '/performance' | '/validate'
+  to: '/' | '/ascii' | '/editorial' | '/inspect' | '/performance' | '/validate'
+  id:
+    | '__root__'
+    | '/'
+    | '/ascii'
+    | '/editorial'
+    | '/inspect'
+    | '/performance'
+    | '/validate'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   AsciiRoute: typeof AsciiRoute
   EditorialRoute: typeof EditorialRoute
+  InspectRoute: typeof InspectRoute
   PerformanceRoute: typeof PerformanceRoute
   ValidateRoute: typeof ValidateRoute
 }
@@ -102,6 +120,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof EditorialRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/inspect': {
+      id: '/inspect'
+      path: '/inspect'
+      fullPath: '/inspect'
+      preLoaderRoute: typeof InspectRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/performance': {
       id: '/performance'
       path: '/performance'
@@ -123,6 +148,7 @@ const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   AsciiRoute: AsciiRoute,
   EditorialRoute: EditorialRoute,
+  InspectRoute: InspectRoute,
   PerformanceRoute: PerformanceRoute,
   ValidateRoute: ValidateRoute,
 }

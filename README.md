@@ -1,16 +1,15 @@
 # Typfolio
 
-[![CI](https://github.com/HelioCampus/typfolio/actions/workflows/ci.yml/badge.svg)](https://github.com/HelioCampus/typfolio/actions/workflows/ci.yml)
+**Schema-first, accessible PDF generation in the browser.** Typst compiled to WASM, driven by typed data, with the tools to check the result.
 
-**Schema-first, accessible PDF generation in the browser.** Typst compiled to WASM, driven by typed data.
-
-Typfolio turns a `.typ` template and a JSON object into a real, typeset, tagged PDF inside the user's browser. The Typst compiler runs as WASM in the page, so there is no PDF service, no headless Chrome and no second copy of your business logic on a server. The same packages run in Node for batch jobs and tests.
+Typfolio turns a `.typ` template and a JSON object into a real, typeset, tagged PDF inside the user's browser. The Typst compiler runs as WASM in the page, so there is no PDF service, no headless Chrome and no second copy of your business logic on a server. The same packages run in Node for batch jobs and tests. [Try it in your browser](https://typfolio.kerematam.com/).
 
 - **Structure comes from the markup.** `= Heading` is an H1, a `table` is a Table with TH cells, `image(alt:)` is a Figure: tagged PDF by default, PDF/UA-1 and PDF/A on request, compiled in one pass with nothing to patch afterwards ([what the compiler checks, and what it cannot](#accessibility)).
 - **One schema, three jobs.** It types the template call, completes `#data.` in the editor and checks the template in CI, so a renamed field fails the build, not the user.
 - **No PDF server.** The compiler is WASM in the page: nothing uploaded, nothing queued, works offline.
 - **Fast.** A one-page document in 5–50 ms, a 50-page PDF/UA report in about 220 ms; a worker pool keeps the UI responsive.
 - **A real typesetter.** Text flow, tables, fonts and page breaking from Typst, not boxes drawn on a canvas.
+- **Checked, not assumed.** A panel shows the tags a screen reader gets, warnings name the structure a standard does not require but a reader needs, and veraPDF validates PDF/UA and PDF/A without Java, in the page, in a test or in CI ([how to check a document](#accessibility)).
 
 ```sh
 npm install @typfolio/core @typfolio/typst-wasm zod
@@ -54,23 +53,7 @@ Typst does that: a heading is a heading, a table a table, and its PDF/UA-1 expor
 
 [^1]: Checked in October 2026 against the published code. pdfmake 0.3.12 passes `tagged` and `subset: "PDF/UA"` through to PDFKit and makes no structure calls of its own; its `headlineLevel` only drives page breaks and `headerRows` only repeats rows visually. pdf-lib 1.17.1 (its last release, from 2021), jsPDF 4.2.1 and `@react-pdf/renderer` 4.9.0 contain no tagging code; react-pdf's PDFKit fork carries the API, but the renderer never calls it ([diegomura/react-pdf#1790](https://github.com/diegomura/react-pdf/issues/1790), open since 2022). PDFKit 0.20.2 has a [tagging API](https://pdfkit.org/docs/accessibility.html), but you build every element and mark every artifact by hand, annotations and forms are not covered, and nothing validates the result.
 
-## What it offers
-
-**Native, tagged PDF, not a screenshot of a web page.** The document is produced by Typst's own PDF writer, in one pass, from the template's markup: real text, real fonts, and the headings, tables and figures you wrote in the structure tree, with nothing to patch afterwards. Ask for PDF/UA-1 or PDF/A and the exporter refuses output that breaks the standard, such as an image without alternative text. With a fixed creation timestamp the bytes are identical on every run, so a PDF can be snapshot-tested like any other build artifact.
-
-**Fast enough that a server adds nothing.** On a laptop, a 50-page PDF/UA report with a table on every page compiles in about 220 ms, and a 100-page one in about 360 ms, with fresh data each time; one-page documents take 5–50 ms in the browser. Re-rendering the same data again is incremental and takes about 20 ms. The compiler is a 24 MB WASM asset (6.4 MB with Brotli) that the browser downloads once and caches.
-
-**The data never leaves the page.** The browser already holds the records, the charts and the user's session. Compiling there means nothing is uploaded, nothing is queued, and the feature keeps working offline.
-
-**Templates are code with a typed contract.** `.typ` files live in your repo and are reviewed like code. A template is a function typed by its schema, so `report(data)` with the wrong data is a type error, the bundled `@local/typfolio` helper gives the editor field completion from your JSON Schema, and `@typfolio/dev-tools` compiles each template against minimal and full samples of that schema in CI, so a renamed field or an unguarded optional value fails the build, not the user.
-
-**The UI stays responsive.** `@typfolio/workers` runs compilation in a bounded pool of web workers with queueing, timeouts and hard cancellation that terminates a running compile mid-way. Batches stream results as they finish, so generating hundreds of documents client-side is an ordinary loop.
-
-**What the user sees goes into the document.** A live chart or any on-screen region can be captured (SVG, or PNG via html2canvas) and placed in the PDF as an asset with mandatory alt text.
-
-**Pinned and reproducible.** The compiler is built from a pinned upstream revision with pinned toolchains, ships with a provenance file whose hashes the tests verify, loads fonts and the WASM only from where you say, and never touches the network during a compile.
-
-## What Typfolio adds on top of the compiler
+## What you get
 
 | Concern | What you get |
 |---|---|
@@ -81,6 +64,8 @@ Typst does that: a heading is a heading, a table a table, and its PDF/UA-1 expor
 | Explicit resources | Fonts and the WASM are loaded from where you say; there is no implicit font CDN, no network access during compilation and no remote package downloads |
 | Workers | Keeps the UI responsive: bounded pool of web workers, FIFO queue, per-job `AbortSignal`, timeouts, hard cancellation by terminating the worker mid-compile, worker replacement and streaming batches |
 | React | `usePdf`: a PDF kept up to date with its data, like a query, with charts drawn at the PDF's size, over either client |
+| Checking the result | `@typfolio/dev-tools` reads a compiled PDF's tags, reports missing structure, shows both in a panel in the page, and runs veraPDF (`@typfolio/verapdf-wasm`) from a test or the `typfolio-validate` command |
+| Deterministic output | With a fixed creation timestamp the bytes are identical on every run, so a PDF can be snapshot-tested like any other build artifact |
 | Browser capture | Turn a live chart (SVG) or DOM region (PNG via html2canvas) into an asset with mandatory alt text, so what the user sees on screen lands in the PDF; only possible because compilation happens in the page |
 | Reproducible build | The compiler is built from a pinned upstream revision with pinned Rust and wasm-bindgen, path-remapped, with a provenance file whose hashes the tests verify |
 
@@ -112,10 +97,11 @@ The compiler never touches the host file system or the network. Everything a com
 | Package | Purpose |
 |---|---|
 | [`@typfolio/core`](./packages/core/README.md) | Templates and their typed data compiled into PDF bytes and diagnostics. Subpaths: `/capture`, `/capture/svg`, `/capture/dom` (browser asset capture), kept out of the main entry |
-| [`@typfolio/dev-tools`](./packages/dev-tools/README.md) | Dev-time tools, installed as a devDependency and never needed at runtime: template checks against schema samples, `inspectPdf` and structure warnings (optional `pdfjs-dist` peer) to report a compiled PDF's structure for tests, and a panel that shows a PDF's tags in the page |
+| [`@typfolio/dev-tools`](./packages/dev-tools/README.md) | Dev-time tools, installed as a devDependency and never needed at runtime: template checks against schema samples, `inspectPdf` and structure warnings (optional `pdfjs-dist` peer) to report a compiled PDF's structure for tests, a panel that shows a PDF's tags and veraPDF's verdict in the page, and `validatePdf` and the `typfolio-validate` command (optional `@typfolio/verapdf-wasm` peer) |
 | [`@typfolio/workers`](./packages/workers/README.md) | Module-worker execution: pools, queues, cancellation, timeouts, batches |
 | [`@typfolio/react`](./packages/react/README.md) | `usePdf`, with charts drawn at the PDF's size, and the `CaptureRegion` marker component |
 | [`@typfolio/typst-wasm`](./packages/typst-wasm/README.md) | The generated compiler binary, its bindings, the upstream licence and the build provenance; no hand-written code |
+| [`@typfolio/verapdf-wasm`](./packages/verapdf-wasm/README.md) | The [veraPDF](https://verapdf.org) validator built to WebAssembly: PDF/UA and PDF/A validation in Node and the browser without Java. Works on any PDF and has no dependency on the other packages. Its own licence, not Apache-2.0; see [Status](#status) |
 
 Core has no runtime dependency other than `@typfolio/typst-wasm`. `html2canvas` (DOM capture) is an optional peer dependency and is never bundled unless you import the DOM adapter.
 
@@ -195,84 +181,47 @@ const result = await checker.check(report, { pdf: { standards: ['ua-1'] } }); //
 
 Path rules, the minimal-mode rules and the test-runner recipe are in [docs/template-authoring.md](./docs/template-authoring.md).
 
-## How it compares
-
-### Typst in JavaScript
-
-Several projects run the Typst compiler from JavaScript. They solve different problems, and Typfolio builds on one of them. Versions are the published ones on 13 October 2026.
-
-| | **Typfolio** (Typst 0.15.1) | [typst.ts](https://github.com/Myriad-Dreamin/typst.ts) (0.7.0) | [typst-wasm](https://github.com/typst-wasm/typst-wasm) (1.0.0) | [wasm-typst](https://github.com/LibrePaper/wasm-typst) (Typst 0.15.1) | [typst](https://github.com/typst-community/typst.js) npm (0.10.0-8) |
-|---|---|---|---|---|---|
-| What it is | Browser-first document-generation SDK: template + typed JSON → PDF | Typst toolkit: compiler, SVG/canvas/HTML renderer, framework components | Promise-based compiler for many runtimes | Raw WASM build of the compiler | Native Typst CLI binaries wrapped for Node |
-| Runs in the browser | Yes, primary target | Yes | Yes | Yes | No |
-| Runs in Node | Yes | Yes | Yes, plus Deno, Bun, Cloudflare Workers | Tooling only | Yes, plus Deno and Bun |
-| Outputs | PDF | SVG, canvas, HTML, PDF | PDF, SVG, PNG, HTML | PDF, experimental HTML | Whatever the CLI writes (PDF, PNG, SVG) |
-| Fonts | Supplied by the application | Downloaded from GitHub by default | Separate `@typst-wasm/fonts` package | Default fonts embedded in the binary | System and CLI fonts |
-| Typst packages | Not supported; one bundled helper package | Fetched from the registry | Loader and cache hooks | Host downloads what the compile reports it needs | CLI behaviour |
-| Network at compile time | None | Fonts and packages by default | Depends on loaders | None | None |
-| Workers and cancellation | Built-in pool, hard cancel, batches | Compiler runs where you put it | Worker and JSPI backends | None | Processes |
-| PDF standards | PDF/A-1 to A-4, PDF/UA-1, tags, timestamp; exporter-validated | No | Not documented | Not documented | CLI flags |
-| Typed input and schema-driven editor completion | Yes | No | No | No | No |
-| Reproducible, pinned build with verified provenance | Yes | Published packages | Published packages | Pinned to Typst 0.15.1 | Pinned binaries |
-| Licence | Apache-2.0 | Apache-2.0 | MIT | MIT (binary includes Apache-2.0 Typst) | See project |
-| Compiler asset, raw / Brotli (measured 1 Nov 2026, Brotli q11, 16 MB window) | 24.1 MB / 6.4 MB | 30.2 MB / 7.6 MB (`@myriaddreamin/typst-ts-web-compiler` 0.8.0-rc3) | 22.8 MB / 6.2 MB (`typst-wasm` 1.0.0) | 33.8 MB / 10.0 MB (release v0.3.1, fonts embedded) | Native binaries, not comparable |
-
-Typfolio's compiler binary is its own binding of Typst 0.15.1 (`crates/compiler`, built to WebAssembly with pinned sources and tools, and loadable under a strict Content Security Policy). If you need SVG or canvas rendering, incremental preview or Typst package imports, typst.ts is the right tool. If you need one PDF per data record with a typed contract and no network access, that is what Typfolio is for.
-
-### Other ways to make PDFs in a web application
-
-| Approach | Layout quality | Where it runs | Accessibility | Trade-off |
-|---|---|---|---|---|
-| **Typfolio** | Full typesetter | In the user's browser, no service (Node too) | Tagged PDF, PDF/UA-1 and PDF/A on request | 24 MB compiler asset (6.4 MB with Brotli) to host and cache |
-| HTML to PDF via headless Chrome (Puppeteer, Playwright) | Browser layout, good | A server process per job | Tagged PDF only with care; no PDF/UA validation | Needs a service and Chrome; slow and heavy per document |
-| `@react-pdf/renderer` | Flexbox subset of CSS | Browser or Node | No tagging | Re-implements layout; tables and typography are basic |
-| pdfmake, jsPDF, PDFKit | Manual layout primitives | Browser or Node | Untagged, or a tag tree you build by hand (PDFKit) | You write the page-breaking and text flow yourself |
-| LaTeX in WASM | Full typesetter | Browser | Tagged PDF is experimental in LaTeX | Larger assets, slower, LaTeX templates |
-| Commercial HTML/CSS formatters (Prince, PDFreactor) | Excellent | Server | Good | Licence cost, server-side only |
-
-## Browser support and measurements
-
-Browser-first means the browser matrix is the primary test target: a Playwright suite drives the smoke pages and the React example in Chromium, Firefox and WebKit. All five pages pass in each engine.
-
-| | Chromium 156 | Firefox 157 | WebKit 27.2 |
-|---|---|---|---|
-| Compiler initialisation (page / module worker) | 37 ms / 19 ms | 223 ms / 211 ms | 122 ms / 72 ms |
-| One-page compile, warm (page / worker) | 46 ms / 4 ms | 5 ms / 5 ms | 26 ms / 27 ms |
-| Capture (SVG + html2canvas) and PDF/UA compile | pass | pass | pass |
-| React example, direct and worker routes | pass | pass | pass |
-
-Throughput on a realistic document (a report with a heading, five paragraphs and a 12-row table per section, PDF/UA-1, fresh data on every run so nothing is cached; Node on a laptop, median of five runs):
-
-| Document | Pages | Output | Compile time |
-|---|---|---|---|
-| 5 sections | 12 | 76 kB | 74 ms |
-| 25 sections | 52 | 328 kB | 218 ms |
-| 50 sections | 102 | 647 kB | 358 ms |
-
-Compiling the same data twice takes about 20 ms the second time, because the compiler caches unchanged work. The first compile after loading the module costs an extra 200–250 ms.
-
-Sizes from the production Vite builds:
-
-| Artifact | Size |
-|---|---|
-| Compiler WASM | 24,161,860 bytes; about 8.8 MB gzip, 6.4 MB Brotli |
-| Worker application JavaScript (host + worker runtime) | 47.7 kB + 33.3 kB |
-| Core-only library build | about 40 kB |
-
-The WASM is emitted as a separate asset by every tested build, never inlined into JavaScript, so browsers cache it once. Numbers are from one machine with a local server and are illustrative, not benchmarks.
-
 ## Accessibility
 
-Typfolio asks the compiler for tagged PDF by default and for PDF/UA-1 or PDF/A when requested. The compiler tags what the template marks up: `= Heading` becomes an H1, `table` a Table with TH header cells, `figure(image(alt: ...))` a Figure with its alt text. A title set in a bigger face is a paragraph, not a heading, and both the exporter and a validator accept that, because they check that the tags present are well formed, not that the content has the tags it needs. With PDF/UA-1 the exporter refuses an image without alt text and headings that skip a level or start below H1, and the `@typfolio/dev-tools` check runs those rules against schema-derived samples in CI. It accepts a table without header cells and a document without headings: `structureWarnings` from `@typfolio/dev-tools/pdf` reports those, and the check fails on them with `structure: checkStructure`. Alternative text comes from your data, so a captured chart's `altText` should state its conclusion, not just that it is a chart.
+Typfolio asks the compiler for tagged PDF by default and for PDF/UA-1 or PDF/A on request. The compiler tags what the template marks up: `= Heading` becomes an H1, `table` a Table with TH header cells, `figure(image(alt: ...))` a Figure with its alt text. A title set in a bigger face is a paragraph, not a heading. So write structure, and check for it. Three things check a document, and each catches what the one before lets through:
 
-So write structure, and test for it. `inspectPdf` from `@typfolio/dev-tools/pdf` reports a compiled PDF's tagging, title, language, its tags page by page, headings in document order and figure alt text, and `checkStructure` turns the missing structure above into warnings; while you edit, `mountStructureDevtools` from `@typfolio/dev-tools/panel` shows the tags and the warnings in the page. Run it on documents compiled from real data too: a schema sample is usually one page, so it cannot show that six pages have no heading. A test can also require that the headings match the outline the data implies. A tagged or PDF/UA-labelled file is not by itself proof of accessibility: run a validator such as [veraPDF](https://verapdf.org) on real documents (`validatePdf` from `@typfolio/dev-tools/validate` and the `typfolio-validate` command run it without Java, once `@typfolio/verapdf-wasm` is installed) and review reading order and alt text by hand.
+| | What it catches | Where it runs |
+|---|---|---|
+| **The compiler** | With PDF/UA-1: an image without alt text, headings that skip a level or start below H1. It refuses to write the file | Every compile; `createTemplateChecker` runs it on schema samples in CI |
+| **Structure warnings** | What the standard accepts but a reader needs: a table without header cells, several pages without a heading | `checkStructure` from `@typfolio/dev-tools/pdf` in a test, or `structure: checkStructure` in the template check |
+| **veraPDF** | The standard's rules checked on the finished file, by an independent validator: the same one, built to WebAssembly, so there is no Java to install | `validatePdf` from `@typfolio/dev-tools/validate` in a test, `typfolio-validate` in CI |
+
+```sh
+npm install --save-dev @typfolio/dev-tools @typfolio/verapdf-wasm
+npx typfolio-validate --flavour auto out/*.pdf   # exits 1 when a file fails, so the build fails
+```
+
+```ts
+import { checkStructure } from '@typfolio/dev-tools/pdf';
+import { validatePdf } from '@typfolio/dev-tools/validate';
+
+assert.deepEqual(await checkStructure(bytes), []);
+assert.ok((await validatePdf(bytes, { flavour: 'ua1' })).compliant);
+```
+
+While you edit a template, `mountStructureDevtools` from `@typfolio/dev-tools/panel` shows all three in the page: the tags beside the page they tag, the warnings, and veraPDF's verdict on every compile. The [inspect demo](https://typfolio.kerematam.com/inspect) is that panel on a document whose structure you can take away, and the [validate page](https://typfolio.kerematam.com/validate) runs veraPDF on any PDF you drop on it.
+
+**A pass is not proof.** All three check that the tags present are well formed, not that the content has the tags it needs: bold text in place of a heading passes every one of them on a one-page document. Run the checks on documents compiled from real data, since a schema sample is usually one page and cannot show that six pages have no heading; a test can also require that the headings match the outline the data implies. Alternative text comes from your data, so a captured chart's `altText` should state its conclusion, not just that it is a chart. Reading order and alt text still need a person, and a tagged or PDF/UA-labelled file is not by itself an accessible one.
+
+## How it compares, and how fast it is
+
+If you need SVG or canvas rendering, incremental preview or Typst package imports, [typst.ts](https://github.com/Myriad-Dreamin/typst.ts) is the right tool. If you need one PDF per data record with a typed contract, structure you can check and no network access, that is what Typfolio is for. [docs/comparison.md](./docs/comparison.md) compares it with the other Typst builds for JavaScript and with headless Chrome, react-pdf, pdfmake and others.
+
+On a laptop a 50-page PDF/UA report compiles in about 220 ms and a one-page document in 5–50 ms; the compiler is a 24 MB WASM asset (6.4 MB with Brotli) that the browser downloads once. It is tested in Chromium, Firefox and WebKit. The tables are in [docs/measurements.md](./docs/measurements.md).
 
 ## Documentation
 
 - [docs/template-authoring.md](./docs/template-authoring.md): template folders, `@local/typfolio`, templates with partials, editor completion, build-time checks, typed calls, loading a folder.
 - [docs/errors.md](./docs/errors.md): error and diagnostic codes, and what to do about each.
+- [docs/comparison.md](./docs/comparison.md) and [docs/measurements.md](./docs/measurements.md): other ways to make PDFs, browser support, compile times and sizes.
 - [docs/compiler-build.md](./docs/compiler-build.md): the pinned compiler build, rebuild and test commands, compatibility and limits.
-- Package READMEs: [`core`](./packages/core/README.md), [`workers`](./packages/workers/README.md), [`react`](./packages/react/README.md), [`wasm`](./packages/typst-wasm/README.md).
+- [docs/verapdf-build.md](./docs/verapdf-build.md): how the validator is built to WebAssembly, and how it is checked against veraPDF on the JVM.
+- Package READMEs: [`core`](./packages/core/README.md), [`dev-tools`](./packages/dev-tools/README.md), [`workers`](./packages/workers/README.md), [`react`](./packages/react/README.md), [`typst-wasm`](./packages/typst-wasm/README.md), [`verapdf-wasm`](./packages/verapdf-wasm/README.md).
 
 ## Development
 
@@ -297,9 +246,9 @@ npm run test:browser   # builds and serves the production worker smoke test for 
 Example dev servers (details in [examples/README.md](./examples/README.md)):
 
 - `npm run dev:react`: routed Vite React app with direct-core and worker-backed pages over the same components, and a Charts page that draws charts for the PDF with `useRenderedAssets`.
-- `npm run dev:site`: a Typfolio overview with links to the worker batch benchmark and two [pretext](https://github.com/chenglou/pretext) demos rendered as live PDFs; pretext lays out the text in the browser and Typst draws the result. Its `/validate` page validates PDFs you drop on it with veraPDF, in the page, when the validator has been built (`npm run build:verapdf`).
+- `npm run dev:site`: the [site](https://typfolio.kerematam.com/): an overview, the worker batch benchmark, two [pretext](https://github.com/chenglou/pretext) demos rendered as live PDFs, `/inspect` (a compiled document in the tags panel) and `/validate` (veraPDF on PDFs you drop on it). The last two use the validator when it has been built (`npm run build:verapdf`).
 - `npm run dev:capture`: browser smoke page for the SVG and DOM capture adapters.
 
 ## Status
 
-Typfolio is licensed under [Apache-2.0](./LICENSE). The packages are published to npm as `@typfolio/*`; they are pre-1.0, so minor versions can still change the API. The compiler does not support Typst package imports beyond the bundled helper, page ranges or strict CSP without `unsafe-eval`; see [compatibility and limits](./docs/compiler-build.md#compatibility-and-limits).
+Typfolio is licensed under [Apache-2.0](./LICENSE), with one exception: `@typfolio/verapdf-wasm` carries veraPDF (MPL-2.0) and a runtime under the Oracle GraalVM Free Terms and Conditions, which allow free use, including in CI, but restrict shipping it inside a paid product; read [its licence](./packages/verapdf-wasm/LICENSE) before you redistribute it. Nothing else depends on it. The packages are published to npm as `@typfolio/*`; they are pre-1.0, so minor versions can still change the API. The compiler does not support Typst package imports beyond the bundled helper, page ranges or strict CSP without `unsafe-eval`; see [compatibility and limits](./docs/compiler-build.md#compatibility-and-limits).

@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type DragEvent } from 'react';
+import { Link } from '@tanstack/react-router';
 import './styles.css';
 
 // The validator is not part of this bundle: it is served beside the site at /verapdf/ (tools/prepare-verapdf-demo.ts)
@@ -46,6 +47,25 @@ async function readManifest(): Promise<Manifest | undefined> {
   } catch {
     return undefined;
   }
+}
+
+/** A command or a snippet with a button that copies it. */
+function Command({ label, text }: { label: string; text: string }) {
+  const [copied, setCopied] = useState<boolean>();
+  useEffect(() => {
+    if (copied === undefined) return;
+    const timer = setTimeout(() => setCopied(undefined), 1500);
+    return () => clearTimeout(timer);
+  }, [copied]);
+  return (
+    <figure className="validate-command">
+      <figcaption>{label}</figcaption>
+      <pre><code>{text}</code></pre>
+      <button type="button" className="button button--small" onClick={() => navigator.clipboard.writeText(text).then(() => setCopied(true), () => setCopied(false))}>
+        <span aria-live="polite">{copied === undefined ? 'Copy' : copied ? 'Copied' : 'Not copied'}</span>
+      </button>
+    </figure>
+  );
 }
 
 function ReportView({ report }: { report: Report }) {
@@ -223,6 +243,25 @@ export function ValidateWorkbench() {
           </article>
         ))}
       </div>
+      <section className="card validate-card validate-use" aria-labelledby="validate-use-title">
+        <p className="kicker">Use it yourself</p>
+        <h2 id="validate-use-title">The same validator, in your pipeline</h2>
+        <p>
+          It is an npm package, so it runs wherever Node does, with no Java to install: in a CI step, in a test, or in a script. It validates any PDF, not only ones Typfolio made.
+        </p>
+        <Command label="Install" text="npm install --save-dev @typfolio/dev-tools @typfolio/verapdf-wasm" />
+        <Command label="In CI, or from a shell" text="npx typfolio-validate --flavour auto out/*.pdf" />
+        <p className="validate-use-note">
+          It exits with 0 when every file passes, 1 when one fails, and 2 for a file that declares no standard or cannot be read, so a failing PDF fails the build. <code>--format json</code> prints the reports for another tool to read.
+        </p>
+        <Command label="In a test" text={`import { validatePdf } from '@typfolio/dev-tools/validate';
+
+const report = await validatePdf(pdfBytes, { flavour: 'ua1' });
+assert.ok(report.compliant && report.logs.length === 0);`} />
+        <p className="validate-use-note">
+          While you write a template, the <Link to="/inspect">tags panel</Link> of the same package shows the verdict beside the tags, on every compile. Free to use, including in CI; before you ship the validator to others as part of a product, read its <a href="/verapdf/LICENSE.txt">licence</a>.
+        </p>
+      </section>
       {manifest ? (
         <p className="validate-about">
           veraPDF {manifest.verapdf}, built to WebAssembly with {manifest.graalvm} ({megabytes(manifest.wasmBytes)}, {megabytes(manifest.gzipBytes)} to download).

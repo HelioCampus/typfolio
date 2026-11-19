@@ -1,0 +1,14 @@
+.inspect { display: grid; grid-template-columns: minmax(250px, 320px) minmax(0, 1fr); gap: 16px; align-items: start; }
+.inspect-controls { display: grid; gap: 18px; }
+.inspect-controls fieldset { margin: 0; padding: 0; border: 0; display: grid; gap: 10px; }
+.inspect-controls legend { margin-bottom: 10px; padding: 0; color: var(--gold); font-size: 11px; font-weight: 600; letter-spacing: 0.14em; text-transform: uppercase; }
+.inspect-switch { display: flex; gap: 10px; align-items: flex-start; font-size: 14px; line-height: 1.4; cursor: pointer; }
+.inspect-switch input { margin: 3px 0 0; accent-color: var(--gold); }
+.inspect-switch strong { display: block; font-weight: 500; }
+.inspect-switch small { display: block; margin-top: 4px; color: var(--muted); font-size: 12.5px; line-height: 1.5; }
+.inspect-hint, .inspect-status { margin: 0; color: var(--muted); font-size: 12.5px; line-height: 1.5; }
+.inspect-refused { margin: 0; padding: 10px 12px; border-radius: 9px; background: rgba(240, 138, 120, 0.12); color: #f0a898; font-size: 13px; line-height: 1.5; }
+.inspect-panel { height: min(720px, 78vh); min-height: 460px; border: 1px solid var(--line); border-radius: 14px; overflow: hidden; background: var(--panel); }
+@media (max-width: 860px) {
+  .inspect { grid-template-columns: 1fr; }
+}

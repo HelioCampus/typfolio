@@ -21,7 +21,9 @@ button { font: inherit; }
 
 .topbar { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding-bottom: 16px; border-bottom: 1px solid var(--line); }
 .topbar { --typfolio-mark-bg: var(--gold); --typfolio-mark-ink: var(--stage); }
-.topbar-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
+.topbar-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; min-width: 0; max-width: 100%; }
+.topbar-actions nav { max-width: 100%; overflow-x: auto; scrollbar-width: none; }
+.topbar-actions nav a { white-space: nowrap; }
 nav { display: inline-flex; gap: 4px; padding: 3px; border: 1px solid var(--line); border-radius: 999px; }
 nav a { padding: 6px 14px; border-radius: 999px; color: var(--muted); font-size: 13px; text-decoration: none; }
 nav a.active { background: rgba(196, 163, 90, 0.16); color: var(--gold); }

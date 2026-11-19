@@ -33,7 +33,7 @@ for (const name of ['_headers', '404.html']) {
 }
 const index = await readFile(resolve(output, 'index.html'), 'utf8');
 assert.ok(index.includes('id="home-title"'), 'Homepage must be prerendered into index.html');
-for (const route of ['ascii', 'editorial', 'performance', 'validate']) {
+for (const route of ['ascii', 'editorial', 'performance', 'inspect', 'validate']) {
   const shell = await readFile(resolve(output, `${route}.html`), 'utf8');
   assert.ok(shell.includes('Loading the demo'), `${route} must have a static loading shell`);
   assert.ok(!shell.includes('id="home-title"'), `${route} must not serve the homepage`);

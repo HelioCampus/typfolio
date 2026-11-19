@@ -12,7 +12,7 @@ export default defineConfig({
       // Each URL gets static HTML with its own hydration state. Demo components
       // have ssr: false, so only their loading shell is rendered during the build.
       prerender: { enabled: true, autoStaticPathsDiscovery: false, crawlLinks: false },
-      pages: ['/', '/ascii', '/editorial', '/performance', '/validate'].map(path => ({
+      pages: ['/', '/ascii', '/editorial', '/performance', '/inspect', '/validate'].map(path => ({
         path,
         prerender: { enabled: true, outputPath: path === '/' ? '/index.html' : `${path}.html` },
       })),

@@ -48,3 +48,13 @@
 .validate-condition { margin: 4px 0 0; }
 .validate-about { margin: 0; color: var(--muted); font-size: 13px; line-height: 1.6; }
 .validate-about a { color: var(--gold); }
+.validate-use { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; padding: 20px 18px; }
+.validate-use .kicker { margin: 0; }
+.validate-use h2 { margin: 0; font: 600 20px Georgia, serif; }
+.validate-use > p { margin: 0; color: var(--muted); font-size: 14px; line-height: 1.6; max-width: 70ch; }
+.validate-use a { color: var(--gold); }
+.validate-use code { font: 12.5px ui-monospace, SFMono-Regular, Menlo, monospace; }
+.validate-command { position: relative; margin: 0; border: 1px solid var(--line); border-radius: 10px; background: var(--stage); }
+.validate-command figcaption { padding: 8px 14px 0; color: var(--muted); font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; }
+.validate-command pre { margin: 0; padding: 6px 84px 12px 14px; overflow-x: auto; color: var(--ink); font: 13px/1.55 ui-monospace, SFMono-Regular, Menlo, monospace; }
+.validate-command .button { position: absolute; top: 8px; right: 8px; }

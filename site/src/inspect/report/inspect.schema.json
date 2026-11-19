@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "InspectInput",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["title", "summary", "rows", "chartAlt", "headings", "tableHeader", "figureAlt"],
+  "properties": {
+    "title": { "type": "string" },
+    "summary": { "type": "string" },
+    "rows": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["outcome", "target", "result"],
+        "properties": {
+          "outcome": { "type": "string" },
+          "target": { "type": "integer" },
+          "result": { "type": "integer" }
+        }
+      }
+    },
+    "chartAlt": { "type": "string" },
+    "headings": { "type": "boolean", "description": "Mark the headings up as headings; otherwise they are bold text." },
+    "tableHeader": { "type": "boolean", "description": "Give the table a header row." },
+    "figureAlt": { "type": "boolean", "description": "Give the chart its alternative text." }
+  }
+}

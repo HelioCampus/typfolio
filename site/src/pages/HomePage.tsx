@@ -42,13 +42,13 @@ export default function HomePage() {
           </div>
           <div>
             <p>We needed PDFs that meet accessibility standards and that screen readers can actually use. A screen reader needs a file that says which text is a heading, which is a table, and in what order to read it. The JavaScript PDF libraries we used only draw, so we kept patching the finished files, and every new requirement became another patch. That was not a path we could maintain. Typst keeps the meaning while it lays out the page, so the PDF has it from the start, and the template is the only thing left to maintain.</p>
-            <p>It ran on a server first, and was fast enough that the server was the only overhead left. Now it runs as WASM in the page, and Typfolio adds what we had to build around it: <strong>typed data, editor completion and template checks</strong>, so a changed field fails the build, not the user.</p>
+            <p>It ran on a server first, and was fast enough that the server was the only overhead left. Now it runs as WASM in the page, and Typfolio adds what we had to build around it: <strong>typed data, editor completion and template checks</strong>, so a changed field fails the build, not the user, and <strong>tools that check the result</strong>: a tags panel, structure warnings and veraPDF.</p>
           </div>
         </section>
 
         <section className="home-demos" id="demos" aria-labelledby="demos-title">
           <div className="home-section-heading">
-            <div><p className="kicker">Try it yourself</p><h2 id="demos-title">Three demos. Compiled here.</h2></div>
+            <div><p className="kicker">Try it yourself</p><h2 id="demos-title">Make it. Compiled here.</h2></div>
             <p>Everything runs in your browser.</p>
           </div>
           <div className="home-demo-grid">
@@ -69,6 +69,27 @@ export default function HomePage() {
               <h3 id="editorial-title">A page that flows.</h3>
               <p>Drag the orbs and watch columns of text find their way around them, right inside the PDF preview.</p>
               <span className="home-demo-open">Open the editorial engine <span aria-hidden="true">↗</span></span>
+            </Link>
+          </div>
+        </section>
+
+        <section className="home-demos home-checks" id="check" aria-labelledby="check-title">
+          <div className="home-section-heading">
+            <div><p className="kicker">Then check it</p><h2 id="check-title">Prove it. Checked here too.</h2></div>
+            <p>A tagged PDF is a claim. These show what backs it.</p>
+          </div>
+          <div className="home-demo-grid home-demo-grid--two">
+            <Link className="home-demo" to="/inspect" aria-labelledby="inspect-title">
+              <div className="home-demo-label"><span>Dev tools · Tags and verdict</span><span aria-hidden="true">04</span></div>
+              <h3 id="inspect-title">See what a screen reader gets.</h3>
+              <p>Compile a report, read its tag tree beside the page, and take structure away to watch who notices: the compiler, the warnings, veraPDF, or nobody.</p>
+              <span className="home-demo-open">Inspect a document <span aria-hidden="true">↗</span></span>
+            </Link>
+            <Link className="home-demo" to="/validate" aria-labelledby="validate-home-title">
+              <div className="home-demo-label"><span>veraPDF · No Java, no upload</span><span aria-hidden="true">05</span></div>
+              <h3 id="validate-home-title">Validate any PDF.</h3>
+              <p>Drop a file and veraPDF checks it against PDF/UA or PDF/A in the page. The same validator is an npm package for your tests and CI.</p>
+              <span className="home-demo-open">Open the validator <span aria-hidden="true">↗</span></span>
             </Link>
           </div>
         </section>
