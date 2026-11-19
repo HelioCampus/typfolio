@@ -21,7 +21,7 @@
     "./validate": { "types": "./dist/validate.d.ts", "import": "./dist/validate.js" }
   },
   "bin": {
-    "typfolio-validate": "./dist/validate-cli.js"
+    "typfolio-validate": "dist/validate-cli.js"
   },
   "typesVersions": {
     "*": {
