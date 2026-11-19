@@ -2,9 +2,9 @@
 
 A short introduction to Typfolio, two [pretext](https://github.com/chenglou/pretext) demos reproduced as Typst-rendered PDFs, a worker batch performance demo, and a page that validates PDFs with veraPDF. This is a verification fixture and a showcase, not a Typfolio package.
 
-    npm run dev:pretext        # http://127.0.0.1:4190
-    npm run build:pretext      # type checks, production build and static deployment checks
-    npm run preview:pretext    # Cloudflare static hosting locally, http://127.0.0.1:4190
+    npm run dev:demos        # http://127.0.0.1:4190
+    npm run build:demos      # type checks, production build and static deployment checks
+    npm run preview:demos    # Cloudflare static hosting locally, http://127.0.0.1:4190
 
 ## Application stack and deployment
 
@@ -24,19 +24,19 @@ From a checkout with the pinned compiler artifact already generated:
 
 ```sh
 npm ci
-npm run build:pretext
-npm run preview:pretext
+npm run build:demos
+npm run preview:demos
 # When ready to publish, authenticate with Wrangler and run:
-npm run deploy:pretext
+npm run deploy:demos
 ```
 
-The configured project name is `typfolio-demos`; change it if the Cloudflare project uses another name. `deploy:pretext` rebuilds and checks the files before uploading only the client directory. Preview is local and needs no Cloudflare credentials. Use `npm run dev:pretext` for Vite hot reload; stop that server before previewing on the same port.
+The configured project name is `typfolio-demos`; change it if the Cloudflare project uses another name. `deploy:demos` rebuilds and checks the files before uploading only the client directory. Preview is local and needs no Cloudflare credentials. Use `npm run dev:demos` for Vite hot reload; stop that server before previewing on the same port.
 
 The configured production hostname is **`typfolio.kerematam.com`**, declared in `wrangler.json` with `custom_domain: true`. Deploy using the Cloudflare account containing the active `kerematam.com` zone; Cloudflare creates the domain's DNS record and HTTPS certificate. If that hostname already has a CNAME, resolve that conflict before deployment. The app is served at the subdomain's root, so no Vite base path or router changes are needed. See [Cloudflare Custom Domains](https://developers.cloudflare.com/workers/configuration/routing/custom-domains/).
 
 The same client directory can be uploaded to **Cloudflare Pages** as a static site (framework preset: **None**). The included `_headers` and `404.html` work there too. A top-level `404.html` prevents Pages from treating missing assets as homepage requests. Do not select a TanStack Start SSR deployment preset or upload the sibling `server` directory.
 
-**A fresh clone needs the compiler artifact.** `packages/wasm/generated` is gitignored, so a bare Cloudflare Git build cannot succeed with only `npm ci && npm run build:pretext`. Generate the pinned compiler first with `npm run setup:wasm && npm run build:wasm` (see [compiler build instructions](../../docs/compiler-build.md)), or use the existing GitHub CI pipeline: after browser tests pass, its `browser-demos-static` artifact contains the complete ready-to-upload site. Download and extract that artifact, then upload its contents to Cloudflare Pages. This avoids rebuilding Rust on Cloudflare and requires no production Node or Rust runtime.
+**A fresh clone needs the compiler artifact.** `packages/wasm/generated` is gitignored, so a bare Cloudflare Git build cannot succeed with only `npm ci && npm run build:demos`. Generate the pinned compiler first with `npm run setup:wasm && npm run build:wasm` (see [compiler build instructions](../../docs/compiler-build.md)), or use the existing GitHub CI pipeline: after browser tests pass, its `browser-demos-static` artifact contains the complete ready-to-upload site. Download and extract that artifact, then upload its contents to Cloudflare Pages. This avoids rebuilding Rust on Cloudflare and requires no production Node or Rust runtime.
 
 `tools/check-static-demo.ts` checks that only client files are configured for deployment, no server entry is present, route entry pages and headers are emitted, the compiler hash matches the pin, the validator (when included) unpacks to the binary its manifest names and comes with its licence files, and every file fits Cloudflare's **25 MiB per-asset limit**. The current compiler is about **23.2 MiB**, so future compiler growth is checked before deployment. Browser tests run against Wrangler's static asset server, cover direct visits and refreshes, and reject API calls or external requests during the demos.
 
@@ -62,7 +62,7 @@ The header links back to the **Overview** and groups ASCII and Editorial under *
 - The binary is 29.5 MiB, over Cloudflare's 25 MiB limit for one file, so it is served gzipped (`verapdf.wasm.gz`, about 9.2 MiB). The worker unpacks it with `DecompressionStream` and compares its SHA-256 with `manifest.json` before starting it.
 - The binary may only be distributed with its licence and notice files (`packages/verapdf-wasm/LICENSE`): they are served under `/verapdf/` and linked from the page, with the source of the one veraPDF file that is modified. `tools/check-static-demo.ts` refuses a deployment that has the binary without them. The runtime inside the binary is under Oracle's GraalVM Free Terms and Conditions, which allow distributing it free of charge: keep this page free.
 
-To deploy the page, build the validator first: `npm run setup:verapdf && npm run build:verapdf`, then `npm run deploy:pretext` as for the rest.
+To deploy the page, build the validator first: `npm run setup:verapdf && npm run build:verapdf`, then `npm run deploy:demos` as for the rest.
 
 ## Worker batch performance
 

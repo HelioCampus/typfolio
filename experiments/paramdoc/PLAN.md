@@ -529,7 +529,7 @@ shared, the plugin changes nothing).
 - Written for the client environment and `emitFile`; an SSR build gets the same module (URLs) but is not
   tested at first.
 
-Exit: the demo builds and runs from the plugin's output (`npm run build:pretext`, `check-static-demo`) with its
+Exit: the demo builds and runs from the plugin's output (`npm run build:demos`, `check-static-demo`) with its
 loader and the `?url` imports gone; `test:vite` and `test:packed` cover the plugin; a refusal fails a build
 with the message; in `check.sh` a schema narrows the fuzz and a slot too narrow for its `maxLength` is refused;
 the exporter README has a "Vite" section and the authoring guide a paramdoc paragraph; export times per
