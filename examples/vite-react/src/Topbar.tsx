@@ -9,7 +9,7 @@ interface TopbarProps {
 export function Topbar({ clientBadge, executionBadge }: TopbarProps) {
   return (
     <header className="topbar typfolio-header">
-      <Link className="typfolio-brand" to="/" aria-label="Typfolio home">
+      <Link className="typfolio-brand" to="/">
         <span className="typfolio-mark" aria-hidden="true">T</span>
         <span>
           <strong>Typfolio</strong>

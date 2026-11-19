@@ -41,12 +41,17 @@
 .home-demo-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
 .home-demo-grid--two { grid-template-columns: repeat(2, 1fr); }
 .home-checks { padding-top: 54px; }
-.home-demo { display: flex; flex-direction: column; padding: 23px; border: 1px solid var(--line); border-radius: 8px; color: var(--ink); background: var(--panel); text-decoration: none; transition: border-color .15s, background .15s; }
+.home-demo { position: relative; display: flex; flex-direction: column; padding: 23px; border: 1px solid var(--line); border-radius: 8px; color: var(--ink); background: var(--panel); text-decoration: none; transition: border-color .15s, background .15s; }
 .home-demo:hover { border-color: var(--gold); background: #1b1920; }
 .home-demo--featured { border-color: #c4a35a66; background: linear-gradient(135deg, #c4a35a15, #12121b 80%); }
 .home-demo-label { display: flex; justify-content: space-between; gap: 10px; color: var(--gold); font-size: 9px; text-transform: uppercase; letter-spacing: .09em; }
 .home-demo-label span:last-child { color: var(--home-muted); font-variant-numeric: tabular-nums; }
 .home-demo h3 { margin: 22px 0 10px; font: 400 24px/1.1 Georgia, serif; letter-spacing: -.02em; }
+/* The title is the card's link, so its name is the text it shows; ::after stretches the click area over the card. */
+.home-demo h3 a { color: inherit; text-decoration: none; }
+.home-demo h3 a::after { content: ""; position: absolute; inset: 0; border-radius: inherit; }
+.home-demo h3 a:focus-visible { outline: none; }
+.home-demo h3 a:focus-visible::after { outline: 2px solid var(--gold); outline-offset: 3px; }
 .home-demo p { margin: 0 0 24px; color: var(--home-muted); font-size: 13px; line-height: 1.65; }
 .home-demo-open { display: flex; justify-content: space-between; gap: 10px; margin-top: auto; color: var(--gold); font-size: 12px; }
 .home-footer { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 12px; color: var(--home-muted); }

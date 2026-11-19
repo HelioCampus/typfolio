@@ -4,7 +4,7 @@ import '../../fixtures/browser/demo-header.css';
 export function Topbar({ section }: { readonly section: 'home' | 'pretext' | 'performance' | 'inspect' | 'validate' }) {
   return (
     <header className="topbar typfolio-header">
-      <Link className="typfolio-brand" to="/" aria-label="Typfolio home">
+      <Link className="typfolio-brand" to="/">
         <span className="typfolio-mark" aria-hidden="true">T</span>
         <span><strong>Typfolio</strong><small>PDFs made and checked in the browser</small></span>
       </Link>

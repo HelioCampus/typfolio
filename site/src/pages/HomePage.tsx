@@ -52,24 +52,24 @@ export default function HomePage() {
             <p>Everything runs in your browser.</p>
           </div>
           <div className="home-demo-grid">
-            <Link className="home-demo home-demo--featured" to="/performance" aria-labelledby="batch-title">
+            <article className="home-demo home-demo--featured">
               <div className="home-demo-label"><span>Performance</span><span aria-hidden="true">01</span></div>
-              <h3 id="batch-title">1000 PDFs, one browser.</h3>
+              <h3><Link to="/performance">1000 PDFs, one browser.</Link></h3>
               <p>Generate a batch on Web Workers. Compare pool sizes, watch throughput, and open every result.</p>
               <span className="home-demo-open">Run the benchmark <span aria-hidden="true">↗</span></span>
-            </Link>
-            <Link className="home-demo" to="/ascii" aria-labelledby="ascii-title">
+            </article>
+            <article className="home-demo">
               <div className="home-demo-label"><span>Pretext · Live rendering</span><span aria-hidden="true">02</span></div>
-              <h3 id="ascii-title">Type in motion.</h3>
+              <h3><Link to="/ascii">Type in motion.</Link></h3>
               <p>Move your pointer through proportional ASCII art, compiled into a fresh PDF as it animates.</p>
               <span className="home-demo-open">Explore variable ASCII <span aria-hidden="true">↗</span></span>
-            </Link>
-            <Link className="home-demo" to="/editorial" aria-labelledby="editorial-title">
+            </article>
+            <article className="home-demo">
               <div className="home-demo-label"><span>Pretext · Live layout</span><span aria-hidden="true">03</span></div>
-              <h3 id="editorial-title">A page that flows.</h3>
+              <h3><Link to="/editorial">A page that flows.</Link></h3>
               <p>Drag the orbs and watch columns of text find their way around them, right inside the PDF preview.</p>
               <span className="home-demo-open">Open the editorial engine <span aria-hidden="true">↗</span></span>
-            </Link>
+            </article>
           </div>
         </section>
 
@@ -79,18 +79,18 @@ export default function HomePage() {
             <p>A tagged PDF is a claim. These show what backs it.</p>
           </div>
           <div className="home-demo-grid home-demo-grid--two">
-            <Link className="home-demo" to="/inspect" aria-labelledby="inspect-title">
+            <article className="home-demo">
               <div className="home-demo-label"><span>Dev tools · Tags and verdict</span><span aria-hidden="true">04</span></div>
-              <h3 id="inspect-title">See what a screen reader gets.</h3>
+              <h3><Link to="/inspect">See what a screen reader gets.</Link></h3>
               <p>Compile a report, read its tag tree beside the page, and take structure away to watch who notices: the compiler, the warnings, veraPDF, or nobody.</p>
               <span className="home-demo-open">Inspect a document <span aria-hidden="true">↗</span></span>
-            </Link>
-            <Link className="home-demo" to="/validate" aria-labelledby="validate-home-title">
+            </article>
+            <article className="home-demo">
               <div className="home-demo-label"><span>veraPDF · No Java, no upload</span><span aria-hidden="true">05</span></div>
-              <h3 id="validate-home-title">Validate any PDF.</h3>
+              <h3><Link to="/validate">Validate any PDF.</Link></h3>
               <p>Drop a file and veraPDF checks it against PDF/UA or PDF/A in the page. The same validator is an npm package for your tests and CI.</p>
               <span className="home-demo-open">Open the validator <span aria-hidden="true">↗</span></span>
-            </Link>
+            </article>
           </div>
         </section>
       </main>

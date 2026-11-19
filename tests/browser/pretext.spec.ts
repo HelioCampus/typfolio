@@ -43,7 +43,7 @@ test('Start demo: static overview, demo links and compiler loaded on demand', as
   await page.reload();
   await expectLivePdf(page, '100%');
   expect(wasmRequests).toHaveLength(2);
-  await page.getByRole('link', { name: 'Typfolio home' }).click();
+  await page.getByRole('link', { name: /^Typfolio\s*PDFs made/ }).click();
   await expect(page).toHaveURL(`${demo}/`);
   await expect(page.getByRole('heading', { name: 'Make it. Compiled here.' })).toBeVisible();
   await expect(page.getByRole('link', { name: 'See what a screen reader gets.' })).toHaveAttribute('href', '/inspect');
