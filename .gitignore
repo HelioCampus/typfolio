@@ -16,4 +16,4 @@ packages/paramdoc-export/generated/*
 .claude/
 test-results/
 playwright-report/
-examples/pretext-hybrid/public/verapdf/
+site/public/verapdf/

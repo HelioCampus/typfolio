@@ -3,12 +3,12 @@ import { fileURLToPath } from 'node:url';
 import { test, expect } from '@playwright/test';
 import { samplePdfs } from './sample-pdfs.ts';
 
-// The demo site's /validate page, as Cloudflare would serve it (Wrangler's static assets over .build/pretext-hybrid):
+// The demo site's /validate page, as Cloudflare would serve it (Wrangler's static assets over .build/site):
 // veraPDF in a module worker, from a gzipped binary that the page unpacks itself. Files are validated in the page.
 const demo = 'http://127.0.0.1:4293';
 const root = new URL('../../', import.meta.url);
 // The site is built with the validator when it has been built here (npm run build:verapdf), and without it otherwise.
-const included = existsSync(fileURLToPath(new URL('.build/pretext-hybrid/client/verapdf/manifest.json', root)));
+const included = existsSync(fileURLToPath(new URL('.build/site/client/verapdf/manifest.json', root)));
 
 test('the validate page says so when the site was built without the validator', async ({ page }) => {
   test.skip(included, 'this build of the site includes the validator');

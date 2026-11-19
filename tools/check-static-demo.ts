@@ -6,8 +6,8 @@ import { fileURLToPath } from 'node:url';
 import { gunzipSync } from 'node:zlib';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
-const app = resolve(root, 'examples/pretext-hybrid');
-const output = resolve(root, '.build/pretext-hybrid/client');
+const app = resolve(root, 'site');
+const output = resolve(root, '.build/site/client');
 const config = JSON.parse(await readFile(resolve(app, 'wrangler.json'), 'utf8'));
 assert.equal(config.main, undefined, 'The demo must deploy static assets without a Cloudflare Worker entry');
 assert.equal(config.assets.binding, undefined, 'The demo does not need a server-side asset binding');

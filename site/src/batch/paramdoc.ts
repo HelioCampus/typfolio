@@ -4,10 +4,10 @@
 // `createWorkerClient` and `fillBatch`, driven from ./batch.ts like the compiler's). Its output is tagged
 // PDF/UA-1. The exported report is the slot dialect's version of ./report/main.typ: the same text, boxes, table
 // and score bars, but a static title and a tutor comment of up to three lines.
-import docUrl from '../../../../experiments/paramdoc/documents/report/doc.json?url';
+import docUrl from '../../../experiments/paramdoc/documents/report/doc.json?url';
 import type { ReportInput } from './data.ts';
 
-const fontUrls = import.meta.glob<string>('../../../../experiments/paramdoc/documents/report/fonts/*', { query: '?url', import: 'default', eager: true });
+const fontUrls = import.meta.glob<string>('../../../experiments/paramdoc/documents/report/fonts/*', { query: '?url', import: 'default', eager: true });
 
 /** The exported document's bytes and its font files, in the document's order. */
 export interface ParamdocDocument {

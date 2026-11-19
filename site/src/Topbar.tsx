@@ -1,5 +1,5 @@
 import { Link } from '@tanstack/react-router';
-import '../../../fixtures/browser/demo-header.css';
+import '../../fixtures/browser/demo-header.css';
 
 export function Topbar({ section }: { readonly section: 'home' | 'pretext' | 'performance' | 'validate' }) {
   return (

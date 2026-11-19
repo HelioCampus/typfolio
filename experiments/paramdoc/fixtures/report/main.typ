@@ -1,4 +1,4 @@
-// The worker-batch benchmark's progress report (examples/pretext-hybrid/src/batch/report/main.typ) in the slot
+// The worker-batch benchmark's progress report (site/src/batch/report/main.typ) in the slot
 // dialect. Differences from the original, forced by the dialect: the title is static, the tutor comment is at
 // most three ragged-right lines with an ellipsis, and columns have fixed widths. The alternating row fill is
 // two band variants picked by row parity; the score bar is a `bar` hole over a static track.

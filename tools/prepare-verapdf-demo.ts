@@ -1,4 +1,4 @@
-// Puts the veraPDF validator where the demo site (examples/pretext-hybrid) serves it from: public/verapdf/, which
+// Puts the veraPDF validator where the demo site (site) serves it from: public/verapdf/, which
 // Vite copies into the static output. The site's Vite config runs this at the start of every dev server and build.
 //
 // Nothing of the validator goes through the site's bundle: the page starts public/verapdf/worker.js as a module
@@ -21,7 +21,7 @@ import { gzipSync } from 'node:zlib';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 const pkg = join(root, 'packages/verapdf-wasm');
-const site = join(root, 'examples/pretext-hybrid');
+const site = join(root, 'site');
 const target = join(site, 'public/verapdf');
 
 export interface VerapdfDemoManifest {
@@ -69,5 +69,5 @@ export function prepareVerapdfDemo(): VerapdfDemoManifest | undefined {
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
   const manifest = prepareVerapdfDemo();
-  console.log(manifest ? `examples/pretext-hybrid/public/verapdf: veraPDF ${manifest.verapdf}, ${(manifest.gzipBytes / 1e6).toFixed(1)} MB gzipped` : 'No validator built: examples/pretext-hybrid/public/verapdf removed.');
+  console.log(manifest ? `site/public/verapdf: veraPDF ${manifest.verapdf}, ${(manifest.gzipBytes / 1e6).toFixed(1)} MB gzipped` : 'No validator built: site/public/verapdf removed.');
 }

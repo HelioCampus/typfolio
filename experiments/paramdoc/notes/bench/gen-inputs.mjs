@@ -1,5 +1,5 @@
 // Generates the paramdoc benchmark inputs from the repo's own synthetic generator (same seeds as the browser benchmark).
-import { reportInput } from '../../../../examples/pretext-hybrid/src/batch/data.ts';
+import { reportInput } from '../../../../site/src/batch/data.ts';
 import { writeFileSync } from 'node:fs';
 const count = Number(process.argv[2] ?? 1000);
 const inputs = [];

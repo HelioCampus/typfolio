@@ -268,7 +268,7 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: browser-demos-static
-          path: .build/pretext-hybrid/client/
+          path: .build/site/client/
           if-no-files-found: error
           retention-days: 7
 

@@ -1,5 +1,5 @@
 {
-  "$schema": "../../node_modules/wrangler/config-schema.json",
+  "$schema": "../node_modules/wrangler/config-schema.json",
   "name": "typfolio-demos",
   "compatibility_date": "2026-10-23",
   "routes": [
@@ -13,7 +13,7 @@
     "port": 4190
   },
   "assets": {
-    "directory": "../../.build/pretext-hybrid/client",
+    "directory": "../.build/site/client",
     "not_found_handling": "404-page"
   }
 }
