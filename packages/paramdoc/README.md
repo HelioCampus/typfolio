@@ -76,6 +76,6 @@ changes with the document format.
 One thread, the benchmark report (a page with a table of up to eight rows, score bars and a three-line comment),
 M-series Mac: about 3,250 documents per second in Node, median 0.29 ms per document, 69 kB per PDF (the two
 subset fonts are embedded in every file). In the browser, through `createWorkerClient` and `fillBatch` on four
-workers, the demo in the repository (`examples/pretext-hybrid`, the performance page's engine switch) renders
+workers, the demo in the repository (`site`, the performance page's engine switch) renders
 200 of these reports in 0.1 s: about 2,100 per second with the four cold starts of 20 ms included, 1 ms median
 per fill.

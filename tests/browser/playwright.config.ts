@@ -35,7 +35,7 @@ export default defineConfig({
   webServer: [
     {
       // Cloudflare serves only client assets here; the Start server bundle is never loaded.
-      command: `npx wrangler dev --local --config examples/pretext-hybrid/wrangler.json --ip 127.0.0.1 --port ${pretextPort} --inspector-port 0 --show-interactive-dev-session=false`,
+      command: `npx wrangler dev --local --config site/wrangler.json --ip 127.0.0.1 --port ${pretextPort} --inspector-port 0 --show-interactive-dev-session=false`,
       cwd: root,
       env: { WRANGLER_SEND_METRICS: 'false', BROWSER: 'none' },
       url: `http://127.0.0.1:${pretextPort}/`,

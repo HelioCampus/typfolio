@@ -5,6 +5,7 @@ import { TypstPdfError } from '@typfolio/core';
 import { createElement, type ReactElement } from 'react';
 import { createRoot } from 'react-dom/client';
 import type { PdfStructureSource } from './structure.js';
+import type { PdfValidationFlavour, PdfValidationReport } from './validation.js';
 import { Devtools, EmbeddedPanel } from './panel/devtools.js';
 import { css } from './panel/styles.js';
 
@@ -21,8 +22,27 @@ export interface StructurePanelPdfJs {
   };
 }
 
+/**
+ * A veraPDF validator for the panel's "veraPDF" view: what `createPdfValidator` of `@typfolio/dev-tools/validate`
+ * or `createValidator` of `@typfolio/verapdf-wasm` gives, or an object of your own that forwards to one in a worker
+ * and returns a promise. The panel loads no validator itself.
+ */
+export interface StructurePanelValidator {
+  validate(pdf: Uint8Array, options: { flavour: PdfValidationFlavour; maxChecksPerRule?: number }): PdfValidationReport | Promise<PdfValidationReport>;
+  /**
+   * The flavours the file declares. With it, the panel validates each PDF against those without being asked, while
+   * it is open.
+   */
+  detectFlavours?(pdf: Uint8Array): PdfValidationFlavour[] | Promise<PdfValidationFlavour[]>;
+}
+
 export interface StructurePanelOptions {
   readonly pdfjs: StructurePanelPdfJs;
+  /**
+   * Adds veraPDF's findings as a view beside the tags and the page, which validates the PDF on show. Without it the
+   * panel shows the tags and the page only.
+   */
+  readonly validator?: StructurePanelValidator;
   /**
    * The PDF to show, such as `usePdf`'s `result?.bytes`; absent until there is one. Each new one is read in place of
    * the last, which stays on show until it is; the bytes themselves are left as they are.
@@ -56,6 +76,8 @@ function checked<Options extends StructureDevtoolsOptions>(caller: string, optio
   const invalid = (message: string) => new TypstPdfError('INVALID_REQUEST', `${caller}: ${message}`);
   if (typeof options !== 'object' || options === null) throw invalid('options must be an object');
   if (typeof options.pdfjs?.getDocument !== 'function') throw invalid('pdfjs must be pdf.js, such as `import * as pdfjs from \'pdfjs-dist\'`');
+  if (options.validator !== undefined && typeof options.validator?.validate !== 'function') throw invalid('validator must have a validate function, such as what createPdfValidator gives');
+  if (options.validator?.detectFlavours !== undefined && typeof options.validator.detectFlavours !== 'function') throw invalid('validator.detectFlavours must be a function when it is given');
   if (options.bytes !== undefined && !(options.bytes instanceof Uint8Array)) throw invalid('bytes must be the PDF as a Uint8Array');
   if (options.theme !== undefined && !themes.has(options.theme)) throw invalid('theme must be \'system\', \'light\' or \'dark\'');
   if (options.position !== undefined && !sides.has(options.position)) throw invalid('position must be \'bottom\', \'top\', \'left\' or \'right\'');
@@ -100,8 +122,8 @@ function mount<Options extends StructureDevtoolsOptions>(caller: string, parent:
  */
 export function mountStructurePanel(element: Element, options: StructurePanelOptions): MountedStructurePanel<StructurePanelOptions> {
   if (element?.nodeType !== 1) throw new TypstPdfError('INVALID_REQUEST', 'mountStructurePanel: element must be the DOM element to show the panel in');
-  return mount('mountStructurePanel', element, options, ({ pdfjs, bytes, theme = 'system' }) =>
-    createElement(EmbeddedPanel, { pdfjs, bytes, theme }));
+  return mount('mountStructurePanel', element, options, ({ pdfjs, bytes, validator, theme = 'system' }) =>
+    createElement(EmbeddedPanel, { pdfjs, bytes, validator, theme }));
 }
 
 /**
@@ -110,6 +132,6 @@ export function mountStructurePanel(element: Element, options: StructurePanelOpt
  * options it cannot use.
  */
 export function mountStructureDevtools(options: StructureDevtoolsOptions): MountedStructurePanel<StructureDevtoolsOptions> {
-  return mount('mountStructureDevtools', document.body, options, ({ pdfjs, bytes, theme = 'system', position = 'bottom', buttonPosition = 'bottom-right', initialIsOpen = false }) =>
-    createElement(Devtools, { pdfjs, bytes, theme, position, buttonPosition, initialIsOpen }));
+  return mount('mountStructureDevtools', document.body, options, ({ pdfjs, bytes, validator, theme = 'system', position = 'bottom', buttonPosition = 'bottom-right', initialIsOpen = false }) =>
+    createElement(Devtools, { pdfjs, bytes, validator, theme, position, buttonPosition, initialIsOpen }));
 }

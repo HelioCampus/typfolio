@@ -1,0 +1,43 @@
+{
+  "verapdf": "1.30.3",
+  "mavenRepository": "https://repo1.maven.org/maven2",
+  "artifacts": [
+    { "group": "org.verapdf", "artifact": "core", "version": "1.30.3", "sha256": "c8b461a8542de34cb99a26496dfdc3b5a97a5deceb41fd417c7914aeffbede42", "license": "MPL-2.0" },
+    { "group": "org.verapdf", "artifact": "parser", "version": "1.30.3", "sha256": "f6318245ddd4aeb7ceebb4a946f226c2d4e0f7ee129517c265048398186ac354", "license": "MPL-2.0" },
+    { "group": "org.verapdf", "artifact": "pdf-model", "version": "1.30.3", "sha256": "5678ba09f16d7c9f8e8c764f1706efb9f875ee066a0a9fe8d6b3fb5dceb691a5", "license": "MPL-2.0" },
+    { "group": "org.verapdf", "artifact": "validation-model", "version": "1.30.3", "sha256": "368de78a2143f62b871e2f5eb0bb27d26a04eff2883a44d426f840d87b7fc55c", "license": "MPL-2.0" },
+    { "group": "org.verapdf", "artifact": "verapdf-xmp-core", "version": "1.30.3", "sha256": "0568b92f256526c5eaab36f0112f3098fbffd67d7174e256f694ade955880d0a", "license": "MPL-2.0 AND BSD-3-Clause" },
+    { "group": "org.verapdf", "artifact": "metadata-fixer", "version": "1.30.3", "sha256": "89a9ed3757b8c9bb4091bf37d591f8fce3dbd9c26b454f6ac1f2268eeeaa2988", "license": "MPL-2.0" },
+    { "group": "org.verapdf", "artifact": "feature-reporting", "version": "1.30.3", "sha256": "bf94dc85aec1c464344e2238866eb29927da277749c946095575a5654d0dde01", "license": "MPL-2.0" },
+    { "group": "org.mozilla", "artifact": "rhino", "version": "1.7.15.1", "sha256": "f3520a0e2e22d550f1216a456be233eb5385bf08e3219407dece7a16369eb38f", "license": "MPL-2.0" },
+    { "group": "javax.xml.bind", "artifact": "jaxb-api", "version": "2.3.1", "sha256": "88b955a0df57880a26a74708bc34f74dcaf8ebf4e78843a28b50eae945732b06", "license": "CDDL-1.1" },
+    { "group": "com.sun.xml.bind", "artifact": "jaxb-impl", "version": "2.3.2", "sha256": "b3a3d3aeaa5503cadc24dca9539b87efcd7bc3bd8c48018887a1489f2a77bdc0", "license": "BSD-3-Clause" },
+    { "group": "com.sun.xml.bind", "artifact": "jaxb-core", "version": "2.3.0.1", "sha256": "d2ecba63615f317a11fb55c6468f6a9480f6411c10951d9881bafd9a9a8d0467", "license": "CDDL-1.1" },
+    { "group": "javax.activation", "artifact": "javax.activation-api", "version": "1.2.0", "sha256": "43fdef0b5b6ceb31b0424b208b930c74ab58fac2ceeb7b3f6fd3aeb8b5ca4393", "license": "CDDL-1.1" }
+  ],
+  "graalvm": {
+    "distribution": "Oracle GraalVM",
+    "version": "25.5.5.0.3",
+    "java": "25.0.5.0.3",
+    "archives": {
+      "darwin-arm64": {
+        "url": "https://gds.oracle.com/download/graal/25i5/archive/graalvm-jdk-25i5-25.0.5.0.3_macos-aarch64_bin.tar.gz",
+        "sha256": "3c51d8ef62c63eb8454727f32d67aaff39afabe4c90b3c811c11547029c10819",
+        "home": "Contents/Home"
+      },
+      "linux-x64": {
+        "url": "https://gds.oracle.com/download/graal/25i5/archive/graalvm-jdk-25i5-25.0.5.0.3_linux-x64_bin.tar.gz",
+        "sha256": null,
+        "home": "."
+      }
+    }
+  },
+  "binaryen": "133",
+  "sourceDirectory": "packages/verapdf-wasm/java",
+  "metadataDirectory": "packages/verapdf-wasm/native-image",
+  "mainClass": "WasmMain",
+  "initializeAtBuildTime": ["org.xml.sax.helpers.DefaultHandler", "org.xml.sax.helpers.LocatorImpl"],
+  "nativeImageArgs": [],
+  "wasmSha256": null,
+  "launcherSha256": null
+}

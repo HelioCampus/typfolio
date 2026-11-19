@@ -1,0 +1,64 @@
+@typfolio/verapdf-wasm: licence
+===============================
+
+This package is not under one licence. It contains a WebAssembly binary built
+from software of several owners, and a small amount of code written for it.
+The parts and their terms are listed here; the full texts are in the files
+named.
+
+1. Code written for this package: Apache License 2.0
+----------------------------------------------------
+
+`src/`, `dist/`, the files in `java/` other than the one named in section 2,
+and the build scripts in the repository are licensed under the Apache License,
+Version 2.0. See `LICENSE-APACHE`.
+
+2. veraPDF and the libraries it uses, inside `generated/verapdf.wasm`
+---------------------------------------------------------------------
+
+veraPDF (https://verapdf.org) is dual-licensed under the GNU General Public
+License version 3 or later and the Mozilla Public License version 2.0 or later.
+It is used and distributed here under the Mozilla Public License 2.0, whose
+text is `generated/licenses/verapdf/LICENSE.MPL`.
+
+`java/org/verapdf/cos/filters/COSFilterFlateDecode.java` is a modified file of
+veraPDF Parser and remains under the Mozilla Public License 2.0; its header
+says what was changed. The source code of the unmodified veraPDF files, and of
+the other MPL-licensed library in the binary (Rhino), is available from the
+places named in `generated/THIRD_PARTY_NOTICES.md`.
+
+The other libraries and the font data in the binary, their licences and their
+notices are listed in `generated/THIRD_PARTY_NOTICES.md`, with the texts under
+`generated/licenses/`.
+
+3. The GraalVM runtime inside `generated/verapdf.wasm`
+------------------------------------------------------
+
+The binary is produced by Oracle GraalVM Native Image, which compiles its
+runtime and parts of the Java class library into it. Those portions are Oracle
+software, licensed to you by Oracle under the GraalVM Free Terms and
+Conditions (GFTC), `generated/licenses/oracle-graalvm/LICENSE.txt`, and not
+under the licences in sections 1 and 2. In summary, and the text itself
+governs:
+
+- you may use them, including for internal business operations;
+- you may redistribute them unmodified, under the GFTC, only if you do not
+  charge a fee for them, including a fee for a product that includes or is
+  bundled with them, or for a service that involves their use;
+- you may not reverse engineer, disassemble or decompile them, except as
+  allowed by law.
+
+`generated/verapdf.js` is derived from the launcher that GraalVM generates,
+whose header licenses it under the GNU General Public License version 2 with
+the Classpath exception; the header is kept, and the file says how it was
+modified.
+
+4. As a whole
+-------------
+
+Because of section 3, `generated/verapdf.wasm` is not open source software as
+a whole. Using it in development, in tests and in continuous integration is
+within the terms above. Before you ship it to others as part of a product or a
+service, read the GFTC.
+
+This file describes the licences; it is not legal advice.

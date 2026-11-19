@@ -1,0 +1,172 @@
+import assert from 'node:assert/strict';
+import { before, test } from 'node:test';
+import { existsSync } from 'node:fs';
+import { readFile } from 'node:fs/promises';
+import { fileURLToPath } from 'node:url';
+import { createCompiler, defineTemplate } from '@typfolio/core';
+import { createValidator, flavours, VerapdfError } from '../dist/index.js';
+import type { Validator, VerapdfErrorCode } from '../dist/index.js';
+
+const root = new URL('../../../', import.meta.url);
+const file = (path: string) => readFile(new URL(path, root));
+const text = async (path: string) => (await file(path)).toString();
+const hasCode = (code: VerapdfErrorCode) => (error: unknown) => error instanceof VerapdfError && error.code === code;
+
+// The binary is built by `npm run build:verapdf` (GraalVM, see docs/verapdf-build.md), which CI does not run yet.
+// Without it there is nothing to test.
+const binary = new URL('packages/verapdf-wasm/generated/verapdf.wasm', root);
+const skip = existsSync(fileURLToPath(binary)) ? false : 'packages/verapdf-wasm/generated/verapdf.wasm is not built (npm run build:verapdf)';
+
+let wasm!: Buffer;
+let validator!: Validator;
+let ua1!: Uint8Array;
+let tagged!: Uint8Array;
+let archival!: Uint8Array;
+before(async () => {
+  if (skip) return;
+  wasm = await file('packages/verapdf-wasm/generated/verapdf.wasm');
+  validator = await createValidator({ wasm });
+  const compiler = await createCompiler({
+    wasm: await file('packages/wasm/generated/compiler_bg.wasm'),
+    fonts: await Promise.all(['Regular', 'Bold'].map(style => file(`fixtures/fonts/LibertinusSerif-${style}.otf`))),
+  });
+  const template = defineTemplate({
+    files: { 'main.typ': await text('fixtures/basic/main.typ'), 'partials/layout.typ': await text('fixtures/basic/partials/layout.typ') },
+    schemaPath: 'input.json',
+  });
+  const request = template(JSON.parse(await text('fixtures/basic/input.json')));
+  const assets = { 'assets/chart.svg': await file('fixtures/basic/chart.svg') };
+  ua1 = (await compiler.compile(request, { assets, pdf: { standards: ['ua-1'], creationTimestamp: 1700000000 } })).bytes;
+  tagged = (await compiler.compile(request, { assets, pdf: { creationTimestamp: 1700000000 } })).bytes;
+  // Typfolio's compiler takes one standard, so there is no fixture that declares two.
+  archival = (await compiler.compile(request, { assets, pdf: { standards: ['a-2b'], creationTimestamp: 1700000000 } })).bytes;
+});
+
+test('the flavour a file declares is read from its metadata, and validateDeclared validates against it', { skip }, () => {
+  assert.deepEqual(validator.detectFlavours(ua1), ['ua1']);
+  assert.deepEqual(validator.detectFlavours(archival), ['2b']);
+  // A plain tagged file declares nothing: there is nothing to validate it against, which is not a pass.
+  assert.deepEqual(validator.detectFlavours(tagged), []);
+  assert.deepEqual(validator.validateDeclared(tagged), []);
+
+  const reports = validator.validateDeclared(archival, { maxChecksPerRule: 1 });
+  assert.deepEqual(reports.map(report => [report.flavour, report.compliant]), [['2b', true]]);
+  assert.deepEqual(reports[0], validator.validate(archival, { flavour: '2b', maxChecksPerRule: 1 }));
+  assert.deepEqual(validator.validateDeclared(ua1), [validator.validate(ua1, { flavour: 'ua1' })]);
+
+  assert.throws(() => validator.detectFlavours(new TextEncoder().encode('not a pdf')), hasCode('VALIDATION'));
+  assert.throws(() => validator.detectFlavours('%PDF' as never), hasCode('INVALID_REQUEST'));
+});
+
+test('a PDF/UA-1 compile passes ua1, and the report says what was checked', { skip }, () => {
+  const report = validator.validate(ua1, { flavour: 'ua1' });
+  assert.equal(report.flavour, 'ua1');
+  assert.equal(report.compliant, true);
+  assert.deepEqual(report.failedRules, []);
+  assert.ok(report.totalAssertions > 100, `only ${report.totalAssertions} assertions`);
+});
+
+test('a tagged compile without the PDF/UA identifier fails ua1 with the rule that says so', { skip }, () => {
+  const report = validator.validate(tagged, { flavour: 'ua1' });
+  assert.equal(report.compliant, false);
+  const identification = report.failedRules.find(rule => rule.clause === '5' && rule.test === 1);
+  assert.ok(identification, `clause 5 test 1 not among ${report.failedRules.map(rule => `${rule.clause}-${rule.test}`).join(', ')}`);
+  assert.equal(identification.specification, 'ISO 14289-1:2014');
+  assert.equal(identification.failedChecks, 1);
+  assert.match(identification.message, /PDF\/UA/);
+  assert.notEqual(identification.context, '');
+  // What the rule is checked on, its topic, and each failed check with what was wrong there.
+  assert.equal(identification.object, 'MainXMPPackage');
+  assert.equal(identification.condition, 'containsPDFUAIdentification == true');
+  assert.deepEqual(identification.tags, ['metadata']);
+  assert.deepEqual(identification.checks, [{ context: identification.context, error: 'The document metadata stream doesn\'t contain PDF/UA Identification Schema' }]);
+  assert.deepEqual(report.profile, { name: 'PDF/UA-1 validation profile', description: 'Validation rules against ISO 14289-1:2014', rules: 106 });
+});
+
+test('an error says what was found, and the number of failed checks is exact when fewer are listed', { skip }, () => {
+  // The file declares PDF/UA-1, so PDF/UA-2 finds the wrong part number, with the value.
+  const part = validator.validate(ua1, { flavour: 'ua2' }).failedRules.find(rule => rule.clause === '5' && rule.test === 2);
+  assert.equal(part?.checks[0]?.error, 'The "part" property of the PDF/UA Identification Schema is 1 instead of 2 for PDF/UA-2 conforming file');
+  const all = validator.validate(tagged, { flavour: '1b', maxChecksPerRule: 10000 });
+  const most = all.failedRules.reduce((a, b) => (b.failedChecks > a.failedChecks ? b : a));
+  assert.ok(most.failedChecks > 1, 'the tagged file should fail some PDF/A-1b rule more than once');
+  assert.equal(most.checks.length, most.failedChecks);
+  const one = validator.validate(tagged, { flavour: '1b', maxChecksPerRule: 1 });
+  const same = one.failedRules.find(rule => rule.clause === most.clause && rule.test === most.test)!;
+  assert.equal(same.failedChecks, most.failedChecks);
+  assert.deepEqual(same.checks, [most.checks[0]]);
+  // The default lists up to 20.
+  for (const rule of validator.validate(tagged, { flavour: '1b' }).failedRules) assert.equal(rule.checks.length, Math.min(rule.failedChecks, 20));
+  for (const bad of [0, 1.5, 10001, '5']) assert.throws(() => validator.validate(ua1, { flavour: 'ua1', maxChecksPerRule: bad as never }), hasCode('INVALID_REQUEST'));
+});
+
+test('what veraPDF logs while reading a damaged file is in the report, not on the console', { skip }, () => {
+  assert.deepEqual(validator.validate(ua1, { flavour: 'ua1' }).logs, []);
+  // Overwrite one byte inside each stream in turn until veraPDF has something to say about the file.
+  const text = Buffer.from(ua1).toString('latin1');
+  let found: ReturnType<Validator['validate']>['logs'] | undefined;
+  for (let at = text.indexOf('stream\n'); at >= 0 && !found; at = text.indexOf('stream\n', at + 1)) {
+    if (text.slice(at - 3, at) === 'end') continue;
+    const damaged = Uint8Array.from(ua1);
+    damaged[at + 40] = damaged[at + 40]! ^ 0xff;
+    try {
+      const { logs } = validator.validate(damaged, { flavour: 'ua1' });
+      if (logs.length > 0) found = logs;
+    } catch { /* a file veraPDF cannot read at all: the next stream */ }
+  }
+  assert.ok(found, 'no damaged copy made veraPDF log anything');
+  for (const log of found) {
+    assert.match(log.level, /^(WARNING|SEVERE)$/);
+    assert.ok(log.message.length > 0 && log.occurrences >= 1, JSON.stringify(log));
+  }
+  // And the validator still works after them.
+  assert.deepEqual(validator.validate(ua1, { flavour: 'ua1' }).logs, []);
+});
+
+test('every listed flavour has a profile in the image', { skip }, () => {
+  for (const flavour of flavours) {
+    const report = validator.validate(ua1, { flavour });
+    assert.equal(report.flavour, flavour);
+    assert.ok(report.totalAssertions > 0, `${flavour} ran no checks`);
+    if (flavour !== 'ua1') assert.equal(typeof report.compliant, 'boolean');
+  }
+});
+
+test('the same input gives the same report, also from a second instance', { skip }, async () => {
+  const first = validator.validate(tagged, { flavour: 'ua2' });
+  // Failed rules come in a defined order, not veraPDF's hash order.
+  const keys = first.failedRules.map(rule => [rule.clause, rule.test] as const);
+  assert.ok(keys.length > 2, 'the tagged file should fail several ua2 rules');
+  const collator = new Intl.Collator('en', { numeric: true });
+  assert.deepEqual(keys, [...keys].sort((a, b) => collator.compare(a[0], b[0]) || a[1] - b[1]));
+  assert.deepEqual(validator.validate(tagged, { flavour: 'ua2' }), first);
+  const other = await createValidator({ wasm: await WebAssembly.compile(Uint8Array.from(wasm)) });
+  assert.deepEqual(other.validate(tagged, { flavour: 'ua2' }), first);
+});
+
+test('a subarray is validated as its own bytes', { skip }, () => {
+  const padded = new Uint8Array(ua1.length + 20);
+  padded.set(ua1, 7);
+  assert.deepEqual(validator.validate(padded.subarray(7, 7 + ua1.length), { flavour: 'ua1' }), validator.validate(ua1, { flavour: 'ua1' }));
+});
+
+test('wrong requests are refused before the image is asked', { skip }, async () => {
+  assert.throws(() => validator.validate(ua1, { flavour: 'ua3' as never }), hasCode('INVALID_REQUEST'));
+  assert.throws(() => validator.validate(ua1, undefined as never), hasCode('INVALID_REQUEST'));
+  assert.throws(() => validator.validate('%PDF-1.7' as never, { flavour: 'ua1' }), hasCode('INVALID_REQUEST'));
+  await assert.rejects(createValidator({} as never), hasCode('INVALID_REQUEST'));
+  await assert.rejects(createValidator({ wasm: new Uint8Array([0, 1, 2, 3]) }), hasCode('INITIALIZATION'));
+});
+
+test('bytes that are not a PDF are a VALIDATION error, and the instance keeps working', { skip }, () => {
+  assert.throws(() => validator.validate(new TextEncoder().encode('not a pdf'), { flavour: 'ua1' }), hasCode('VALIDATION'));
+  assert.throws(() => validator.validate(new Uint8Array(0), { flavour: 'ua1' }), hasCode('VALIDATION'));
+  assert.equal(validator.validate(ua1, { flavour: 'ua1' }).compliant, true);
+});
+
+test('the loader leaves no globals and constructs no code', { skip }, async () => {
+  for (const name of ['GraalVM', 'verapdfValidate', 'typfolioVerapdfExport']) assert.equal(name in globalThis, false, `${name} is a global`);
+  const loader = await text('packages/verapdf-wasm/generated/verapdf.js');
+  assert.doesNotMatch(loader, /\bnew Function\(|\beval\(/);
+  assert.doesNotMatch(loader, /import\.meta\.url|\.wasm['"`]/, 'the loader must not name a default binary location');
+});

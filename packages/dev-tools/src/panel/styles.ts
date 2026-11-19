@@ -116,6 +116,66 @@ export const css = `
 button.tf-problem:hover { text-decoration: underline; }
 .tf-problem-page { font-weight: 600; }
 
+.tf-spacer { flex: 1; }
+.tf-validation { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+.tf-validation-bar { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding: 6px 10px; border-bottom: 1px solid var(--tf-border); font-size: 12px; }
+.tf-validation-results { flex: 1; min-height: 0; overflow: auto; }
+.tf-validation .tf-problems { max-height: none; overflow: visible; background: var(--tf-error-bg); color: var(--tf-error-fg); }
+.tf-choice { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.tf-choice-box { position: relative; display: inline-flex; min-width: 0; }
+/* The arrow: two sides of a small square, turned. Clicks go through it to the select. */
+.tf-choice-box::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  right: 10px;
+  width: 5px;
+  height: 5px;
+  margin-top: -4px;
+  border-right: 1.5px solid var(--tf-muted);
+  border-bottom: 1.5px solid var(--tf-muted);
+  transform: rotate(45deg);
+  transition: transform 0.2s ease;
+  pointer-events: none;
+}
+/* Half a turn while the list is open, so the arrow points up; the shift keeps it in the middle of the box. */
+.tf-choice-box:has(select:open)::after { transform: translateY(3px) rotate(225deg); }
+@media (prefers-reduced-motion: reduce) {
+  .tf-choice-box::after { transition: none; }
+}
+.tf select.tf-flavour {
+  appearance: none;
+  -webkit-appearance: none;
+  height: 24px;
+  max-width: 100%;
+  margin: 0;
+  padding: 0 26px 0 9px;
+  border: 1px solid var(--tf-border);
+  border-radius: 5px;
+  background: var(--tf-bg-soft);
+  color: var(--tf-fg);
+  font: inherit;
+  font-size: 12px;
+  line-height: 22px;
+  text-overflow: ellipsis;
+  cursor: pointer;
+}
+.tf select.tf-flavour:hover { border-color: var(--tf-muted); }
+.tf-choice-box:hover::after { border-color: var(--tf-fg); }
+.tf-side.tf-validate { align-items: center; height: 24px; padding: 0 12px; border: 1px solid var(--tf-border); border-radius: 5px; color: var(--tf-fg); font-size: 12px; font-weight: 600; }
+.tf-side.tf-validate:hover:not(:disabled) { border-color: var(--tf-muted); }
+.tf-side.tf-validate:disabled { opacity: 0.5; cursor: default; }
+.tf-validation-hint { color: var(--tf-muted); }
+.tf-rule > summary { cursor: pointer; }
+.tf-logs { padding: 6px 10px; border-bottom: 1px solid var(--tf-border); background: var(--tf-warn-bg); color: var(--tf-warn-fg); }
+.tf-logs > summary { cursor: pointer; font-weight: 600; }
+.tf-logs li { padding: 2px 0 2px 14px; overflow-wrap: anywhere; }
+.tf-rule-tag { display: inline-block; margin-left: 6px; padding: 0 6px; border-radius: 999px; background: var(--tf-role); color: var(--tf-fg); font-size: 11px; }
+.tf ol.tf-rule-checks { list-style: decimal; margin: 0; padding: 2px 10px 6px 38px; }
+.tf-rule-checks li { padding: 2px 0; }
+.tf-rule-more { list-style: none; opacity: 0.8; }
+.tf-rule-context { display: block; font: 11px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; opacity: 0.8; overflow-wrap: anywhere; }
+
 .tf-main { display: flex; flex: 1; min-height: 0; }
 .tf-main[data-stacked="true"] { flex-direction: column; }
 .tf-pane { display: flex; flex-direction: column; flex-basis: 0; flex-shrink: 1; min-width: 0; min-height: 0; overflow: hidden; }
@@ -227,12 +287,12 @@ button.tf-problem:hover { text-decoration: underline; }
   font-weight: 600;
 }
 
-.tf-details { overflow: auto; padding: 10px 12px; background: var(--tf-bg-soft); }
-.tf-details h2 { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; font-size: 13px; font-weight: 600; }
+/* Under the selected tag's row, in line with its text. */
+.tf-details { display: block; margin: 0 8px 4px 34px; padding: 6px 10px; border-left: 2px solid var(--tf-accent); border-radius: 0 4px 4px 0; background: var(--tf-bg-soft); font-size: 12px; }
 .tf-details dl { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 4px 12px; }
 .tf-details dt { color: var(--tf-muted); }
 .tf-details dd { overflow-wrap: anywhere; white-space: pre-wrap; }
-.tf-details .tf-problem-note { margin-top: 10px; padding: 6px 8px; border-radius: 4px; background: var(--tf-warn-bg); color: var(--tf-warn-fg); }
+.tf-details .tf-problem-note { margin-top: 6px; padding: 6px 8px; border-radius: 4px; background: var(--tf-warn-bg); color: var(--tf-warn-fg); }
 .tf-hint { color: var(--tf-muted); }
 
 .tf-toggle {

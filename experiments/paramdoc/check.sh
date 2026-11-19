@@ -6,7 +6,7 @@
 #
 # Needs: Rust (cargo), Node 22.18+, `npm ci` and `npm run build` at the repository root (inspectPdf, Playwright),
 # poppler (pdftoppm, pdftotext) and veraPDF on PATH. Missing optional tools are reported as SKIP; every other
-# failure fails the script. With DEMO_URL set to a running pretext-hybrid dev server, the demo page is driven too.
+# failure fails the script. With DEMO_URL set to a running site dev server (npm run dev:site), the demo page is driven too.
 #
 # Every fixture is exported with a Typst reference for `data.json` and for each of its other `data-*.json` cases
 # (except `*-long*`, which paginate beyond the sample page, and the `wrap` overflow and error cases, which the
@@ -164,7 +164,7 @@ if have verapdf; then
   done
 else skip "verapdf not on PATH (brew install verapdf)"; fi
 
-echo "8. Demo page (DEMO_URL=http://127.0.0.1:4190 ./check.sh, with the pretext-hybrid dev server running)"
+echo "8. Demo page (DEMO_URL=http://127.0.0.1:4190 ./check.sh, with the site dev server running)"
 if [ -n "${DEMO_URL:-}" ]; then
   if [ -d ../../node_modules/playwright ]; then
     if node notes/bench/bench-browser.mjs "$DEMO_URL/performance?engine=paramdoc&workers=4&count=200&autostart" > "$B/.last.log" 2>&1 && grep -q 'per second' "$B/.last.log" && ! grep -q 'failed' "$B/.last.log"; then ok "paramdoc engine: $(grep 'per second' "$B/.last.log" | tail -1)"

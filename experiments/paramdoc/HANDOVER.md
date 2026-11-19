@@ -15,7 +15,7 @@ flowing narrative documents. The boundary is precise and enforced by a build-tim
 It started as an experiment wired into nothing. Since 2026-10-27 its runtime and its exporter are experimental
 packages (`packages/paramdoc` and `packages/paramdoc-export`, on npm as 0.0.1 since 2026-10-27; the files here
 re-export or wrap them, so the proof in this folder covers the packages' code), and the performance demo page in
-`examples/pretext-hybrid` renders through `@typfolio/paramdoc`'s worker pool with the exported report document
+`site` renders through `@typfolio/paramdoc`'s worker pool with the exported report document
 from here (see "The demo page" below). `AGENTS.md`'s rule that the compiler contract lives in `README.md` is
 untouched, and the existing packages are unchanged.
 
@@ -67,7 +67,7 @@ cd experiments/paramdoc && ./check.sh      # 192 checks, a few minutes after the
 # After a runtime change, measure what it cost, as the status log in PLAN.md records per milestone: the sizes
 # (the release wasm; the demo's worker bundle through vite build) and the throughput (ts/cli.ts bench and
 # paramdoc-runtime bench on documents/report with notes/bench/gen-inputs.mjs's 1000 inputs, --repeat 3).
-DEMO_URL=http://127.0.0.1:4190 ./check.sh  # also drives the performance page of a running pretext-hybrid dev server
+DEMO_URL=http://127.0.0.1:4190 ./check.sh  # also drives the performance page of a running site dev server (`npm run dev:site`)
 ```
 
 It builds, exports every fixture with fuzzing and a Typst reference, runs both runtimes against Typst and
@@ -116,7 +116,7 @@ every fixture; wasm and native Rust outputs are byte-identical; veraPDF 1.30 rep
 Benchmarks (see `PLAN.md` for the tables): `cargo run --release -p paramdoc-runtime -- bench <doc-dir> --inputs
 inputs.json`, `node --experimental-strip-types ts/cli.ts bench ...`, and the scripts in `notes/bench/`. The
 1000 inputs come from `node --experimental-strip-types notes/bench/gen-inputs.mjs 1000 <out.json>` (it imports
-the repo's `examples/pretext-hybrid/src/batch/data.ts`).
+the repo's `site/src/batch/data.ts`).
 
 ## The contract in one paragraph
 
@@ -167,15 +167,15 @@ slot's alignment, and an ellipsized line is never stretched.
 
 ## The demo page
 
-The performance page of `examples/pretext-hybrid` (`/performance`, "1000 PDFs in the browser, on workers") has an
+The performance page of `site` (`/performance`, "1000 PDFs in the browser, on workers") has an
 **Engine** switch since 2026-10-24: *Typst compiler* is the page as it was, *paramdoc runtime (experimental)* renders
 the same synthetic batch through this experiment. `?engine=paramdoc&count=1000&autostart` starts it from the URL.
 
-- `examples/pretext-hybrid/src/batch/paramdoc.ts` downloads `documents/report/doc.json` and its fonts once per page
+- `site/src/batch/paramdoc.ts` downloads `documents/report/doc.json` and its fonts once per page
   (`?url` imports and an `import.meta.glob` over the fonts folder, so Vite bundles them; the static build and
   `tools/check-static-demo.ts` pass) and maps the page's `ReportInput` to the slot names the way `notes/bench/gen-inputs.mjs`
   does.
-- `examples/pretext-hybrid/src/batch/batch.ts` renders through `@typfolio/paramdoc`'s `createWorkerClient` (one
+- `site/src/batch/batch.ts` renders through `@typfolio/paramdoc`'s `createWorkerClient` (one
   module worker per runtime, started lazily, the document and fonts copied into each) and `fillBatch`, driven
   exactly like the compiler's `createWorkerClient` and `compileBatch`: one `timed` helper marks a row as rendering
   when its job is handed to the client and records its time when the result is back, a worker's first job is its
@@ -381,7 +381,7 @@ through link slots (`slot(name, (text:, href:))`), with rectangles equal to typs
 - **The fixture images are generated**, by `notes/make-figure-images.mjs` from the repository root (Chromium via
   Playwright for the canvas chart, sharp for the JPEG and the tall PNG, hand-written PNGs for the palette logo and
   the keyed icon). Re-run it rather than editing the data files' base64 by hand.
-- **Running the repo's dev server regenerates `examples/pretext-hybrid/src/routeTree.gen.ts`**; revert it
+- **Running the repo's dev server regenerates `site/src/routeTree.gen.ts`**; revert it
   before committing.
 - **`pkill -f` with a pattern that appears in your own shell command kills the shell.** Track server PIDs.
 - **The compiler build on Linux did not reproduce the pinned hash** (+78 kB, see `notes/wasm-size-report.md`).

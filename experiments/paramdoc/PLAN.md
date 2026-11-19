@@ -61,7 +61,7 @@ Re-evaluate after each milestone; stop and discuss on critical findings.
 
 Written 2026-10-25 from the ranked list of unknowns. The three items below are the ones that decide whether the
 approach covers real documents; everything after them is known work. What the repository's own templates ask
-for, counted before planning (`examples/pretext-hybrid/src/batch/report`, `examples/vite-react/src/{outcomes,report,common}`):
+for, counted before planning (`site/src/batch/report`, `examples/vite-react/src/{outcomes,report,common}`):
 wrapping paragraphs from data in every template, all justified; images (a logo; charts the application renders
 to PNG at 480 × 160 px with `render()` and passes as data, in `outcomes`); a bulleted list; document titles from
 data; one repeat of variable-height sections; a score bar and alternating row fill; values computed in the
@@ -489,7 +489,7 @@ the schema, feeding it.
    is declared in the plugin with the shape of `DocumentInput`. The dialect `paramdoc.typ` ships in the exporter
    package and is mounted by the plugin and by the command line when a template has none, so the fixtures'
    eight identical copies become one source (`check.sh`'s md5 check becomes "the fixtures use the package's").
-7. The demo and the proof. `examples/pretext-hybrid` imports its dialect report with `?paramdoc`, with a
+7. The demo and the proof. `site` imports its dialect report with `?paramdoc`, with a
    `sample.json` and the schema file of the dialect's flat data; `paramdoc.ts` shrinks to `load()` and the data
    mapping (the page's data is nested, the dialect template's is flat: the mapping is the application's, as
    AEFIS's `buildExportPayload` is). `documents/report` stays checked in for `check.sh` and the benchmark.
@@ -529,7 +529,7 @@ shared, the plugin changes nothing).
 - Written for the client environment and `emitFile`; an SSR build gets the same module (URLs) but is not
   tested at first.
 
-Exit: the demo builds and runs from the plugin's output (`npm run build:pretext`, `check-static-demo`) with its
+Exit: the demo builds and runs from the plugin's output (`npm run build:site`, `check-static-demo`) with its
 loader and the `?url` imports gone; `test:vite` and `test:packed` cover the plugin; a refusal fails a build
 with the message; in `check.sh` a schema narrows the fuzz and a slot too narrow for its `maxLength` is refused;
 the exporter README has a "Vite" section and the authoring guide a paramdoc paragraph; export times per
@@ -554,7 +554,7 @@ cargo run -p paramdoc-runtime -- ../../.build/paramdoc/transcript --data fixture
 cargo run -p paramdoc-runtime -- ../../.build/paramdoc/transcript --data fixtures/transcript/data-long.json --out ../../.build/paramdoc/transcript/long.pdf
 # benchmark fixture (the worker-batch report) and the 1000-document benchmark, native and as wasm in Node
 cargo run -p paramdoc-export -- fixtures/report --fuzz 100 --reference fixtures/report/data.json
-node --experimental-strip-types <scratch>/gen-inputs.mjs 1000 ../../.build/paramdoc/bench/inputs.json   # from examples/pretext-hybrid/src/batch/data.ts
+node --experimental-strip-types <scratch>/gen-inputs.mjs 1000 ../../.build/paramdoc/bench/inputs.json   # from site/src/batch/data.ts
 cargo run --release -p paramdoc-runtime -- bench ../../.build/paramdoc/report --inputs ../../.build/paramdoc/bench/inputs.json
 cargo rustc --release -p paramdoc-runtime --lib --crate-type cdylib --target wasm32-unknown-unknown
 node <scratch>/bench-wasm.mjs ../../.build/paramdoc-target/wasm32-unknown-unknown/release/paramdoc_runtime.wasm ../../.build/paramdoc/report ../../.build/paramdoc/bench/inputs.json
@@ -840,7 +840,7 @@ Defaults: fonts from `../../fixtures/fonts`, output under `../../.build/paramdoc
   line has zero height, so the following line sits one leading below the box top. (4) A line that does not fit
   has its spaces shrunk by a third before it overflows. Not covered: justified text, hyphenation, links (refused),
   East Asian and Hebrew rules, digits outside ASCII (letters to the breaker in both runtimes).
-- **Demo page (2026-10-24).** The performance page of `examples/pretext-hybrid` has an engine switch: the
+- **Demo page (2026-10-24).** The performance page of `site` has an engine switch: the
   TypeScript runtime runs in a pool of Web Workers (one runtime each; then the page's own
   `src/batch/paramdoc.worker.ts`, since 2026-10-27 the package's worker through `@typfolio/paramdoc`'s
   `createWorkerClient` and `fillBatch`), fed by
@@ -988,7 +988,7 @@ Same machine and the same 1000 synthetic reports as the M4 table.
 ### Performance against the worker-batch benchmark (M4 checkpoint)
 
 Same machine for every row: this 4-core container. The Typst rows are the repo's own `/performance` page
-(`examples/pretext-hybrid`, Vite dev server, headless Chromium through Playwright, `?workers=N&count=1000&autostart`),
+(`site`, Vite dev server, headless Chromium through Playwright, `?workers=N&count=1000&autostart`),
 whose elapsed time includes the compiler download, module compilation and worker start, as the page states.
 The paramdoc rows render the same 1000 synthetic inputs (generated by the benchmark's own `data.ts`) through
 `fixtures/report`, which is that report in the slot dialect: the same text, boxes and table, but a static title,

@@ -6,6 +6,8 @@ node_modules/
 packages/*/dist/
 packages/wasm/generated/*
 !packages/wasm/generated/.gitkeep
+packages/verapdf-wasm/generated/*
+!packages/verapdf-wasm/generated/.gitkeep
 packages/paramdoc-export/generated/*
 !packages/paramdoc-export/generated/.gitkeep
 *.tgz
@@ -14,3 +16,4 @@ packages/paramdoc-export/generated/*
 .claude/
 test-results/
 playwright-report/
+site/public/verapdf/

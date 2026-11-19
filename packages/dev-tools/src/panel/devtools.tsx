@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type KeyboardEvent, type PointerEvent } from 'react';
 import { useStructure, type PanelPdfJs, type ReadState } from './read.js';
+import type { StructurePanelValidator } from '../panel.js';
 import { plural, StructureView } from './view.js';
 
 export type Theme = 'system' | 'light' | 'dark';
@@ -9,14 +10,15 @@ export type Side = 'bottom' | 'top' | 'left' | 'right';
 interface PanelProps {
   pdfjs: PanelPdfJs;
   bytes?: Uint8Array;
+  validator?: StructurePanelValidator;
   theme: Theme;
 }
 
-export function EmbeddedPanel({ pdfjs, bytes, theme }: PanelProps) {
+export function EmbeddedPanel({ pdfjs, bytes, validator, theme }: PanelProps) {
   const state = useStructure(pdfjs, bytes);
   return (
     <div className="tf tf-embedded" data-theme={theme}>
-      <StructureView state={state} hasBytes={bytes !== undefined} />
+      <StructureView state={state} hasBytes={bytes !== undefined} bytes={bytes} validator={validator} />
     </div>
   );
 }
@@ -59,7 +61,7 @@ interface DevtoolsProps extends PanelProps {
  * A button in a corner of the page, with the number of problems in the PDF, that opens the panel along a side of the
  * page; the panel's toolbar moves it to another side. The PDF is read while the panel is closed too, for the count.
  */
-export function Devtools({ pdfjs, bytes, theme, buttonPosition, position, initialIsOpen }: DevtoolsProps) {
+export function Devtools({ pdfjs, bytes, validator, theme, buttonPosition, position, initialIsOpen }: DevtoolsProps) {
   const state = useStructure(pdfjs, bytes);
   const [open, setOpen] = useState(initialIsOpen);
   const [side, setSide] = useState(position);
@@ -163,7 +165,7 @@ export function Devtools({ pdfjs, bytes, theme, buttonPosition, position, initia
           onPointerDown={startResizing}
           onKeyDown={resizeWithKeys}
         />
-        <StructureView state={state} hasBytes={bytes !== undefined} tools={sidePicker} onClose={() => setOpen(false)} />
+        <StructureView state={state} hasBytes={bytes !== undefined} bytes={bytes} validator={validator} active={open} tools={sidePicker} onClose={() => setOpen(false)} />
       </section>
     </div>
   );
