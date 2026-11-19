@@ -27,7 +27,7 @@ before(async () => {
   wasm = await file('packages/verapdf-wasm/generated/verapdf.wasm');
   validator = await createValidator({ wasm });
   const compiler = await createCompiler({
-    wasm: await file('packages/wasm/generated/compiler_bg.wasm'),
+    wasm: await file('packages/typst-wasm/generated/compiler_bg.wasm'),
     fonts: await Promise.all(['Regular', 'Bold'].map(style => file(`fixtures/fonts/LibertinusSerif-${style}.otf`))),
   });
   const template = defineTemplate({

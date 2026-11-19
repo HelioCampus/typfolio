@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 
 const root = fileURLToPath(new URL('../../../', import.meta.url));
 const read = (path: string) => readFile(new URL(path, `file://${root}`));
-const packages = ['wasm', 'core', 'workers', 'react', 'dev-tools'];
+const packages = ['typst-wasm', 'core', 'workers', 'react', 'dev-tools'];
 
 test('the root LICENSE is the Apache License 2.0 and NOTICE names the copyright holder', async () => {
   const license = (await read('LICENSE')).toString('utf8');
@@ -23,17 +23,17 @@ test('every package carries a byte-identical copy of LICENSE and declares Apache
   }
 });
 
-test('@typfolio/wasm carries a byte-identical copy of NOTICE and lists it and its third-party notices and licences in files', async () => {
-  assert.ok((await read('packages/wasm/NOTICE')).equals(await read('NOTICE')), 'packages/wasm/NOTICE differs from the root NOTICE');
-  const manifest = JSON.parse((await read('packages/wasm/package.json')).toString());
+test('@typfolio/typst-wasm carries a byte-identical copy of NOTICE and lists it and its third-party notices and licences in files', async () => {
+  assert.ok((await read('packages/typst-wasm/NOTICE')).equals(await read('NOTICE')), 'packages/typst-wasm/NOTICE differs from the root NOTICE');
+  const manifest = JSON.parse((await read('packages/typst-wasm/package.json')).toString());
   assert.ok(['NOTICE', 'THIRD_PARTY_NOTICES.md', 'THIRD_PARTY_LICENSES.md'].every(file => manifest.files.includes(file)), 'files must include NOTICE, THIRD_PARTY_NOTICES.md and THIRD_PARTY_LICENSES.md (npm only adds LICENSE automatically)');
-  await read('packages/wasm/THIRD_PARTY_NOTICES.md');
+  await read('packages/typst-wasm/THIRD_PARTY_NOTICES.md');
 });
 
 test('THIRD_PARTY_LICENSES.md matches the shipped Cargo.lock and covers every crate in THIRD_PARTY_NOTICES.md', async () => {
-  const provenance = JSON.parse((await read('packages/wasm/generated/provenance.json')).toString());
-  const notices = (await read('packages/wasm/THIRD_PARTY_NOTICES.md')).toString('utf8');
-  const licenses = (await read('packages/wasm/THIRD_PARTY_LICENSES.md')).toString('utf8');
+  const provenance = JSON.parse((await read('packages/typst-wasm/generated/provenance.json')).toString());
+  const notices = (await read('packages/typst-wasm/THIRD_PARTY_NOTICES.md')).toString('utf8');
+  const licenses = (await read('packages/typst-wasm/THIRD_PARTY_LICENSES.md')).toString('utf8');
   assert.ok(licenses.includes(`Cargo.lock SHA-256: \`${provenance.cargoLockSha256}\``), 'the licence bundle must be generated from the Cargo.lock recorded in provenance.json');
   assert.ok(notices.includes(`Cargo.lock SHA-256: \`${provenance.cargoLockSha256}\``), 'the notices must be generated from the Cargo.lock recorded in provenance.json');
 

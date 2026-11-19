@@ -7,17 +7,17 @@ const root = fileURLToPath(new URL('../', import.meta.url));
 const builtApp = resolve(root, '.build/vite-app');
 const types: Record<string, string> = { '.js': 'text/javascript', '.html': 'text/html', '.css': 'text/css', '.wasm': 'application/wasm', '.json': 'application/json', '.typ': 'text/plain', '.svg': 'image/svg+xml' };
 // The smoke page loads unbundled core output. Browsers cannot resolve the bare
-// `@typfolio/wasm` import there (and import maps do not apply inside module workers),
+// `@typfolio/typst-wasm` import there (and import maps do not apply inside module workers),
 // so the server maps it to the generated bindings it already serves.
-const wasmBindings = '/packages/wasm/generated/compiler.js';
-const rewriteBareImports = (source: string) => source.replaceAll(`from '@typfolio/wasm'`, `from '${wasmBindings}'`);
+const wasmBindings = '/packages/typst-wasm/generated/compiler.js';
+const rewriteBareImports = (source: string) => source.replaceAll(`from '@typfolio/typst-wasm'`, `from '${wasmBindings}'`);
 const verapdfPolicy = "default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; worker-src 'self'; connect-src 'self'; img-src 'self'";
 const server = createServer(async (request, response) => {
   const path = new URL(request.url!, 'http://127.0.0.1').pathname;
   if (path === '/favicon.ico') { response.writeHead(204); response.end(); return; }
   const appPath = path === '/' ? '/index.html' : path;
   const servesApp = appPath === '/index.html' || appPath.startsWith('/assets/');
-  if (!servesApp && !['/fixtures/', '/packages/core/dist/', '/packages/wasm/generated/', '/packages/verapdf-wasm/dist/', '/packages/verapdf-wasm/generated/'].some(prefix => path.startsWith(prefix))) { response.writeHead(404); response.end(); return; }
+  if (!servesApp && !['/fixtures/', '/packages/core/dist/', '/packages/typst-wasm/generated/', '/packages/verapdf-wasm/dist/', '/packages/verapdf-wasm/generated/'].some(prefix => path.startsWith(prefix))) { response.writeHead(404); response.end(); return; }
   const base = servesApp ? builtApp : root;
   const full = resolve(base, '.' + appPath);
   if (!full.startsWith(base.replace(/\/$/, '') + sep)) { response.writeHead(404); response.end(); return; }

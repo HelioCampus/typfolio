@@ -342,7 +342,7 @@ typst-pdf bound directly, without typst.ts's reflexo and tinymist layers), with 
 to it.
 
 **Why.**
-- Two Typsts today. `@typfolio/wasm` is built from a pinned revision of typst.ts's `typst-ts-web-compiler`,
+- Two Typsts today. `@typfolio/typst-wasm` is built from a pinned revision of typst.ts's `typst-ts-web-compiler`,
   whose Typst is a patched 0.15.1 (git tag `typst.ts/v0.8.1`, revision `59b5999d`); the paramdoc exporter
   compiles with the crates.io 0.15.1 crates. Checked on 2026-10-27: the patch adds "content hints" to frames
   (the character a line break ate, a newline on blocks, rows and math rows, for typst.ts's text and HTML
@@ -406,7 +406,7 @@ core's public API, and G38's plugin, which this item makes possible but does not
   through the move, and verified on CI's Linux as well as macOS, where the current build was proven.
 - Ownership. The binding becomes ours to carry through Typst upgrades, as the exporter's frame walk already is;
   typst.ts's own fixes (its patch today is small, but it exists for a reason) stop arriving for free.
-- A long transition. `@typfolio/wasm` must keep shipping the typst.ts build until the new one passes
+- A long transition. `@typfolio/typst-wasm` must keep shipping the typst.ts build until the new one passes
   everything; that is a major version of the wasm package and a core release that switches, not a swap in
   place.
 
@@ -578,7 +578,7 @@ Defaults: fonts from `../../fixtures/fonts`, output under `../../.build/paramdoc
 
 ## Status log
 
-- **M13, the compiler half: `@typfolio/wasm` is Typfolio's own binding (2026-11-01).** `crates/compiler`
+- **M13, the compiler half: `@typfolio/typst-wasm` is Typfolio's own binding (2026-11-01).** `crates/compiler`
   (`typfolio-compiler`) binds `typst`, `typst-pdf` and `typst-layout` 0.15.1 from crates.io directly: an in-memory
   world with mounted files, packages served from mounts (`@local/typfolio:0.1.0` from `/@typfolio/packages/...`), a
   cached standard library per `sys.inputs`, the caller's clock for the PDF date and `datetime.today()`, PDF options as
@@ -601,7 +601,7 @@ Defaults: fonts from `../../fixtures/fonts`, output under `../../.build/paramdoc
   1.2 % smaller, as the size report predicted: the binary is Typst's. Speed within noise (outcome-sets with a new
   title 3.6 ms against 3.4 ms, identical 0.6 against 0.5 ms, Node, median of 30). Not in this step: the runtime and
   the exporter behind the same wasm-bindgen surface (they keep their C ABI builds), and any Typst patch for size.
-  Released the same day by hand (pull request 13, `e4d475f`; the workflow still cannot run): `@typfolio/wasm` 0.2.0,
+  Released the same day by hand (pull request 13, `e4d475f`; the workflow still cannot run): `@typfolio/typst-wasm` 0.2.0,
   `@typfolio/core` 0.4.0 and, with it, `@typfolio/dev-tools` (the two held-over structure changesets), `@typfolio/workers`
   and `@typfolio/react` 0.4.0, tagged, with a GitHub release each from its changelog; verified from the registry with a
   fresh install compiling the basic fixture to PDF/UA-1 and reporting `file-not-found` and `missing-glyph`.

@@ -1,4 +1,4 @@
-//! Typfolio's Typst compiler for WebAssembly, the binary shipped as `@typfolio/wasm`.
+//! Typfolio's Typst compiler for WebAssembly, the binary shipped as `@typfolio/typst-wasm`.
 //!
 //! A [`Compiler`] holds fonts. For each document the caller mounts files at absolute virtual paths (the template's
 //! sources, its data as JSON, assets, the files of a Typst package), names the packages those mounts serve, and

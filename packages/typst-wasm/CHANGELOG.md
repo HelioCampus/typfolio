@@ -1,4 +1,6 @@
-# @typfolio/wasm
+# @typfolio/typst-wasm
+
+This package was published as `@typfolio/wasm` up to 0.3.0; the entries for those versions are kept below.
 
 ## 0.3.0
 

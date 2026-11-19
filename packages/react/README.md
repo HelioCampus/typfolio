@@ -9,7 +9,7 @@ Headless React bindings over the framework-independent `PdfClient` contract from
 
 ```ts
 import { createLazyCompiler } from '@typfolio/core';
-import wasmUrl from '@typfolio/wasm/compiler.wasm?url';
+import wasmUrl from '@typfolio/typst-wasm/compiler.wasm?url';
 
 // Loads the WASM and the fonts on the first compile, and keeps them for the page.
 export const pdfClient = createLazyCompiler({ wasm: wasmUrl, fonts: ['/fonts/report.otf'] });

@@ -8,7 +8,7 @@ import type { CompilerPin, Provenance } from './types.ts';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 const vite = fileURLToPath(new URL('../node_modules/vite/bin/vite.js', import.meta.url));
-const provenance: Provenance = JSON.parse(await readFile(new URL('../packages/wasm/generated/provenance.json', import.meta.url), 'utf8'));
+const provenance: Provenance = JSON.parse(await readFile(new URL('../packages/typst-wasm/generated/provenance.json', import.meta.url), 'utf8'));
 
 const pin: CompilerPin = JSON.parse(await readFile(new URL('../compiler-source.json', import.meta.url), 'utf8'));
 assert.equal(provenance.crate, pin.crate, 'provenance must record the pinned crate');

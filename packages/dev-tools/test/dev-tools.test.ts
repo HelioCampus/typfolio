@@ -40,7 +40,7 @@ let checker!: TemplateChecker;
 let wasm!: Buffer;
 let fonts!: Buffer[];
 before(async () => {
-  wasm = await file('packages/wasm/generated/compiler_bg.wasm');
+  wasm = await file('packages/typst-wasm/generated/compiler_bg.wasm');
   fonts = [await file('fixtures/fonts/LibertinusSerif-Regular.otf')];
   checker = await createTemplateChecker({ wasm, fonts });
 });

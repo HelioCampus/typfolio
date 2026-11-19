@@ -33,7 +33,7 @@ let basic!: Awaited<ReturnType<typeof fixture>>;
 let assets!: Assets;
 const compile = async (pdf: PdfOptions = { standards: ['ua-1'], creationTimestamp: timestamp }) => (await compiler.compile(basic(input), { assets, pdf })).bytes;
 before(async () => {
-  const wasm = await file('packages/wasm/generated/compiler_bg.wasm');
+  const wasm = await file('packages/typst-wasm/generated/compiler_bg.wasm');
   const fonts = await Promise.all(['Regular', 'Bold'].map(style => file(`fixtures/fonts/LibertinusSerif-${style}.otf`)));
   compiler = await createCompiler({ wasm, fonts });
   basic = await fixture('basic', 'partials/layout.typ');

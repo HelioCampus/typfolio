@@ -64,7 +64,7 @@ const report = defineTemplate({
 let compiler!: PdfCompiler;
 before(async () => {
   compiler = await createCompiler({
-    wasm: await readFile(new URL('packages/wasm/generated/compiler_bg.wasm', root)),
+    wasm: await readFile(new URL('packages/typst-wasm/generated/compiler_bg.wasm', root)),
     fonts: [await readFile(new URL('fixtures/fonts/LibertinusSerif-Regular.otf', root))],
   });
 });

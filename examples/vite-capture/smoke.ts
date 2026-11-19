@@ -6,7 +6,7 @@ import type { PdfResult } from '@typfolio/core';
 import { captureAssets, captureProps, type CaptureMarker } from '@typfolio/core/capture';
 import { svgCapture } from '@typfolio/core/capture/svg';
 import { domPngCapture } from '@typfolio/core/capture/dom';
-import wasmUrl from '@typfolio/wasm/compiler.wasm?url';
+import wasmUrl from '@typfolio/typst-wasm/compiler.wasm?url';
 import fontUrl from '../../fixtures/fonts/LibertinusSerif-Regular.otf?url';
 
 // The captured references are the template's data: `schemaPath` mounts it at /input.json, where the Typst reads it.

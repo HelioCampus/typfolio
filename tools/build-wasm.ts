@@ -1,4 +1,4 @@
-// Builds Typfolio's Typst compiler (crates/compiler) for WebAssembly and generates packages/wasm/generated/: the binary,
+// Builds Typfolio's Typst compiler (crates/compiler) for WebAssembly and generates packages/typst-wasm/generated/: the binary,
 // the wasm-bindgen loader and declarations, and provenance.json. Every input is pinned in compiler-source.json (the
 // crate, the Typst version the lockfile must resolve, the Rust toolchain, wasm-bindgen, the release profile) and the
 // output is reproducible: the pin also records the expected hashes, which tools/check-package.ts verifies.
@@ -21,7 +21,7 @@ import type { CargoMetadata, CompilerPin } from './types.ts';
 const root = fileURLToPath(new URL('../', import.meta.url));
 const pin: CompilerPin = JSON.parse(readFileSync(join(root, 'compiler-source.json'), 'utf8'));
 const build = join(root, '.build');
-const output = join(root, 'packages/wasm/generated');
+const output = join(root, 'packages/typst-wasm/generated');
 const cargoHome = resolve(process.env.CARGO_HOME ?? join(homedir(), '.cargo'));
 const rustupHome = resolve(process.env.RUSTUP_HOME ?? join(homedir(), '.rustup'));
 const sha256 = (data: string | Uint8Array) => createHash('sha256').update(data).digest('hex');

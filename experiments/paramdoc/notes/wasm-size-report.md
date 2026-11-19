@@ -1,10 +1,10 @@
 # Typfolio pinned Typst WASM compiler: size breakdown
 
-Analysis of `packages/wasm/generated/compiler_bg.wasm` as built by `npm run build:wasm` from the pins in
+Analysis of `packages/typst-wasm/generated/compiler_bg.wasm` as built by `npm run build:wasm` from the pins in
 `compiler-source.json` (typst.ts `1189a2f1…`, Rust 1.92.0, wasm-bindgen 0.2.118, crate `typst-ts-web-compiler`,
 features `web,pdf`, `cdylib`, release profile `opt-level=s`, `lto=fat`, `codegen-units=1`, no wasm-opt).
 Machine: Linux x86_64 (kernel 6.18), 4 cores, 15 GB RAM. Date: 2026-10-24. No tracked file was modified; everything
-generated lives under `.build/`, `packages/wasm/generated/` (both gitignored) and this scratchpad.
+generated lives under `.build/`, `packages/typst-wasm/generated/` (both gitignored) and this scratchpad.
 
 Scratchpad root for all raw outputs and scripts: `/tmp/claude-0/-home-user-typfolio/1c0be84b-aa31-5442-982b-25bbb7e3e225/scratchpad`
 (`analysis/` = results, `scripts/` = the parsers used, `logs/` = build logs).
@@ -37,12 +37,12 @@ both — and for those the report byte-matches the non-LTO chunks against the pi
 cargo-about decision: in `tools/build-wasm.ts` the notices generator runs last (line 133, `tools/generate-third-party-notices.ts`),
 after `compiler_bg.wasm`, `compiler.js`, `compiler.d.ts`, `LICENSE.typst-ts` and `provenance.json` are written (lines 88–129).
 It is not needed for the artifact, and building cargo-about 0.9.2 with its `cli` feature is slow, so it was not installed.
-Consequence: `packages/wasm/THIRD_PARTY_NOTICES.md`/`THIRD_PARTY_LICENSES.md` were **not** regenerated (they are tracked, so
+Consequence: `packages/typst-wasm/THIRD_PARTY_NOTICES.md`/`THIRD_PARTY_LICENSES.md` were **not** regenerated (they are tracked, so
 this also keeps the tree clean), and `npm run build:wasm` reported exit code 1 after producing everything else. `provenance.json`
 records `cargoLockSha256 = 8d52e3ad…`, identical to the Cargo.lock hash printed in the committed `THIRD_PARTY_NOTICES.md`, so the
 committed notices do describe this dependency graph.
 
-Pinned build output (`packages/wasm/generated/`): `compiler_bg.wasm` 24,404,191 B, `compiler.js` 54,239 B (patched loader),
+Pinned build output (`packages/typst-wasm/generated/`): `compiler_bg.wasm` 24,404,191 B, `compiler.js` 54,239 B (patched loader),
 `compiler.d.ts`, `compiler_bg.wasm.d.ts`, `LICENSE.typst-ts`, `provenance.json`. 388 crates compiled (incl. host build scripts
 and proc-macros), 299 downloaded. The pre-wasm-bindgen cdylib `.build/target/wasm32-unknown-unknown/release/typst_ts_web_compiler.wasm`
 is 25,758,653 B: wasm-bindgen's own GC pass removed 1,108 unreachable functions (29,031 → 27,923), 923,505 B of code, 132 KB of
@@ -64,7 +64,7 @@ hash is not platform-independent on this machine. Not investigated further (out 
 proc-macro output. `tools/check-package.ts` would fail "The build is not reproducing the pinned artifact" for this artifact.
 
 Note: an untracked directory `experiments/paramdoc/` appeared in the repository root at 05:43 UTC while this analysis ran. It was not
-created by this analysis (nothing here writes into the repository outside `.build/` and `packages/wasm/generated/`) and was left untouched.
+created by this analysis (nothing here writes into the repository outside `.build/` and `packages/typst-wasm/generated/`) and was left untouched.
 
 ## 2. Section-level breakdown (pinned artifact, 24,404,191 B)
 

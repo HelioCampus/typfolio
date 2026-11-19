@@ -299,7 +299,7 @@ import type { TemplateChecker } from '@typfolio/dev-tools';
 
 const folder = new URL('../src/report/', import.meta.url);
 const font = new Uint8Array(await readFile(new URL('../fonts/report.otf', import.meta.url)));
-const wasm = await readFile(new URL(import.meta.resolve('@typfolio/wasm/compiler.wasm')));
+const wasm = await readFile(new URL(import.meta.resolve('@typfolio/typst-wasm/compiler.wasm')));
 
 // Every .typ file of the folder, keyed by its path under the template root.
 async function loadTemplate() {

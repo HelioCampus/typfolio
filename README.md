@@ -13,7 +13,7 @@ Typfolio turns a `.typ` template and a JSON object into a real, typeset, tagged 
 - **A real typesetter.** Text flow, tables, fonts and page breaking from Typst, not boxes drawn on a canvas.
 
 ```sh
-npm install @typfolio/core @typfolio/wasm zod
+npm install @typfolio/core @typfolio/typst-wasm zod
 ```
 
 ```typ
@@ -28,7 +28,7 @@ npm install @typfolio/core @typfolio/wasm zod
 
 ```ts
 import { createCompiler, defineTemplate } from '@typfolio/core';
-import wasmUrl from '@typfolio/wasm/compiler.wasm?url'; // Vite; any URL to the asset works
+import wasmUrl from '@typfolio/typst-wasm/compiler.wasm?url'; // Vite; any URL to the asset works
 import mainSource from './main.typ?raw';
 import { z } from 'zod'; // or any Standard Schema library: Valibot, ArkType, …
 
@@ -115,9 +115,9 @@ The compiler never touches the host file system or the network. Everything a com
 | [`@typfolio/dev-tools`](./packages/dev-tools/README.md) | Dev-time tools, installed as a devDependency and never needed at runtime: template checks against schema samples, `inspectPdf` and structure warnings (optional `pdfjs-dist` peer) to report a compiled PDF's structure for tests, and a panel that shows a PDF's tags in the page |
 | [`@typfolio/workers`](./packages/workers/README.md) | Module-worker execution: pools, queues, cancellation, timeouts, batches |
 | [`@typfolio/react`](./packages/react/README.md) | `usePdf`, with charts drawn at the PDF's size, and the `CaptureRegion` marker component |
-| [`@typfolio/wasm`](./packages/wasm/README.md) | The generated compiler binary, its bindings, the upstream licence and the build provenance; no hand-written code |
+| [`@typfolio/typst-wasm`](./packages/typst-wasm/README.md) | The generated compiler binary, its bindings, the upstream licence and the build provenance; no hand-written code |
 
-Core has no runtime dependency other than `@typfolio/wasm`. `html2canvas` (DOM capture) is an optional peer dependency and is never bundled unless you import the DOM adapter.
+Core has no runtime dependency other than `@typfolio/typst-wasm`. `html2canvas` (DOM capture) is an optional peer dependency and is never bundled unless you import the DOM adapter.
 
 ## Template authoring
 
@@ -272,7 +272,7 @@ So write structure, and test for it. `inspectPdf` from `@typfolio/dev-tools/pdf`
 - [docs/template-authoring.md](./docs/template-authoring.md): template folders, `@local/typfolio`, templates with partials, editor completion, build-time checks, typed calls, loading a folder.
 - [docs/errors.md](./docs/errors.md): error and diagnostic codes, and what to do about each.
 - [docs/compiler-build.md](./docs/compiler-build.md): the pinned compiler build, rebuild and test commands, compatibility and limits.
-- Package READMEs: [`core`](./packages/core/README.md), [`workers`](./packages/workers/README.md), [`react`](./packages/react/README.md), [`wasm`](./packages/wasm/README.md).
+- Package READMEs: [`core`](./packages/core/README.md), [`workers`](./packages/workers/README.md), [`react`](./packages/react/README.md), [`wasm`](./packages/typst-wasm/README.md).
 
 ## Development
 

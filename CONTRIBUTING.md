@@ -12,7 +12,7 @@ Thanks for helping. This file covers what you need to build, test and submit a c
 ```sh
 npm ci
 npm run setup:wasm   # pinned Rust toolchain, wasm-bindgen-cli and cargo-about, into .build/tools
-npm run build:wasm   # builds crates/compiler to WebAssembly into packages/wasm/generated/
+npm run build:wasm   # builds crates/compiler to WebAssembly into packages/typst-wasm/generated/
 ```
 
 The compiler build takes minutes and is only needed once, and again when the pins change. [docs/compiler-build.md](./docs/compiler-build.md) explains every step, the reproducibility rules and how to bump the compiler. The generated files are not committed; CI builds them from the pinned source and does not use anyone's local artifacts.
@@ -32,7 +32,7 @@ CI runs all of these. Run the first three before opening a pull request; run the
 
 - Templates and input are separate: Typst template files describe the document, JSON is the request input. Do not merge them into one concept.
 - Applications own business validation (for example with Zod). Core does not validate business data.
-- `@typfolio/core` has no runtime dependency other than `@typfolio/wasm`, and no React or Effect dependency. Workers and framework adapters are separate packages.
+- `@typfolio/core` has no runtime dependency other than `@typfolio/typst-wasm`, and no React or Effect dependency. Workers and framework adapters are separate packages.
 - Report unsupported options explicitly (an error or a documented limit), never silently ignore them.
 - Do not claim accessibility conformance. A tagged PDF or PDF/UA metadata is not proof; say what was checked and by what.
 - Keep proprietary templates, institutional data and product assets out of fixtures and the published packages.
@@ -68,7 +68,7 @@ Releases are driven by [Changesets](https://github.com/changesets/changesets). A
 
 Add one with `npm run changeset` and commit the generated file with your change. You need one whenever a change affects what a published package ships or does: behaviour, public API or types, options, a bumped compiler pin, or a package README. You do not need one for tests, examples, `docs/`, tools, CI or the root README. Pick `patch` for fixes, `minor` for new features, and `major` for breaking changes.
 
-Versioning is hybrid. `@typfolio/wasm` versions on its own, because it changes only when the compiler changes; `@typfolio/core` depends on it with an exact version so that the bindings always match the binary, and Changesets bumps that pin and releases `core` when `wasm` is released. `@typfolio/core`, `@typfolio/dev-tools`, `@typfolio/workers` and `@typfolio/react` are a linked group: packages released together share the highest version in the group, and a package without changes is not republished (its dependency range is raised only when a new `core` version leaves the range).
+Versioning is hybrid. `@typfolio/typst-wasm` versions on its own, because it changes only when the compiler changes; `@typfolio/core` depends on it with an exact version so that the bindings always match the binary, and Changesets bumps that pin and releases `core` when `wasm` is released. `@typfolio/core`, `@typfolio/dev-tools`, `@typfolio/workers` and `@typfolio/react` are a linked group: packages released together share the highest version in the group, and a package without changes is not republished (its dependency range is raised only when a new `core` version leaves the range).
 
 ## Publishing
 

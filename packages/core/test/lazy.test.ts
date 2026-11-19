@@ -15,7 +15,7 @@ const request = (title: string) => titled({ title });
 let wasm!: Buffer;
 let font!: Buffer;
 before(async () => {
-  wasm = await readFile(new URL('packages/wasm/generated/compiler_bg.wasm', root));
+  wasm = await readFile(new URL('packages/typst-wasm/generated/compiler_bg.wasm', root));
   font = await readFile(new URL('fixtures/fonts/LibertinusSerif-Regular.otf', root));
 });
 
