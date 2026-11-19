@@ -1,6 +1,6 @@
 {
   "name": "@typfolio/dev-tools",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "description": "Dev-time tools for Typfolio templates: schema-based template checks, PDF inspection and an in-page structure panel (install as a devDependency)",
   "type": "module",
   "license": "Apache-2.0",
@@ -31,7 +31,7 @@
     }
   },
   "dependencies": {
-    "@typfolio/core": "^0.5.0"
+    "@typfolio/core": "^0.8.0"
   },
   "peerDependencies": {
     "@typfolio/verapdf-wasm": "^0.1.0",
