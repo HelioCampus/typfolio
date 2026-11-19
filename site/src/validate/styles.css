@@ -1,7 +1,15 @@
 .validate { display: grid; gap: 16px; }
 .validate-card { padding: 16px 18px; }
 .validate-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 16px; margin-bottom: 12px; font-size: 14px; }
-.validate-controls select { padding: 6px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--stage); color: var(--ink); font: inherit; }
+.validate-choice { display: flex; align-items: center; gap: 10px; color: var(--muted); }
+.validate-choice-box { position: relative; display: inline-flex; }
+/* The arrow: two sides of a small square, turned. Clicks go through it to the select. */
+.validate-choice-box::after { content: ""; position: absolute; top: 50%; right: 14px; width: 6px; height: 6px; margin-top: -5px; border-right: 1.5px solid var(--muted); border-bottom: 1.5px solid var(--muted); transform: rotate(45deg); pointer-events: none; }
+.validate-choice-box:hover::after { border-color: var(--ink); }
+.validate-controls select { appearance: none; -webkit-appearance: none; height: 38px; margin: 0; padding: 0 38px 0 14px; border: 1px solid var(--line); border-radius: 9px; background: var(--stage); color: var(--ink); font: inherit; font-size: 14px; font-weight: 600; cursor: pointer; }
+.validate-controls select:hover { border-color: rgba(255, 255, 255, 0.25); }
+.validate-controls select:focus-visible { outline: 2px solid var(--gold); outline-offset: 2px; }
+.validate-controls select option { background: var(--panel); color: var(--ink); font-weight: 400; }
 .validate-status { color: var(--muted); font-size: 13px; }
 .validate-drop { display: block; padding: 30px 16px; border: 2px dashed var(--line); border-radius: 12px; text-align: center; color: var(--muted); cursor: pointer; }
 .validate-drop strong { color: var(--ink); }

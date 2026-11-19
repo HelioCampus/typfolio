@@ -14,6 +14,11 @@
   p.lead { margin: 0 0 16px; color: var(--muted); }
   .controls { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; margin-bottom: 12px; }
   select, button { font: inherit; color: inherit; background: var(--card); border: 1px solid var(--border); border-radius: 6px; padding: 6px 10px; }
+  .choice { display: flex; align-items: center; gap: 10px; }
+  .choice-box { position: relative; display: inline-flex; }
+  .choice-box::after { content: ""; position: absolute; top: 50%; right: 12px; width: 6px; height: 6px; margin-top: -5px; border-right: 1.5px solid var(--muted); border-bottom: 1.5px solid var(--muted); transform: rotate(45deg); pointer-events: none; }
+  .choice select { appearance: none; -webkit-appearance: none; margin: 0; padding: 6px 32px 6px 12px; font-weight: 600; cursor: pointer; }
+  .choice select:hover { border-color: var(--muted); }
   button { cursor: pointer; }
   #status { color: var(--muted); font-size: 13px; }
   #drop { display: block; border: 2px dashed var(--border); border-radius: 10px; padding: 28px 16px; text-align: center; background: var(--card); cursor: pointer; }
@@ -57,7 +62,7 @@
   <h1>veraPDF in the browser</h1>
   <p class="lead">Validate PDFs against PDF/UA or PDF/A. Files stay on this machine: validation runs in this page, in WebAssembly.</p>
   <div class="controls">
-    <label>Validate against <select id="flavour"></select></label>
+    <label class="choice">Validate against <span class="choice-box"><select id="flavour"></select></span></label>
     <button id="again" type="button" hidden>Validate again</button>
     <span id="status" role="status">Starting the validator…</span>
   </div>

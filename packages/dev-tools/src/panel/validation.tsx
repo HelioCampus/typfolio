@@ -115,12 +115,15 @@ export function Validation({ validator, bytes, active = true }: { validator: Str
   return (
     <section className="tf-validation" aria-label="veraPDF validation">
       <div className="tf-validation-bar">
-        <label>
-          <span className="tf-title">veraPDF</span>{' '}
-          <select className="tf-flavour" aria-label="What to validate against" value={choice} onChange={event => setChoice(event.target.value as Choice)}>
-            {detects ? <option value="declared">What the file declares</option> : null}
-            {pdfValidationFlavourIds.map(id => <option key={id} value={id}>{name(id)}</option>)}
-          </select>
+        <label className="tf-choice">
+          <span className="tf-title">veraPDF</span>
+          {/* The box draws the select's arrow itself: the native one differs from one browser to the next. */}
+          <span className="tf-choice-box">
+            <select className="tf-flavour" aria-label="What to validate against" value={choice} onChange={event => setChoice(event.target.value as Choice)}>
+              {detects ? <option value="declared">What the file declares</option> : null}
+              {pdfValidationFlavourIds.map(id => <option key={id} value={id}>{name(id)}</option>)}
+            </select>
+          </span>
         </label>
         <button type="button" className="tf-side tf-validate" disabled={bytes === undefined || running} onClick={() => setAsked(previous => ({ choice, run: (previous?.run ?? 0) + 1 }))}>
           Validate

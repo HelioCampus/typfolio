@@ -121,8 +121,43 @@ button.tf-problem:hover { text-decoration: underline; }
 .tf-validation-bar { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding: 6px 10px; border-bottom: 1px solid var(--tf-border); font-size: 12px; }
 .tf-validation-results { flex: 1; min-height: 0; overflow: auto; }
 .tf-validation .tf-problems { max-height: none; overflow: visible; background: var(--tf-error-bg); color: var(--tf-error-fg); }
-.tf select.tf-flavour { font: inherit; color: inherit; background: var(--tf-bg); border: 1px solid var(--tf-border); border-radius: 4px; padding: 2px 4px; }
-.tf-side.tf-validate { padding: 3px 10px; border: 1px solid var(--tf-border); color: var(--tf-fg); font-size: 12px; }
+.tf-choice { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.tf-choice-box { position: relative; display: inline-flex; min-width: 0; }
+/* The arrow: two sides of a small square, turned. Clicks go through it to the select. */
+.tf-choice-box::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  right: 10px;
+  width: 5px;
+  height: 5px;
+  margin-top: -4px;
+  border-right: 1.5px solid var(--tf-muted);
+  border-bottom: 1.5px solid var(--tf-muted);
+  transform: rotate(45deg);
+  pointer-events: none;
+}
+.tf select.tf-flavour {
+  appearance: none;
+  -webkit-appearance: none;
+  height: 24px;
+  max-width: 100%;
+  margin: 0;
+  padding: 0 26px 0 9px;
+  border: 1px solid var(--tf-border);
+  border-radius: 5px;
+  background: var(--tf-bg-soft);
+  color: var(--tf-fg);
+  font: inherit;
+  font-size: 12px;
+  line-height: 22px;
+  text-overflow: ellipsis;
+  cursor: pointer;
+}
+.tf select.tf-flavour:hover { border-color: var(--tf-muted); }
+.tf-choice-box:hover::after { border-color: var(--tf-fg); }
+.tf-side.tf-validate { align-items: center; height: 24px; padding: 0 12px; border: 1px solid var(--tf-border); border-radius: 5px; color: var(--tf-fg); font-size: 12px; font-weight: 600; }
+.tf-side.tf-validate:hover:not(:disabled) { border-color: var(--tf-muted); }
 .tf-side.tf-validate:disabled { opacity: 0.5; cursor: default; }
 .tf-validation-hint { color: var(--tf-muted); }
 .tf-rule > summary { cursor: pointer; }

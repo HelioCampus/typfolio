@@ -183,12 +183,15 @@ export function ValidateWorkbench() {
     <div className="validate">
       <div className="card validate-card">
         <div className="validate-controls">
-          <label>
-            Validate against{' '}
-            <select value={choice} onChange={event => setChoice(event.target.value as Choice)} aria-label="What to validate against">
-              <option value="declared">What the file declares</option>
-              {order.map(id => <option key={id} value={id}>{flavours[id]}</option>)}
-            </select>
+          <label className="validate-choice">
+            Validate against
+            {/* The box draws the select's arrow itself: the native one differs from one browser to the next. */}
+            <span className="validate-choice-box">
+              <select value={choice} onChange={event => setChoice(event.target.value as Choice)} aria-label="What to validate against">
+                <option value="declared">What the file declares</option>
+                {order.map(id => <option key={id} value={id}>{flavours[id]}</option>)}
+              </select>
+            </span>
           </label>
           <span className="validate-status" role="status">
             {status.state === 'starting' ? `Loading the validator${status.progress === undefined || !manifest ? '…' : `: ${Math.round(status.progress * 100)}% of ${megabytes(manifest.gzipBytes)}`}`
