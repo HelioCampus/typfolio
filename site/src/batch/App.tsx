@@ -386,8 +386,8 @@ function Preview({ run, index, onChange }: { readonly run: BatchRun; readonly in
           <div className="actions">
             <button type="button" aria-label="Previous PDF" disabled={previous === null} onClick={() => onChange(previous)}>←</button>
             <button type="button" aria-label="Next PDF" disabled={next === null} onClick={() => onChange(next)}>→</button>
-            <a href={url} target="_blank" rel="noopener">Open in new tab</a>
-            <a href={url} download={row?.file}>Download</a>
+            {url && <a href={url} target="_blank" rel="noopener">Open in new tab</a>}
+            {url && <a href={url} download={row?.file}>Download</a>}
             <button type="button" onClick={() => dialog.current?.close()}>Close</button>
           </div>
         </header>
