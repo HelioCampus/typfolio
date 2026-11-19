@@ -135,7 +135,13 @@ button.tf-problem:hover { text-decoration: underline; }
   border-right: 1.5px solid var(--tf-muted);
   border-bottom: 1.5px solid var(--tf-muted);
   transform: rotate(45deg);
+  transition: transform 0.2s ease;
   pointer-events: none;
+}
+/* Half a turn while the list is open, so the arrow points up; the shift keeps it in the middle of the box. */
+.tf-choice-box:has(select:open)::after { transform: translateY(3px) rotate(225deg); }
+@media (prefers-reduced-motion: reduce) {
+  .tf-choice-box::after { transition: none; }
 }
 .tf select.tf-flavour {
   appearance: none;

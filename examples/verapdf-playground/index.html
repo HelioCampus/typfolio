@@ -16,7 +16,9 @@
   select, button { font: inherit; color: inherit; background: var(--card); border: 1px solid var(--border); border-radius: 6px; padding: 6px 10px; }
   .choice { display: flex; align-items: center; gap: 10px; }
   .choice-box { position: relative; display: inline-flex; }
-  .choice-box::after { content: ""; position: absolute; top: 50%; right: 12px; width: 6px; height: 6px; margin-top: -5px; border-right: 1.5px solid var(--muted); border-bottom: 1.5px solid var(--muted); transform: rotate(45deg); pointer-events: none; }
+  .choice-box::after { content: ""; position: absolute; top: 50%; right: 12px; width: 6px; height: 6px; margin-top: -5px; border-right: 1.5px solid var(--muted); border-bottom: 1.5px solid var(--muted); transform: rotate(45deg); transition: transform 0.2s ease; pointer-events: none; }
+  .choice-box:has(select:open)::after { transform: translateY(4px) rotate(225deg); }
+  @media (prefers-reduced-motion: reduce) { .choice-box::after { transition: none; } }
   .choice select { appearance: none; -webkit-appearance: none; margin: 0; padding: 6px 32px 6px 12px; font-weight: 600; cursor: pointer; }
   .choice select:hover { border-color: var(--muted); }
   button { cursor: pointer; }

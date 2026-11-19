@@ -4,8 +4,11 @@
 .validate-choice { display: flex; align-items: center; gap: 10px; color: var(--muted); }
 .validate-choice-box { position: relative; display: inline-flex; }
 /* The arrow: two sides of a small square, turned. Clicks go through it to the select. */
-.validate-choice-box::after { content: ""; position: absolute; top: 50%; right: 14px; width: 6px; height: 6px; margin-top: -5px; border-right: 1.5px solid var(--muted); border-bottom: 1.5px solid var(--muted); transform: rotate(45deg); pointer-events: none; }
+.validate-choice-box::after { content: ""; position: absolute; top: 50%; right: 14px; width: 6px; height: 6px; margin-top: -5px; border-right: 1.5px solid var(--muted); border-bottom: 1.5px solid var(--muted); transform: rotate(45deg); transition: transform 0.2s ease; pointer-events: none; }
 .validate-choice-box:hover::after { border-color: var(--ink); }
+/* Half a turn while the list is open, so the arrow points up; the shift keeps it in the middle of the box. */
+.validate-choice-box:has(select:open)::after { transform: translateY(4px) rotate(225deg); }
+@media (prefers-reduced-motion: reduce) { .validate-choice-box::after { transition: none; } }
 .validate-controls select { appearance: none; -webkit-appearance: none; height: 38px; margin: 0; padding: 0 38px 0 14px; border: 1px solid var(--line); border-radius: 9px; background: var(--stage); color: var(--ink); font: inherit; font-size: 14px; font-weight: 600; cursor: pointer; }
 .validate-controls select:hover { border-color: rgba(255, 255, 255, 0.25); }
 .validate-controls select:focus-visible { outline: 2px solid var(--gold); outline-offset: 2px; }
